@@ -11,6 +11,7 @@ Alarm types:
   6. Historical Mode     – catches all-time-rare stat lines
 """
 
+import sys
 import json
 import time
 import logging
@@ -26,7 +27,12 @@ try:
 except ImportError:
     _NBA_API_AVAILABLE = False
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(message)s",
+    stream=sys.stdout,
+    force=True,
+)
 log = logging.getLogger("nba_monitor")
 
 POLL_INTERVAL = 60  # seconds between active-monitoring checks
@@ -102,7 +108,7 @@ def update_all_rosters() -> None:
                 "players": players,
             }
 
-            print(f"Successfully cached {len(players)} players for {team_abbr}")
+            print(f"Successfully cached {len(players)} players for {team_abbr}", flush=True)
             time.sleep(0.15)  # מנוחה קצרה כדי לא להיחסם
 
         except Exception as exc:
@@ -382,19 +388,41 @@ def _get_career_high_pts(player_id: str, player_name: str) -> int | None:
     career_high: int | None = None
 
     # ── Primary: NBA Stats API – real all-time career high ───────────────────
+    _NBA_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Referer":            "https://www.nba.com",
+        "Accept":             "application/json, text/plain, */*",
+        "Accept-Language":    "en-US,en;q=0.9",
+        "x-nba-stats-origin": "stats",
+        "x-nba-stats-token":  "true",
+    }
+
     nba_id = _get_nba_id_by_name(player_name)
     if nba_id:
         try:
-            profile = _nba_profile.PlayerProfileV2(player_id=nba_id, timeout=30)
+            print(f"[CareerHigh] Fetching NBA Stats for {player_name} (NBA ID {nba_id})...", flush=True)
+            profile = _nba_profile.PlayerProfileV2(
+                player_id=nba_id,
+                timeout=30,
+                headers=_NBA_HEADERS,
+            )
             df      = profile.career_highs.get_data_frame()
             pts_row = df[df["STAT"] == "PTS"]
             if not pts_row.empty:
                 career_high = int(pts_row.iloc[0]["STAT_VALUE"])
+                print(f"INFO: Verified REAL Career High for {player_name}: {career_high} points.", flush=True)
                 log.info(
                     "INFO: Verified REAL Career High for %s: %d points.",
                     player_name, career_high,
                 )
+            else:
+                print(f"[CareerHigh] PTS row not found in CareerHighs dataset for {player_name}. Columns: {list(df.columns)}", flush=True)
         except Exception as exc:
+            print(f"[CareerHigh] NBA API FAILED for {player_name} (NBA ID {nba_id}): {exc}", flush=True)
             log.warning(
                 "NBA API career high failed for %s (NBA ID %s): %s",
                 player_name, nba_id, exc,
@@ -600,7 +628,7 @@ def fetch_game_summary_roster(game_id: str) -> dict:
             with _CACHE_LOCK:
                 _ROSTER_CACHE[team_id] = entry
             teams_out.append(entry)
-            print(f"Successfully cached {len(players)} players for {entry['abbreviation']} (live fallback)")
+            print(f"Successfully cached {len(players)} players for {entry['abbreviation']} (live fallback)", flush=True)
         except Exception as exc:
             log.warning("Live fetch for team %s failed: %s", team_id, exc)
 
@@ -957,6 +985,7 @@ def get_radar_status() -> bool:
 
 def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
     """Single radar scan – called once per poll cycle."""
+    print("--- STARTING RADAR TICK ---", flush=True)
     radar_cfg       = prefs.get("GlobalGameRadar", {})
     radar_alert_type = radar_cfg.get("alert_type", "silent")
     fav_teams       = {t["team_id"]: t for t in prefs.get("FavoriteTeams", [])}
