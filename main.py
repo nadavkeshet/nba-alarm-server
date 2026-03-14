@@ -31,6 +31,8 @@ from monitor import (
     # Data
     get_today_games,
     get_player_records,
+    # Career High
+    _get_career_high_pts,
 )
 
 app = FastAPI(title="NBA Smart Alarm Server")
@@ -103,10 +105,23 @@ class PlayerAlarmRequest(BaseModel):
     alert_type: str       = "alarm"
 
 
+def _prefetch_career_high(player_id: str, player_name: str, pts_threshold: int) -> None:
+    """Pre-fetch and cache the career high immediately when a player is added to monitors."""
+    print(f"DEBUG: Added {player_name} to monitor. Target threshold: {pts_threshold} pts", flush=True)
+    ch = _get_career_high_pts(player_id, player_name)
+    print(f"DEBUG: {player_name} career high pre-fetch complete → {ch} pts", flush=True)
+
+
 @app.post("/start-player-alarm")
 async def start_player_alarm(req: PlayerAlarmRequest):
     """Kick off a background thread monitoring a specific player's stats."""
     save_push_token(req.push_token, req.sound_channel)
+    # Pre-fetch career high right away so it's cached before the game goes live
+    threading.Thread(
+        target=_prefetch_career_high,
+        args=(req.player_id, req.player_name, req.pts_threshold),
+        daemon=True,
+    ).start()
     threading.Thread(
         target=start_player_monitoring_job,
         kwargs=dict(
@@ -306,6 +321,12 @@ def upsert_player(req: FavoritePlayer):
     save_preferences(prefs)
     if req.monitor_career_high:
         _maybe_start_radar()  # favorite player with career-high watch → radar needed
+        # Pre-fetch career high immediately so it's ready before any game goes live
+        threading.Thread(
+            target=_prefetch_career_high,
+            args=(req.player_id, req.name, 0),
+            daemon=True,
+        ).start()
     return {"status": "updated", "FavoritePlayers": players}
 
 
