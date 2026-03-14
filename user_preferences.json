@@ -1,0 +1,21 @@
+{
+  "GlobalGameRadar": {
+    "enabled": false,
+    "max_diff": 5,
+    "start_quarter": 4,
+    "alert_type": "silent"
+  },
+  "FavoriteTeams": [],
+  "FavoritePlayers": [],
+  "HistoricalMode": {
+    "enabled": false,
+    "alert_type": "silent",
+    "categories": {
+      "scoring_40_half": false,
+      "threes_11": false,
+      "quad_double_threat": true
+    }
+  },
+  "_push_token": "ExponentPushToken[EBXF_pHBxnY9P4jjm563MY]",
+  "_sound_channel": "classic_alarm"
+}
