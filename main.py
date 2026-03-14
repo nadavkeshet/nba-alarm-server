@@ -30,9 +30,6 @@ from monitor import (
     _send_push_notification,
     # Data
     get_today_games,
-    get_player_records,
-    # Career High
-    _get_career_high_pts,
     # Startup
     clear_stale_state,
 )
@@ -109,23 +106,10 @@ class PlayerAlarmRequest(BaseModel):
     alert_type: str       = "alarm"
 
 
-def _prefetch_career_high(player_id: str, player_name: str, pts_threshold: int) -> None:
-    """Pre-fetch and cache the career high immediately when a player is added to monitors."""
-    print(f"DEBUG: Added {player_name} to monitor. Target threshold: {pts_threshold} pts", flush=True)
-    ch = _get_career_high_pts(player_id, player_name)
-    print(f"DEBUG: {player_name} career high pre-fetch complete → {ch} pts", flush=True)
-
-
 @app.post("/start-player-alarm")
 async def start_player_alarm(req: PlayerAlarmRequest):
     """Kick off a background thread monitoring a specific player's stats."""
     save_push_token(req.push_token, req.sound_channel)
-    # Pre-fetch career high right away so it's cached before the game goes live
-    threading.Thread(
-        target=_prefetch_career_high,
-        args=(req.player_id, req.player_name, req.pts_threshold),
-        daemon=True,
-    ).start()
     threading.Thread(
         target=start_player_monitoring_job,
         kwargs=dict(
@@ -306,32 +290,23 @@ def remove_team(team_id: str):
 class FavoritePlayer(BaseModel):
     player_id: str
     name: str
-    monitor_career_high: bool = True
-    alert_type: str           = "silent"
+    alert_type: str = "silent"
 
 
 @app.post("/settings/players")
 def upsert_player(req: FavoritePlayer):
     """Add or update a favorite player."""
-    print(f"DEBUG: Received player from app: {req.name} (id={req.player_id}, monitor_career_high={req.monitor_career_high})", flush=True)
+    print(f"DEBUG: Received player from app: {req.name} (id={req.player_id})", flush=True)
     prefs = get_preferences()
     players = [p for p in prefs.get("FavoritePlayers", []) if p["player_id"] != req.player_id]
     players.append({
-        "player_id":           req.player_id,
-        "name":                req.name,
-        "monitor_career_high": req.monitor_career_high,
-        "alert_type":          req.alert_type,
+        "player_id":  req.player_id,
+        "name":       req.name,
+        "alert_type": req.alert_type,
     })
     prefs["FavoritePlayers"] = players
     save_preferences(prefs)
-    if req.monitor_career_high:
-        _maybe_start_radar()  # favorite player with career-high watch → radar needed
-        # Pre-fetch career high immediately so it's ready before any game goes live
-        threading.Thread(
-            target=_prefetch_career_high,
-            args=(req.player_id, req.name, 0),
-            daemon=True,
-        ).start()
+    _maybe_start_radar()  # favorite player added → radar needed
     return {"status": "updated", "FavoritePlayers": players}
 
 
@@ -450,10 +425,24 @@ def cancel_player(player_id: str):
     return {"cancelled": cancelled, "player_id": player_id}
 
 
-@app.get("/player-records")
-def player_records():
-    """Return all cached career-high PTS records (player_id → {name, career_high_pts})."""
-    return get_player_records()
+class GlobalThresholdsRequest(BaseModel):
+    pts_threshold:       int  = 40
+    triple_double_watch: bool = True
+    pts_per_quarter:     int  = 15
+
+
+@app.post("/settings/thresholds")
+def update_thresholds(req: GlobalThresholdsRequest):
+    """Save global player-alert thresholds used by the radar for all favorite players."""
+    prefs = get_preferences()
+    prefs["GlobalThresholds"] = {
+        "pts_threshold":       req.pts_threshold,
+        "triple_double_watch": req.triple_double_watch,
+        "pts_per_quarter":     req.pts_per_quarter,
+    }
+    save_preferences(prefs)
+    print(f"DEBUG: GlobalThresholds updated → pts={req.pts_threshold}, td={req.triple_double_watch}, ppq={req.pts_per_quarter}", flush=True)
+    return {"status": "updated", "GlobalThresholds": prefs["GlobalThresholds"]}
 
 
 class RegisterTokenRequest(BaseModel):
