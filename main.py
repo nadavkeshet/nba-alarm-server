@@ -456,6 +456,30 @@ def player_records():
     return get_player_records()
 
 
+class RegisterTokenRequest(BaseModel):
+    push_token: str
+    sound_channel: str = "classic_alarm"
+
+
+@app.post("/register-token")
+def register_token(req: RegisterTokenRequest):
+    """
+    Called by the app on startup to register the push token with the server.
+    This ensures the radar can send notifications even before any alarm is set.
+    """
+    if not req.push_token:
+        return {"status": "error", "detail": "empty push_token"}
+    save_push_token(req.push_token, req.sound_channel)
+    print(f"DEBUG: Received and saved Push Token: {req.push_token}", flush=True)
+    # Kick off the radar now that we have a token (singleton – safe to call repeatedly)
+    threading.Thread(
+        target=start_radar_job,
+        args=(req.push_token, req.sound_channel),
+        daemon=True,
+    ).start()
+    return {"status": "token_registered", "push_token": req.push_token}
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
