@@ -309,6 +309,7 @@ class FavoritePlayer(BaseModel):
 @app.post("/settings/players")
 def upsert_player(req: FavoritePlayer):
     """Add or update a favorite player."""
+    print(f"DEBUG: Received player from app: {req.name} (id={req.player_id}, monitor_career_high={req.monitor_career_high})", flush=True)
     prefs = get_preferences()
     players = [p for p in prefs.get("FavoritePlayers", []) if p["player_id"] != req.player_id]
     players.append({

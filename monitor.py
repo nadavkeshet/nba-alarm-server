@@ -11,6 +11,7 @@ Alarm types:
   6. Historical Mode     – catches all-time-rare stat lines
 """
 
+import os
 import sys
 import json
 import time
@@ -133,9 +134,10 @@ def get_all_teams() -> list[dict]:
 # Persistent storage
 # ---------------------------------------------------------------------------
 
-_SERVER_DIR   = Path(__file__).parent
+_SERVER_DIR   = Path(os.getcwd())
 _PREFS_FILE   = _SERVER_DIR / "user_preferences.json"
 _RECORDS_FILE = _SERVER_DIR / "player_records.json"
+print(f"DEBUG: Data directory = {_SERVER_DIR}", flush=True)
 _FILE_LOCK    = threading.Lock()
 
 _DEFAULT_PREFS: dict = {
@@ -379,9 +381,13 @@ def _get_career_high_pts(player_id: str, player_name: str) -> int | None:
     hit once per player per server deployment.
     Returns None if unavailable (career-high alert is skipped for that player).
     """
+    print(f"DEBUG: _get_career_high_pts called for {player_name} (espn_id={player_id})", flush=True)
+    print(f"DEBUG: player_records.json path = {_RECORDS_FILE} (exists={_RECORDS_FILE.exists()})", flush=True)
+
     records = _load_json(_RECORDS_FILE, {})
     if player_id in records:
         cached = records[player_id].get("career_high_pts")
+        print(f"DEBUG: {player_name} Career High is {cached} (cache hit)", flush=True)
         log.info("DEBUG: %s Career High is %s (cache hit)", player_name, cached)
         return cached
 
@@ -990,6 +996,10 @@ def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
     radar_alert_type = radar_cfg.get("alert_type", "silent")
     fav_teams       = {t["team_id"]: t for t in prefs.get("FavoriteTeams", [])}
     fav_players     = {p["player_id"]: p for p in prefs.get("FavoritePlayers", [])}
+    if not fav_players:
+        print("DEBUG: Radar is ticking but 'active_players' list is EMPTY.", flush=True)
+    else:
+        print(f"DEBUG: Radar watching {len(fav_players)} favorite player(s): {[p['player_name'] if 'player_name' in p else p.get('name','?') for p in prefs.get('FavoritePlayers', [])]}", flush=True)
     hist_cfg        = prefs.get("HistoricalMode", {})
     hist_enabled    = hist_cfg.get("enabled", False)
     hist_alert_type = hist_cfg.get("alert_type", "silent")
