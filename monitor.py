@@ -19,6 +19,13 @@ import requests
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+try:
+    from nba_api.stats.endpoints import playerprofilev2 as _nba_profile
+    from nba_api.stats.static import players as _nba_players
+    _NBA_API_AVAILABLE = True
+except ImportError:
+    _NBA_API_AVAILABLE = False
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 log = logging.getLogger("nba_monitor")
 
@@ -322,48 +329,116 @@ def cancel_player_alarm(player_id: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Career-high lazy loader
+# Career-high loader  (NBA API → ESPN gamelog fallback)
 # ---------------------------------------------------------------------------
+
+def _get_nba_id_by_name(player_name: str) -> int | None:
+    """
+    Map an ESPN display name (e.g. "Stephen Curry") to an NBA Stats player ID
+    using the nba_api static player list.  Prefers the active player when
+    multiple matches exist (e.g. father/son with the same name).
+    Returns None if nba_api is unavailable or no match found.
+    """
+    if not _NBA_API_AVAILABLE:
+        return None
+    try:
+        results = _nba_players.find_players_by_full_name(player_name)
+        if not results:
+            # Try last name only as a fallback
+            last = player_name.split()[-1]
+            results = _nba_players.find_players_by_full_name(last)
+            results = [r for r in results
+                       if player_name.lower() in r["full_name"].lower()]
+        if not results:
+            log.warning("NBA ID lookup: no match found for '%s'", player_name)
+            return None
+        active = [r for r in results if r.get("is_active")]
+        chosen = (active or results)[0]
+        log.info("NBA ID lookup: '%s' → NBA ID %s", player_name, chosen["id"])
+        return chosen["id"]
+    except Exception as exc:
+        log.warning("NBA ID lookup failed for '%s': %s", player_name, exc)
+        return None
+
 
 def _get_career_high_pts(player_id: str, player_name: str) -> int | None:
     """
-    Return cached career-high PTS for player_id.
-    Fetches from ESPN on first call and caches result in player_records.json.
-    Returns None if unavailable (no alert triggered).
+    Return the all-time single-game career-high PTS for player_id.
+
+    Primary source  : NBA Stats API (PlayerProfileV2 → CareerHighs dataset).
+                      Gives the true career high across every season.
+    Fallback source : ESPN gamelog for the current season (season high).
+
+    Result is cached in player_records.json so the external API is only
+    hit once per player per server deployment.
+    Returns None if unavailable (career-high alert is skipped for that player).
     """
     records = _load_json(_RECORDS_FILE, {})
-
     if player_id in records:
-        return records[player_id].get("career_high_pts")
+        cached = records[player_id].get("career_high_pts")
+        log.info("DEBUG: %s Career High is %s (cache hit)", player_name, cached)
+        return cached
 
-    # Not cached yet – fetch from ESPN athlete stats endpoint
     career_high: int | None = None
-    try:
-        url  = f"{ESPN_ATHLETE_STATS_URL}/{player_id}/stats"
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
 
-        # ESPN returns splits.categories[].stats[{name, value}]
-        for cat in data.get("splits", {}).get("categories", []):
-            for stat in cat.get("stats", []):
-                if stat.get("name", "").upper() == "PTS":
-                    val = stat.get("value")
-                    if val is not None:
-                        career_high = int(float(val))
-                    break
-            if career_high is not None:
-                break
+    # ── Primary: NBA Stats API – real all-time career high ───────────────────
+    nba_id = _get_nba_id_by_name(player_name)
+    if nba_id:
+        try:
+            profile = _nba_profile.PlayerProfileV2(player_id=nba_id, timeout=30)
+            df      = profile.career_highs.get_data_frame()
+            pts_row = df[df["STAT"] == "PTS"]
+            if not pts_row.empty:
+                career_high = int(pts_row.iloc[0]["STAT_VALUE"])
+                log.info(
+                    "INFO: Verified REAL Career High for %s: %d points.",
+                    player_name, career_high,
+                )
+        except Exception as exc:
+            log.warning(
+                "NBA API career high failed for %s (NBA ID %s): %s",
+                player_name, nba_id, exc,
+            )
 
-        log.info("Career high fetch | %s | PTS high = %s", player_name, career_high)
+    # ── Fallback: ESPN gamelog – season high (max PTS in any game this season)
+    if career_high is None:
+        try:
+            url  = f"{ESPN_ATHLETE_STATS_URL}/{player_id}/gamelog"
+            resp = requests.get(url, timeout=15)
+            resp.raise_for_status()
+            data    = resp.json()
+            names   = data.get("names", [])
+            pts_idx = names.index("PTS") if "PTS" in names else -1
+            if pts_idx >= 0:
+                max_pts = 0
+                for event in data.get("events", {}).values():
+                    raw = event.get("stats", [])
+                    try:
+                        val = int(float(raw[pts_idx] or 0))
+                        if val > max_pts:
+                            max_pts = val
+                    except (IndexError, ValueError, TypeError):
+                        pass
+                if max_pts > 0:
+                    career_high = max_pts
+                    log.info(
+                        "DEBUG: %s – NBA API unavailable, using ESPN season-high: %s pts",
+                        player_name, career_high,
+                    )
+        except Exception as exc:
+            log.warning("ESPN gamelog fallback failed for %s: %s", player_name, exc)
 
-    except Exception as exc:
-        log.warning("Career high fetch failed for %s: %s", player_name, exc)
+    log.info("DEBUG: %s Career High is %s", player_name, career_high)
 
-    # Cache result (even if None) to avoid hammering the endpoint every poll
+    # Cache result (even if None) so we don't hammer the API on every radar tick
     records[player_id] = {"career_high_pts": career_high, "name": player_name}
     _save_json(_RECORDS_FILE, records)
     return career_high
+
+
+def get_player_records() -> dict:
+    """Return the full player_records.json cache (player_id → {name, career_high_pts})."""
+    return _load_json(_RECORDS_FILE, {})
 
 
 # ---------------------------------------------------------------------------

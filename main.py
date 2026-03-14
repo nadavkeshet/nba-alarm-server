@@ -30,6 +30,7 @@ from monitor import (
     _send_push_notification,
     # Data
     get_today_games,
+    get_player_records,
 )
 
 app = FastAPI(title="NBA Smart Alarm Server")
@@ -421,6 +422,12 @@ def cancel_player(player_id: str):
     """Cancel an active manual player alarm."""
     cancelled = cancel_player_alarm(player_id)
     return {"cancelled": cancelled, "player_id": player_id}
+
+
+@app.get("/player-records")
+def player_records():
+    """Return all cached career-high PTS records (player_id → {name, career_high_pts})."""
+    return get_player_records()
 
 
 @app.get("/health")
