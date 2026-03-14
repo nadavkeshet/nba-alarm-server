@@ -336,6 +336,33 @@ def cancel_player_alarm(player_id: str) -> bool:
     return False
 
 
+def clear_stale_state() -> None:
+    """
+    Wipe all in-memory alarm state and the player_records cache on server restart.
+    This prevents ghost monitors from a previous deployment from showing up in logs.
+    """
+    with _manual_lock:
+        # Signal any leftover threads to stop
+        for ev in list(_alarm_stop_events.values()):
+            ev.set()
+        for ev in list(_player_stop_events.values()):
+            ev.set()
+        _active_manual_alarms.clear()
+        _active_player_alarms.clear()
+        _alarm_stop_events.clear()
+        _player_stop_events.clear()
+
+    # Delete the career-high cache so stale values don't persist across deploys
+    try:
+        if _RECORDS_FILE.exists():
+            _RECORDS_FILE.unlink()
+            print("STARTUP: Cleared player_records.json (fresh deploy)", flush=True)
+    except Exception as exc:
+        log.warning("STARTUP: Could not delete player_records.json: %s", exc)
+
+    print("STARTUP: Stale state cleared – active_monitors and player_records reset.", flush=True)
+
+
 # ---------------------------------------------------------------------------
 # Career-high loader  (NBA API → ESPN gamelog fallback)
 # ---------------------------------------------------------------------------
@@ -794,8 +821,8 @@ def start_monitoring_job(
                 return
 
             log.info(
-                "No alarm yet (need Q>=%d and diff<=%d). Next check in %ds.",
-                start_quarter, max_diff, POLL_INTERVAL,
+                "Game: %s | Q%d | diff=%d pts | Waiting for Q>=%d and diff<=%d. No alarm. Next check in %ds.",
+                game_name, quarter, diff, start_quarter, max_diff, POLL_INTERVAL,
             )
             stop_event.wait(timeout=POLL_INTERVAL)
             if stop_event.is_set():
@@ -1087,6 +1114,13 @@ def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
                     # ── Career High (Favorite Players only) ─────────────────
                     if player_id in fav_players and fav_players[player_id].get("monitor_career_high", True):
                         ch = _get_career_high_pts(player_id, player_name)
+                        if ch is not None:
+                            if pts >= (ch - 5):
+                                print(f"Checking {player_name}: Current Pts {pts} / Career High {ch}. NEAR CAREER HIGH! Sending alert.", flush=True)
+                            else:
+                                print(f"Checking {player_name}: Current Pts {pts} / Career High {ch}. No alarm.", flush=True)
+                        else:
+                            print(f"Checking {player_name}: Current Pts {pts} / Career High unknown (not cached yet). No alarm.", flush=True)
                         if ch and pts >= (ch - 5):
                             if _fire_once(f"{game_id}_{player_id}_career_high"):
                                 _send_push_notification(

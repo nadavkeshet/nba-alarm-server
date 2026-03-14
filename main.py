@@ -33,6 +33,8 @@ from monitor import (
     get_player_records,
     # Career High
     _get_career_high_pts,
+    # Startup
+    clear_stale_state,
 )
 
 app = FastAPI(title="NBA Smart Alarm Server")
@@ -48,6 +50,8 @@ app.add_middleware(
 @app.on_event("startup")
 def _startup():
     """Pre-load rosters and auto-start the background radar on server start."""
+    # Always clear ghost monitors/career-high cache from any previous deployment
+    clear_stale_state()
     threading.Thread(target=update_all_rosters, daemon=True).start()
     token, channel = get_saved_push_token()
     if token:
