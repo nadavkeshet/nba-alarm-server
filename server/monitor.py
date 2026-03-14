@@ -40,6 +40,12 @@ ESPN_TEAMS_URL        = "https://site.api.espn.com/apis/site/v2/sports/basketbal
 ESPN_ATHLETE_STATS_URL = "https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes"
 
 # ---------------------------------------------------------------------------
+# In-memory push token  (survives disk wipes on Render's ephemeral filesystem)
+# ---------------------------------------------------------------------------
+_MEM_PUSH_TOKEN:    str = ""
+_MEM_SOUND_CHANNEL: str = "classic_alarm"
+
+# ---------------------------------------------------------------------------
 # Roster cache  (populated at startup, refreshed on demand)
 # ---------------------------------------------------------------------------
 # Maps team_id (str) → {id, name, abbreviation, logo, players: [...]}
@@ -187,22 +193,42 @@ def save_preferences(prefs: dict) -> None:
 
 
 def save_push_token(push_token: str, sound_channel: str = "classic_alarm") -> None:
-    """Persist the most-recently-seen push token so the radar can auto-start on reboot."""
+    """Persist the push token both in-memory and on disk."""
+    global _MEM_PUSH_TOKEN, _MEM_SOUND_CHANNEL
     if not push_token:
         return
-    prefs = get_preferences()
-    old = prefs.get("_push_token", "")
-    prefs["_push_token"]    = push_token
-    prefs["_sound_channel"] = sound_channel
-    save_preferences(prefs)
-    if old != push_token:
-        print(f"DEBUG: Push token updated on disk: {push_token[:20]}...", flush=True)
+    changed = _MEM_PUSH_TOKEN != push_token
+    _MEM_PUSH_TOKEN    = push_token
+    _MEM_SOUND_CHANNEL = sound_channel
+    # Also write to disk (best-effort – may be wiped on Render restart)
+    try:
+        prefs = get_preferences()
+        prefs["_push_token"]    = push_token
+        prefs["_sound_channel"] = sound_channel
+        save_preferences(prefs)
+    except Exception as exc:
+        log.warning("save_push_token: disk write failed: %s", exc)
+    if changed:
+        print(f"DEBUG: Push token saved (memory + disk): {push_token[:20]}...", flush=True)
 
 
 def get_saved_push_token() -> tuple[str, str]:
-    """Return (push_token, sound_channel) saved from the last alarm registration."""
-    prefs = get_preferences()
-    return prefs.get("_push_token", ""), prefs.get("_sound_channel", "classic_alarm")
+    """Return (push_token, sound_channel) – memory first, disk fallback."""
+    global _MEM_PUSH_TOKEN, _MEM_SOUND_CHANNEL
+    if _MEM_PUSH_TOKEN:
+        return _MEM_PUSH_TOKEN, _MEM_SOUND_CHANNEL
+    # Memory empty (fresh process start) – try disk
+    try:
+        prefs = get_preferences()
+        token   = prefs.get("_push_token", "")
+        channel = prefs.get("_sound_channel", "classic_alarm")
+        if token:
+            # Warm up memory cache from disk
+            _MEM_PUSH_TOKEN    = token
+            _MEM_SOUND_CHANNEL = channel
+        return token, channel
+    except Exception:
+        return "", "classic_alarm"
 
 
 # ---------------------------------------------------------------------------
