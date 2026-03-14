@@ -16,6 +16,7 @@
         "backgroundColor": "#0d1117",
         "foregroundImage": "./assets/images/android-icon-foreground.png"
       },
+      "usesCleartextTraffic": true,
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.nadavkeshet.nbaalarmapp",

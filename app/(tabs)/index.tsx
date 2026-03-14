@@ -37,6 +37,26 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 
 type PlayerCondition = 'pts_goal' | 'pts_early' | 'triple_double';
 
+// Fixed identifier so any part of the app can show/dismiss it by name.
+const MONITORING_NOTIFICATION_ID = 'nba-monitoring-status';
+
+async function showMonitoringNotification(label: string) {
+  if (Platform.OS !== 'android') return;
+  await Notifications.scheduleNotificationAsync({
+    identifier: MONITORING_NOTIFICATION_ID,
+    content: {
+      title: 'NBA Alarm Active',
+      body:  `Monitoring: ${label}`,
+      data:  { type: 'monitoring_status' },
+    },
+    trigger: null,
+  });
+}
+
+export async function dismissMonitoringNotification() {
+  await Notifications.dismissNotificationAsync(MONITORING_NOTIFICATION_ID);
+}
+
 // ─── Notification setup ───────────────────────────────────────────────────────
 
 const ALARM_CHANNEL = 'classic_alarm';
@@ -192,8 +212,9 @@ function GameCard({
 
 export default function HomeScreen() {
   // ── Games state ───────────────────────────────────────────────────────
-  const [games, setGames]     = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [games, setGames]       = useState<any[]>([]);
+  const [loading, setLoading]   = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [expoPushToken, setExpoPushToken] = useState('');
 
   // ── Favorites state ───────────────────────────────────────────────────
@@ -338,14 +359,26 @@ export default function HomeScreen() {
   const fetchGames = async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const resp = await fetch(`${SERVER_URL}/games`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      const resp = await fetch(`${SERVER_URL}/games`, { signal: controller.signal });
+      clearTimeout(timeout);
       if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
       const data = await resp.json();
-      if (!silent) LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      if (!silent) {
+        setFetchError(null);
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      }
       setGames(data.games || []);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Games fetch error:', error);
-      if (!silent) setGames([]);
+      if (!silent) {
+        const msg = error?.name === 'AbortError'
+          ? `Connection timed out.\nServer: ${SERVER_URL}\nCheck IP in config.ts and that the server is running.`
+          : `Cannot reach server.\nServer: ${SERVER_URL}\n${error?.message ?? ''}`;
+        setFetchError(msg);
+        setGames([]);
+      }
     } finally {
       if (!silent) setLoading(false);
     }
@@ -488,6 +521,7 @@ export default function HomeScreen() {
       });
       if (response.ok) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        showMonitoringNotification(selectedGame.name);
         alert(`Game alarm set for ${selectedGame.name}!`);
       } else {
         alert('Server error. Make sure the Python server is running.');
@@ -521,6 +555,7 @@ export default function HomeScreen() {
       });
       if (response.ok) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        showMonitoringNotification(selectedPlayer.name);
         alert(`Player alarm set for ${selectedPlayer.name}!`);
       } else {
         alert('Server error. Make sure the Python server is running.');
@@ -537,6 +572,17 @@ export default function HomeScreen() {
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <Text style={styles.header}>NBA Smart Alarm</Text>
+
+      {/* ── Network error banner ─────────────────────────────────────── */}
+      {fetchError && (
+        <View style={styles.errorBanner}>
+          <Ionicons name="wifi-outline" size={18} color="#ff6b6b" style={{ marginRight: 8 }} />
+          <Text style={styles.errorBannerText}>{fetchError}</Text>
+          <TouchableOpacity onPress={() => fetchGames()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <Ionicons name="refresh-outline" size={20} color="#ff6b6b" />
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* ── Android "Draw over other apps" permission banner ─────────── */}
       {showOverlayBanner && (
@@ -1065,5 +1111,14 @@ const styles = StyleSheet.create({
   },
   overlayBannerBtnText: {
     fontSize: 12, fontWeight: '800', color: '#f0a500',
+  },
+  errorBanner: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#2d1515', borderRadius: 8,
+    marginHorizontal: 16, marginBottom: 8,
+    padding: 10, gap: 6,
+  },
+  errorBannerText: {
+    flex: 1, fontSize: 12, color: '#ff6b6b', lineHeight: 17,
   },
 });

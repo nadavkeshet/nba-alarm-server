@@ -11,6 +11,8 @@ Alarm types:
   6. Historical Mode     – catches all-time-rare stat lines
 """
 
+import os
+import sys
 import json
 import time
 import logging
@@ -19,7 +21,12 @@ import requests
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(message)s",
+    stream=sys.stdout,
+    force=True,
+)
 log = logging.getLogger("nba_monitor")
 
 POLL_INTERVAL = 60  # seconds between active-monitoring checks
@@ -95,7 +102,7 @@ def update_all_rosters() -> None:
                 "players": players,
             }
 
-            print(f"Successfully cached {len(players)} players for {team_abbr}")
+            print(f"Successfully cached {len(players)} players for {team_abbr}", flush=True)
             time.sleep(0.15)  # מנוחה קצרה כדי לא להיחסם
 
         except Exception as exc:
@@ -120,9 +127,9 @@ def get_all_teams() -> list[dict]:
 # Persistent storage
 # ---------------------------------------------------------------------------
 
-_SERVER_DIR   = Path(__file__).parent
+_SERVER_DIR   = Path(os.getcwd())
 _PREFS_FILE   = _SERVER_DIR / "user_preferences.json"
-_RECORDS_FILE = _SERVER_DIR / "player_records.json"
+print(f"DEBUG: Data directory = {_SERVER_DIR}", flush=True)
 _FILE_LOCK    = threading.Lock()
 
 _DEFAULT_PREFS: dict = {
@@ -132,7 +139,12 @@ _DEFAULT_PREFS: dict = {
         "start_quarter": 4,
     },
     "FavoriteTeams":   [],   # [{team_id, team_name, max_diff, start_quarter}]
-    "FavoritePlayers": [],   # [{player_id, name, monitor_career_high}]
+    "FavoritePlayers": [],   # [{player_id, name, alert_type}]
+    "GlobalThresholds": {
+        "pts_threshold":        40,    # alert when fav player hits this many pts
+        "triple_double_watch":  True,  # alert when fav player approaches a triple-double
+        "pts_per_quarter":      15,    # alert when fav player has this many pts in Q1
+    },
     "HistoricalMode":  {
         "enabled": False,
         "categories": {
@@ -321,49 +333,23 @@ def cancel_player_alarm(player_id: str) -> bool:
     return False
 
 
-# ---------------------------------------------------------------------------
-# Career-high lazy loader
-# ---------------------------------------------------------------------------
-
-def _get_career_high_pts(player_id: str, player_name: str) -> int | None:
+def clear_stale_state() -> None:
     """
-    Return cached career-high PTS for player_id.
-    Fetches from ESPN on first call and caches result in player_records.json.
-    Returns None if unavailable (no alert triggered).
+    Wipe all in-memory alarm state on server restart.
+    This prevents ghost monitors from a previous deployment from showing up in logs.
     """
-    records = _load_json(_RECORDS_FILE, {})
+    with _manual_lock:
+        # Signal any leftover threads to stop
+        for ev in list(_alarm_stop_events.values()):
+            ev.set()
+        for ev in list(_player_stop_events.values()):
+            ev.set()
+        _active_manual_alarms.clear()
+        _active_player_alarms.clear()
+        _alarm_stop_events.clear()
+        _player_stop_events.clear()
 
-    if player_id in records:
-        return records[player_id].get("career_high_pts")
-
-    # Not cached yet – fetch from ESPN athlete stats endpoint
-    career_high: int | None = None
-    try:
-        url  = f"{ESPN_ATHLETE_STATS_URL}/{player_id}/stats"
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-
-        # ESPN returns splits.categories[].stats[{name, value}]
-        for cat in data.get("splits", {}).get("categories", []):
-            for stat in cat.get("stats", []):
-                if stat.get("name", "").upper() == "PTS":
-                    val = stat.get("value")
-                    if val is not None:
-                        career_high = int(float(val))
-                    break
-            if career_high is not None:
-                break
-
-        log.info("Career high fetch | %s | PTS high = %s", player_name, career_high)
-
-    except Exception as exc:
-        log.warning("Career high fetch failed for %s: %s", player_name, exc)
-
-    # Cache result (even if None) to avoid hammering the endpoint every poll
-    records[player_id] = {"career_high_pts": career_high, "name": player_name}
-    _save_json(_RECORDS_FILE, records)
-    return career_high
+    print("STARTUP: Stale state cleared – active_monitors reset.", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -525,7 +511,7 @@ def fetch_game_summary_roster(game_id: str) -> dict:
             with _CACHE_LOCK:
                 _ROSTER_CACHE[team_id] = entry
             teams_out.append(entry)
-            print(f"Successfully cached {len(players)} players for {entry['abbreviation']} (live fallback)")
+            print(f"Successfully cached {len(players)} players for {entry['abbreviation']} (live fallback)", flush=True)
         except Exception as exc:
             log.warning("Live fetch for team %s failed: %s", team_id, exc)
 
@@ -685,8 +671,8 @@ def start_monitoring_job(
                 return
 
             log.info(
-                "No alarm yet (need Q>=%d and diff<=%d). Next check in %ds.",
-                start_quarter, max_diff, POLL_INTERVAL,
+                "Game: %s | Q%d | diff=%d pts | Waiting for Q>=%d and diff<=%d. No alarm. Next check in %ds.",
+                game_name, quarter, diff, start_quarter, max_diff, POLL_INTERVAL,
             )
             stop_event.wait(timeout=POLL_INTERVAL)
             if stop_event.is_set():
@@ -882,10 +868,16 @@ def get_radar_status() -> bool:
 
 def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
     """Single radar scan – called once per poll cycle."""
+    print("--- STARTING RADAR TICK ---", flush=True)
     radar_cfg       = prefs.get("GlobalGameRadar", {})
     radar_alert_type = radar_cfg.get("alert_type", "silent")
     fav_teams       = {t["team_id"]: t for t in prefs.get("FavoriteTeams", [])}
     fav_players     = {p["player_id"]: p for p in prefs.get("FavoritePlayers", [])}
+    global_thresh   = prefs.get("GlobalThresholds", {})
+    if not fav_players:
+        print("DEBUG: Radar is ticking – no favorite players configured.", flush=True)
+    else:
+        print(f"DEBUG: Radar watching {len(fav_players)} favorite player(s): {[p.get('name','?') for p in prefs.get('FavoritePlayers', [])]}", flush=True)
     hist_cfg        = prefs.get("HistoricalMode", {})
     hist_enabled    = hist_cfg.get("enabled", False)
     hist_alert_type = hist_cfg.get("alert_type", "silent")
@@ -970,20 +962,49 @@ def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
                     blk    = int(raw.get("BLK",  0) or 0)
                     threes = int(raw.get("3PM",  0) or 0)
 
-                    # ── Career High (Favorite Players only) ─────────────────
-                    if player_id in fav_players and fav_players[player_id].get("monitor_career_high", True):
-                        ch = _get_career_high_pts(player_id, player_name)
-                        if ch and pts >= (ch - 5):
-                            if _fire_once(f"{game_id}_{player_id}_career_high"):
+                    # ── Favorite Player Alerts (global thresholds) ──────────
+                    if player_id in fav_players:
+                        fav_cfg      = fav_players[player_id]
+                        p_alert_type = fav_cfg.get("alert_type", "silent")
+                        pts_thresh   = int(global_thresh.get("pts_threshold", 40))
+                        td_watch     = bool(global_thresh.get("triple_double_watch", True))
+                        ppq_thresh   = int(global_thresh.get("pts_per_quarter", 15))
+
+                        # PTS threshold: player reaches X pts total in the game
+                        if pts >= pts_thresh:
+                            print(f"Checking {player_name}: {pts} pts >= threshold {pts_thresh}. FIRING!", flush=True)
+                            if _fire_once(f"{game_id}_{player_id}_pts_thresh"):
                                 _send_push_notification(
                                     push_token=push_token,
-                                    title="Career High Alert!",
-                                    body=(
-                                        f"{player_name}: {pts} pts in {game_name}\n"
-                                        f"Only {ch - pts} away from career high of {ch}!"
-                                    ),
+                                    title="Scoring Alert!",
+                                    body=f"{player_name} has {pts} pts in {game_name}!",
                                     sound_channel=sound_channel,
-                                    alert_type=fav_players[player_id].get("alert_type", "silent"),
+                                    alert_type=p_alert_type,
+                                )
+                        else:
+                            print(f"Checking {player_name}: {pts} pts / threshold {pts_thresh}. No alarm.", flush=True)
+
+                        # Triple-double watch: 3+ categories at 9+
+                        if td_watch and _check_triple_double(pts, reb, ast, stl, blk):
+                            hot = [f"{n} {v}" for n, v in zip(["PTS","REB","AST","STL","BLK"], [pts,reb,ast,stl,blk]) if v >= 9]
+                            if _fire_once(f"{game_id}_{player_id}_triple_double"):
+                                _send_push_notification(
+                                    push_token=push_token,
+                                    title="Triple-Double Watch!",
+                                    body=f"{player_name}: {' / '.join(hot)} in {game_name}!",
+                                    sound_channel=sound_channel,
+                                    alert_type=p_alert_type,
+                                )
+
+                        # Hot Q1 start: ppq_thresh pts in Q1
+                        if quarter == 1 and pts >= ppq_thresh:
+                            if _fire_once(f"{game_id}_{player_id}_hot_start"):
+                                _send_push_notification(
+                                    push_token=push_token,
+                                    title="Hot Start Alert!",
+                                    body=f"{player_name}: {pts} pts in Q1 of {game_name} — on fire!",
+                                    sound_channel=sound_channel,
+                                    alert_type=p_alert_type,
                                 )
 
                     # ── Historical Mode ──────────────────────────────────────

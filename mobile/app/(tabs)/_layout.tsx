@@ -2,10 +2,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
 import React from 'react';
 
-import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
+import { HapticTab } from '../../components/haptic-tab';
+import { IconSymbol } from '../../components/ui/icon-symbol';
+import { Colors } from '../../constants/theme';
+import { useColorScheme } from '../../hooks/use-color-scheme';
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
@@ -31,6 +31,7 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <Ionicons name="pulse" size={26} color={color} />,
         }}
       />
+      <Tabs.Screen name="explore" options={{ href: null }} />
       <Tabs.Screen
         name="settings"
         options={{

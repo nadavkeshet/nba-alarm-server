@@ -1,5 +1,7 @@
+import os
 import threading
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 from monitor import (
@@ -28,14 +30,25 @@ from monitor import (
     _send_push_notification,
     # Data
     get_today_games,
+    # Startup
+    clear_stale_state,
 )
 
 app = FastAPI(title="NBA Smart Alarm Server")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.on_event("startup")
 def _startup():
     """Pre-load rosters and auto-start the background radar on server start."""
+    # Always clear ghost monitors/career-high cache from any previous deployment
+    clear_stale_state()
     threading.Thread(target=update_all_rosters, daemon=True).start()
     token, channel = get_saved_push_token()
     if token:
@@ -277,25 +290,23 @@ def remove_team(team_id: str):
 class FavoritePlayer(BaseModel):
     player_id: str
     name: str
-    monitor_career_high: bool = True
-    alert_type: str           = "silent"
+    alert_type: str = "silent"
 
 
 @app.post("/settings/players")
 def upsert_player(req: FavoritePlayer):
     """Add or update a favorite player."""
+    print(f"DEBUG: Received player from app: {req.name} (id={req.player_id})", flush=True)
     prefs = get_preferences()
     players = [p for p in prefs.get("FavoritePlayers", []) if p["player_id"] != req.player_id]
     players.append({
-        "player_id":           req.player_id,
-        "name":                req.name,
-        "monitor_career_high": req.monitor_career_high,
-        "alert_type":          req.alert_type,
+        "player_id":  req.player_id,
+        "name":       req.name,
+        "alert_type": req.alert_type,
     })
     prefs["FavoritePlayers"] = players
     save_preferences(prefs)
-    if req.monitor_career_high:
-        _maybe_start_radar()  # favorite player with career-high watch → radar needed
+    _maybe_start_radar()  # favorite player added → radar needed
     return {"status": "updated", "FavoritePlayers": players}
 
 
@@ -414,10 +425,57 @@ def cancel_player(player_id: str):
     return {"cancelled": cancelled, "player_id": player_id}
 
 
+class GlobalThresholdsRequest(BaseModel):
+    pts_threshold:       int  = 40
+    triple_double_watch: bool = True
+    pts_per_quarter:     int  = 15
+
+
+@app.post("/settings/thresholds")
+def update_thresholds(req: GlobalThresholdsRequest):
+    """Save global player-alert thresholds used by the radar for all favorite players."""
+    prefs = get_preferences()
+    prefs["GlobalThresholds"] = {
+        "pts_threshold":       req.pts_threshold,
+        "triple_double_watch": req.triple_double_watch,
+        "pts_per_quarter":     req.pts_per_quarter,
+    }
+    save_preferences(prefs)
+    print(f"DEBUG: GlobalThresholds updated → pts={req.pts_threshold}, td={req.triple_double_watch}, ppq={req.pts_per_quarter}", flush=True)
+    return {"status": "updated", "GlobalThresholds": prefs["GlobalThresholds"]}
+
+
+class RegisterTokenRequest(BaseModel):
+    push_token: str
+    sound_channel: str = "classic_alarm"
+
+
+@app.post("/register-token")
+def register_token(req: RegisterTokenRequest):
+    """
+    Called by the app on startup to register the push token with the server.
+    This ensures the radar can send notifications even before any alarm is set.
+    """
+    print(f"DEBUG: /register-token hit. token='{req.push_token[:20]}...' channel='{req.sound_channel}'", flush=True)
+    if not req.push_token:
+        print("DEBUG: /register-token rejected – empty push_token", flush=True)
+        return {"status": "error", "detail": "empty push_token"}
+    save_push_token(req.push_token, req.sound_channel)
+    print(f"DEBUG: Push Token saved successfully: {req.push_token}", flush=True)
+    # Kick off the radar now that we have a token (singleton – safe to call repeatedly)
+    threading.Thread(
+        target=start_radar_job,
+        args=(req.push_token, req.sound_channel),
+        daemon=True,
+    ).start()
+    return {"status": "token_registered", "push_token": req.push_token}
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True)
+    port = int(os.environ.get("PORT", 8001))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)

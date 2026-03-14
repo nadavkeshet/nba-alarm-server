@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Haptics from 'expo-haptics';
@@ -220,9 +221,8 @@ export default function HomeScreen() {
   const [quarterDeadline, setQuarterDeadline] = useState('3');
 
   // ── Android "Draw over other apps" banner ────────────────────────────
-  // Shows once per session on Android so the user can grant the permission
-  // needed for the alarm to appear over the lock screen.
-  const [showOverlayBanner, setShowOverlayBanner] = useState(Platform.OS === 'android');
+  // Shows ONCE ever (AsyncStorage persists across app kills).
+  const [showOverlayBanner, setShowOverlayBanner] = useState(false);
 
   // ── Alarm overlay + audio ─────────────────────────────────────────────
   const [overlayVisible, setOverlayVisible] = useState(false);
@@ -400,8 +400,49 @@ export default function HomeScreen() {
     }
   };
 
+  // ── Register push token with server (retry every 30 s until success) ─────
+  const registerTokenWithServer = async (token: string): Promise<boolean> => {
+    const url = `${SERVER_URL}/register-token`;
+    console.log('[TokenReg] Posting to:', url);
+    try {
+      const resp = await fetch(url, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ push_token: token, sound_channel: 'classic_alarm' }),
+      });
+      if (resp.ok) {
+        console.log('[TokenReg] Success. Token registered:', token);
+        return true;
+      }
+      console.warn('Token registration failed, server returned:', resp.status);
+    } catch (e) {
+      console.warn('Token registration error:', e);
+    }
+    return false;
+  };
+
   useEffect(() => {
-    registerForPushNotificationsAsync().then(token => setExpoPushToken(token ?? ''));
+    // Check AsyncStorage first: only show Draw Over Apps banner on first launch
+    if (Platform.OS === 'android') {
+      AsyncStorage.getItem('hasSeenOverlayPrompt').then(seen => {
+        if (!seen) setShowOverlayBanner(true);
+      });
+    }
+
+    registerForPushNotificationsAsync().then(async token => {
+      if (!token) return;
+      setExpoPushToken(token);
+      console.log('[TokenReg] Expo Push Token obtained:', token);
+
+      // Try immediately, then retry every 30 s until the server confirms receipt
+      const success = await registerTokenWithServer(token);
+      if (!success) {
+        const retryInterval = setInterval(async () => {
+          const ok = await registerTokenWithServer(token);
+          if (ok) clearInterval(retryInterval);
+        }, 30_000);
+      }
+    });
     fetchGames();
     loadFavorites();
 
@@ -547,11 +588,21 @@ export default function HomeScreen() {
           </Text>
           <TouchableOpacity
             style={styles.overlayBannerBtn}
-            onPress={() => Linking.openSettings()}
+            onPress={() => {
+              Linking.openSettings();
+              setShowOverlayBanner(false);
+              AsyncStorage.setItem('hasSeenOverlayPrompt', 'true');
+            }}
           >
             <Text style={styles.overlayBannerBtnText}>Enable</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => setShowOverlayBanner(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+          <TouchableOpacity
+            onPress={() => {
+              setShowOverlayBanner(false);
+              AsyncStorage.setItem('hasSeenOverlayPrompt', 'true');
+            }}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
             <Ionicons name="close" size={18} color="#8b949e" />
           </TouchableOpacity>
         </View>

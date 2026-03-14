@@ -19,15 +19,17 @@ import { SERVER_URL } from '../../config';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface GlobalRadar    { enabled: boolean; max_diff: number; start_quarter: number; alert_type: string }
-interface FavTeam        { team_id: string; team_name: string; max_diff: number; start_quarter: number }
-interface FavPlayer      { player_id: string; name: string; monitor_career_high: boolean }
-interface HistoricalCats { scoring_40_half: boolean; threes_11: boolean; quad_double_threat: boolean }
+interface GlobalRadar      { enabled: boolean; max_diff: number; start_quarter: number; alert_type: string }
+interface FavTeam          { team_id: string; team_name: string; max_diff: number; start_quarter: number }
+interface FavPlayer        { player_id: string; name: string; alert_type: string }
+interface GlobalThresholds { pts_threshold: number; triple_double_watch: boolean; pts_per_quarter: number }
+interface HistoricalCats   { scoring_40_half: boolean; threes_11: boolean; quad_double_threat: boolean }
 interface AppSettings {
-  GlobalGameRadar: GlobalRadar;
-  FavoriteTeams:   FavTeam[];
-  FavoritePlayers: FavPlayer[];
-  HistoricalMode:  { enabled: boolean; alert_type: string; categories: HistoricalCats };
+  GlobalGameRadar:  GlobalRadar;
+  FavoriteTeams:    FavTeam[];
+  FavoritePlayers:  FavPlayer[];
+  GlobalThresholds: GlobalThresholds;
+  HistoricalMode:   { enabled: boolean; alert_type: string; categories: HistoricalCats };
 }
 interface CachedPlayer { id: string; name: string; jersey: string; position: string }
 interface CachedTeam   { id: string; name: string; abbreviation: string; logo: string | null; players: CachedPlayer[] }
@@ -87,11 +89,15 @@ export default function SettingsScreen() {
   const [newTeamMaxDiff, setNewTeamMaxDiff]     = useState('5');
   const [newTeamStartQ, setNewTeamStartQ]       = useState('4');
 
+  // Global Thresholds local inputs
+  const [threshPts, setThreshPts]   = useState('40');
+  const [threshPpq, setThreshPpq]   = useState('15');
+  const [threshTd, setThreshTd]     = useState(true);
+
   // ── Add Player Modal state ────────────────────────────────────────────
   const [playerModalVisible, setPlayerModalVisible]   = useState(false);
   const [pickedTeamForPlayer, setPickedTeamForPlayer] = useState<CachedTeam | null>(null);
   const [pickedPlayer, setPickedPlayer]               = useState<CachedPlayer | null>(null);
-  const [newPlayerCareerHigh, setNewPlayerCareerHigh] = useState(true);
 
   // ── Load all data ──────────────────────────────────────────────────────
 
@@ -111,6 +117,9 @@ export default function SettingsScreen() {
       setRadarRunning(r.running ?? false);
       setRadarMaxDiff(String(s.GlobalGameRadar?.max_diff ?? 5));
       setRadarStartQ(String(s.GlobalGameRadar?.start_quarter ?? 4));
+      setThreshPts(String(s.GlobalThresholds?.pts_threshold ?? 40));
+      setThreshPpq(String(s.GlobalThresholds?.pts_per_quarter ?? 15));
+      setThreshTd(s.GlobalThresholds?.triple_double_watch ?? true);
       setAllTeams(t.teams ?? []);
 
       // Init per-team editable fields
@@ -150,6 +159,22 @@ export default function SettingsScreen() {
         });
         setRadarRunning(true);
       }
+    } finally { setSaving(false); }
+  };
+
+  const saveThresholds = async () => {
+    setSaving(true);
+    try {
+      const payload: GlobalThresholds = {
+        pts_threshold:       parseInt(threshPts, 10) || 40,
+        triple_double_watch: threshTd,
+        pts_per_quarter:     parseInt(threshPpq, 10) || 15,
+      };
+      await fetch(`${SERVER_URL}/settings/thresholds`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      setSettings(s => s ? { ...s, GlobalThresholds: payload } : s);
     } finally { setSaving(false); }
   };
 
@@ -218,9 +243,9 @@ export default function SettingsScreen() {
   const confirmAddPlayer = async () => {
     if (!pickedPlayer) return;
     const payload: FavPlayer = {
-      player_id:           pickedPlayer.id,
-      name:                pickedPlayer.name,
-      monitor_career_high: newPlayerCareerHigh,
+      player_id: pickedPlayer.id,
+      name:      pickedPlayer.name,
+      alert_type: 'silent',
     };
     setSaving(true);
     try {
@@ -241,18 +266,6 @@ export default function SettingsScreen() {
     setSettings(s => s ? { ...s, FavoritePlayers: s.FavoritePlayers.filter(p => p.player_id !== player_id) } : s);
   };
 
-  const toggleCareerHigh = async (player: FavPlayer) => {
-    const updated = { ...player, monitor_career_high: !player.monitor_career_high };
-    await fetch(`${SERVER_URL}/settings/players`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updated),
-    });
-    setSettings(s => s ? {
-      ...s,
-      FavoritePlayers: s.FavoritePlayers.map(p => p.player_id === player.player_id ? updated : p),
-    } : s);
-  };
-
   // ── Modal helpers ─────────────────────────────────────────────────────
 
   const openTeamModal = () => {
@@ -266,7 +279,6 @@ export default function SettingsScreen() {
   const openPlayerModal = () => {
     setPickedTeamForPlayer(null);
     setPickedPlayer(null);
-    setNewPlayerCareerHigh(true);
     setPlayerModalVisible(true);
   };
   const closePlayerModal = () => {
@@ -363,7 +375,7 @@ export default function SettingsScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>FAVORITE PLAYERS</Text>
           <Text style={styles.sectionDesc}>
-            Get career-high alerts for any player. You can also tap ★ in the Player Alarm.
+            Add players to watch automatically during live games using the thresholds below. You can also tap ★ on the Home screen.
           </Text>
 
           <TouchableOpacity style={styles.addRowBtn} onPress={openPlayerModal}>
@@ -382,21 +394,59 @@ export default function SettingsScreen() {
                     <Text style={styles.removeBtnText}>Remove</Text>
                   </TouchableOpacity>
                 </View>
-                <View style={styles.switchRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.rowLabel}>Career High Alert</Text>
-                    <Text style={styles.rowSub}>Alert when within 5 pts of personal record</Text>
-                  </View>
-                  <Switch
-                    value={p.monitor_career_high}
-                    onValueChange={() => toggleCareerHigh(p)}
-                    trackColor={{ false: C.border, true: C.gold }}
-                    thumbColor={p.monitor_career_high ? C.gold : C.textMuted}
-                  />
-                </View>
+                <Text style={styles.rowSub}>Monitored automatically using global thresholds below</Text>
               </View>
             ))
           )}
+        </View>
+
+        {/* ═══════════════════════════════════════════════════════════════
+            PLAYER ALERT THRESHOLDS
+        ═══════════════════════════════════════════════════════════════ */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>PLAYER ALERT THRESHOLDS</Text>
+          <Text style={styles.sectionDesc}>
+            Global rules applied to all favorite players during live games.
+          </Text>
+
+          <Text style={styles.inputLabel}>POINTS THRESHOLD (alert when player hits this total)</Text>
+          <TextInput
+            style={styles.numInput}
+            keyboardType="numeric"
+            value={threshPts}
+            onChangeText={setThreshPts}
+            placeholderTextColor={C.textMuted}
+          />
+
+          <Text style={styles.inputLabel}>HOT Q1 START (alert when player has this many pts in Q1)</Text>
+          <TextInput
+            style={styles.numInput}
+            keyboardType="numeric"
+            value={threshPpq}
+            onChangeText={setThreshPpq}
+            placeholderTextColor={C.textMuted}
+          />
+
+          <View style={[styles.switchRow, { marginTop: 12 }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowLabel}>Triple-Double Watch</Text>
+              <Text style={styles.rowSub}>Alert when player has 9+ in any 3 of PTS/REB/AST/STL/BLK</Text>
+            </View>
+            <Switch
+              value={threshTd}
+              onValueChange={setThreshTd}
+              trackColor={{ false: C.border, true: C.accentBlue }}
+              thumbColor={threshTd ? C.accentBlue : C.textMuted}
+            />
+          </View>
+
+          <TouchableOpacity
+            style={[styles.updateBtn, { marginTop: 14 }]}
+            onPress={saveThresholds}
+            disabled={saving}
+          >
+            <Text style={styles.updateBtnText}>{saving ? 'Saving…' : 'Save Thresholds'}</Text>
+          </TouchableOpacity>
         </View>
 
         {/* ═══════════════════════════════════════════════════════════════
@@ -713,21 +763,15 @@ export default function SettingsScreen() {
                     {pickedPlayer.position ? `  ·  ${pickedPlayer.position}` : ''}
                   </Text>
 
-                  <View style={[styles.switchRow, { marginTop: 20 }]}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.rowLabel}>Career High Alert</Text>
-                      <Text style={styles.rowSub}>Alert when within 5 pts of personal record</Text>
-                    </View>
-                    <Switch
-                      value={newPlayerCareerHigh}
-                      onValueChange={setNewPlayerCareerHigh}
-                      trackColor={{ false: C.border, true: C.gold }}
-                      thumbColor={newPlayerCareerHigh ? C.gold : C.textMuted}
-                    />
+                  <View style={[styles.configSummary, { marginTop: 20 }]}>
+                    <Ionicons name="information-circle-outline" size={14} color={C.textMuted} />
+                    <Text style={styles.configSummaryText}>
+                      This player will be monitored automatically during live games using the global thresholds set in Settings.
+                    </Text>
                   </View>
 
                   <TouchableOpacity
-                    style={[styles.confirmBtn, saving && styles.confirmBtnDisabled, { marginTop: 24 }]}
+                    style={[styles.confirmBtn, saving && styles.confirmBtnDisabled, { marginTop: 16 }]}
                     onPress={confirmAddPlayer}
                     disabled={saving}
                   >

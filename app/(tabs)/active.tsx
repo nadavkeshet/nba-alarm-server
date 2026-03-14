@@ -14,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { SkeletonAlarmCard } from '../../components/skeleton-card';
 
 import { SERVER_URL } from '../../config';
+import { dismissMonitoringNotification } from './index';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -167,7 +168,14 @@ export default function ActiveScreen() {
           style: 'destructive',
           onPress: () => {
             fetch(`${SERVER_URL}/active-monitors/game/${alarm.game_id}`, { method: 'DELETE' })
-              .then(() => load())
+              .then(() => fetch(`${SERVER_URL}/active-monitors`))
+              .then(r => r.json())
+              .then((d: ActiveMonitors) => {
+                if (d.game_alarms.length === 0 && d.player_alarms.length === 0) {
+                  dismissMonitoringNotification();
+                }
+                load();
+              })
               .catch(e => console.error('Cancel game alarm error:', e));
           },
         },
@@ -186,7 +194,14 @@ export default function ActiveScreen() {
           style: 'destructive',
           onPress: () => {
             fetch(`${SERVER_URL}/active-monitors/player/${alarm.player_id}`, { method: 'DELETE' })
-              .then(() => load())
+              .then(() => fetch(`${SERVER_URL}/active-monitors`))
+              .then(r => r.json())
+              .then((d: ActiveMonitors) => {
+                if (d.game_alarms.length === 0 && d.player_alarms.length === 0) {
+                  dismissMonitoringNotification();
+                }
+                load();
+              })
               .catch(e => console.error('Cancel player alarm error:', e));
           },
         },
