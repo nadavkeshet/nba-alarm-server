@@ -191,9 +191,12 @@ def save_push_token(push_token: str, sound_channel: str = "classic_alarm") -> No
     if not push_token:
         return
     prefs = get_preferences()
+    old = prefs.get("_push_token", "")
     prefs["_push_token"]    = push_token
     prefs["_sound_channel"] = sound_channel
     save_preferences(prefs)
+    if old != push_token:
+        print(f"DEBUG: Push token updated on disk: {push_token[:20]}...", flush=True)
 
 
 def get_saved_push_token() -> tuple[str, str]:
@@ -535,9 +538,16 @@ def _send_push_notification(
     sound_channel: str = "classic_alarm",
     alert_type: str = "alarm",
 ) -> None:
+    # If caller passed an empty token, fall back to whatever is persisted on disk
     if not push_token:
-        log.warning("No push token – skipping notification.")
-        return
+        saved_token, saved_channel = get_saved_push_token()
+        if saved_token:
+            print(f"DEBUG: push_token was empty – falling back to saved token ({saved_token[:20]}...)", flush=True)
+            push_token    = saved_token
+            sound_channel = saved_channel
+        else:
+            log.warning("No push token – skipping notification.")
+            return
 
     ios_sound = "default" if sound_channel == "default" else f"{sound_channel}.wav"
 
