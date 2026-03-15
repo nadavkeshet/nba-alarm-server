@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import * as Notifications from 'expo-notifications';
 import React, { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
@@ -21,13 +22,21 @@ import { SERVER_URL } from '../../config';
 
 interface GlobalRadar      { enabled: boolean; max_diff: number; start_quarter: number; alert_type: string }
 interface FavTeam          { team_id: string; team_name: string; max_diff: number; start_quarter: number }
-interface FavPlayer        { player_id: string; name: string; alert_type: string }
+// Stored on server as { player_id: { name, total_pts, hot_start_q, hot_start_pts, td_watch, alert_type } }
+interface FavPlayerEntry {
+  name:          string;
+  total_pts:     number;
+  hot_start_q:   number;
+  hot_start_pts: number;
+  td_watch:      boolean;
+  alert_type:    string;
+}
 interface GlobalThresholds { pts_threshold: number; triple_double_watch: boolean; pts_per_quarter: number }
 interface HistoricalCats   { scoring_40_half: boolean; threes_11: boolean; quad_double_threat: boolean }
 interface AppSettings {
   GlobalGameRadar:  GlobalRadar;
   FavoriteTeams:    FavTeam[];
-  FavoritePlayers:  FavPlayer[];
+  FavoritePlayers:  Record<string, FavPlayerEntry>;   // dict from server
   GlobalThresholds: GlobalThresholds;
   HistoricalMode:   { enabled: boolean; alert_type: string; categories: HistoricalCats };
 }
@@ -94,10 +103,23 @@ export default function SettingsScreen() {
   const [threshPpq, setThreshPpq]   = useState('15');
   const [threshTd, setThreshTd]     = useState(true);
 
+  // ── Test Alarm state ─────────────────────────────────────────────────
+  const [testCountdown, setTestCountdown] = useState<number | null>(null);
+
+  // Per-player in-place edit state (all 4 conditions)
+  const [playerEdits, setPlayerEdits] = useState<Record<string, {
+    total_pts: string; hot_start_q: string; hot_start_pts: string; td_watch: boolean;
+  }>>({});
+
   // ── Add Player Modal state ────────────────────────────────────────────
   const [playerModalVisible, setPlayerModalVisible]   = useState(false);
   const [pickedTeamForPlayer, setPickedTeamForPlayer] = useState<CachedTeam | null>(null);
   const [pickedPlayer, setPickedPlayer]               = useState<CachedPlayer | null>(null);
+  // New player config
+  const [newTotalPts,    setNewTotalPts]    = useState('40');
+  const [newHotStartQ,   setNewHotStartQ]   = useState('1');
+  const [newHotStartPts, setNewHotStartPts] = useState('15');
+  const [newTdWatch,     setNewTdWatch]     = useState(true);
 
   // ── Load all data ──────────────────────────────────────────────────────
 
@@ -128,6 +150,18 @@ export default function SettingsScreen() {
         edits[ft.team_id] = { max_diff: String(ft.max_diff), start_quarter: String(ft.start_quarter) };
       }
       setTeamEdits(edits);
+
+      // Init per-player editable fields
+      const pEdits: Record<string, { total_pts: string; hot_start_q: string; hot_start_pts: string; td_watch: boolean }> = {};
+      for (const [pid, p] of Object.entries(s.FavoritePlayers ?? {})) {
+        pEdits[pid] = {
+          total_pts:     String(p.total_pts     ?? 40),
+          hot_start_q:   String(p.hot_start_q   ?? 1),
+          hot_start_pts: String(p.hot_start_pts ?? 15),
+          td_watch:      p.td_watch ?? true,
+        };
+      }
+      setPlayerEdits(pEdits);
     } catch (e) {
       console.error('Settings load error:', e);
     } finally {
@@ -138,6 +172,51 @@ export default function SettingsScreen() {
   useFocusEffect(
     useCallback(() => { loadAll(); }, [loadAll]),
   );
+
+  // ── Test Alarm ────────────────────────────────────────────────────────
+  const scheduleTestAlarm = async () => {
+    if (testCountdown !== null) return; // already counting
+    // Countdown display: 5 → 4 → 3 → 2 → 1 → fires
+    let secs = 5;
+    setTestCountdown(secs);
+    const ticker = setInterval(() => {
+      secs -= 1;
+      if (secs <= 0) {
+        clearInterval(ticker);
+        setTestCountdown(null);
+      } else {
+        setTestCountdown(secs);
+      }
+    }, 1000);
+
+    // Schedule a real local notification on the alarm channel after 5 s.
+    // This exercises the full path: channel sound → background task →
+    // AsyncStorage → AppState listener → overlay.
+    try {
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title:              '🚨 TEST ALARM',
+          body:               'This is your NBA Alarm overlay test.',
+          sound:              'classic_alarm.wav',
+          priority:           Notifications.AndroidNotificationPriority.MAX,
+          sticky:             true,
+          // Links this notification to the 'alarm' category so Android/iOS
+          // renders the DISMISS action button directly on the notification.
+          categoryIdentifier: 'alarm',
+          data:               { alert_type: 'alarm' },
+        },
+        trigger: {
+          type:      Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+          seconds:   5,
+          channelId: 'classic_alarm',
+        },
+      });
+    } catch (e: any) {
+      clearInterval(ticker);
+      setTestCountdown(null);
+      alert(`Test schedule failed: ${e?.message ?? String(e)}`);
+    }
+  };
 
   // ── API helpers ────────────────────────────────────────────────────────
 
@@ -242,10 +321,14 @@ export default function SettingsScreen() {
 
   const confirmAddPlayer = async () => {
     if (!pickedPlayer) return;
-    const payload: FavPlayer = {
-      player_id: pickedPlayer.id,
-      name:      pickedPlayer.name,
-      alert_type: 'silent',
+    const payload = {
+      player_id:     pickedPlayer.id,
+      name:          pickedPlayer.name,
+      total_pts:     parseInt(newTotalPts,    10) || 40,
+      hot_start_q:   parseInt(newHotStartQ,   10) || 1,
+      hot_start_pts: parseInt(newHotStartPts, 10) || 15,
+      td_watch:      newTdWatch,
+      alert_type:    'silent',
     };
     setSaving(true);
     try {
@@ -255,15 +338,75 @@ export default function SettingsScreen() {
       });
       setSettings(s => s ? {
         ...s,
-        FavoritePlayers: [...s.FavoritePlayers.filter(p => p.player_id !== payload.player_id), payload],
+        FavoritePlayers: {
+          ...s.FavoritePlayers,
+          [pickedPlayer.id]: {
+            name:          pickedPlayer.name,
+            total_pts:     payload.total_pts,
+            hot_start_q:   payload.hot_start_q,
+            hot_start_pts: payload.hot_start_pts,
+            td_watch:      payload.td_watch,
+            alert_type:    'silent',
+          },
+        },
       } : s);
+      setPlayerEdits(prev => ({
+        ...prev,
+        [pickedPlayer.id]: {
+          total_pts:     String(payload.total_pts),
+          hot_start_q:   String(payload.hot_start_q),
+          hot_start_pts: String(payload.hot_start_pts),
+          td_watch:      payload.td_watch,
+        },
+      }));
       closePlayerModal();
+    } finally { setSaving(false); }
+  };
+
+  const savePlayerSettings = async (player_id: string, name: string, alert_type: string) => {
+    const edit = playerEdits[player_id];
+    if (!edit) return;
+    const payload = {
+      player_id,
+      name,
+      total_pts:     parseInt(edit.total_pts,     10) || 40,
+      hot_start_q:   parseInt(edit.hot_start_q,   10) || 1,
+      hot_start_pts: parseInt(edit.hot_start_pts, 10) || 15,
+      td_watch:      edit.td_watch,
+      alert_type,
+    };
+    setSaving(true);
+    try {
+      await fetch(`${SERVER_URL}/settings/players`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      setSettings(s => s ? {
+        ...s,
+        FavoritePlayers: {
+          ...s.FavoritePlayers,
+          [player_id]: {
+            name,
+            total_pts:     payload.total_pts,
+            hot_start_q:   payload.hot_start_q,
+            hot_start_pts: payload.hot_start_pts,
+            td_watch:      payload.td_watch,
+            alert_type,
+          },
+        },
+      } : s);
     } finally { setSaving(false); }
   };
 
   const removePlayer = async (player_id: string) => {
     await fetch(`${SERVER_URL}/settings/players/${player_id}`, { method: 'DELETE' });
-    setSettings(s => s ? { ...s, FavoritePlayers: s.FavoritePlayers.filter(p => p.player_id !== player_id) } : s);
+    setSettings(s => {
+      if (!s) return s;
+      const next = { ...s.FavoritePlayers };
+      delete next[player_id];
+      return { ...s, FavoritePlayers: next };
+    });
+    setPlayerEdits(prev => { const n = { ...prev }; delete n[player_id]; return n; });
   };
 
   // ── Modal helpers ─────────────────────────────────────────────────────
@@ -285,12 +428,16 @@ export default function SettingsScreen() {
     setPlayerModalVisible(false);
     setPickedTeamForPlayer(null);
     setPickedPlayer(null);
+    setNewTotalPts('40');
+    setNewHotStartQ('1');
+    setNewHotStartPts('15');
+    setNewTdWatch(true);
   };
 
   // ── Derived ───────────────────────────────────────────────────────────
 
   const favTeamIds   = new Set(settings?.FavoriteTeams?.map(t => t.team_id) ?? []);
-  const favPlayerIds = new Set(settings?.FavoritePlayers?.map(p => p.player_id) ?? []);
+  const favPlayerIds = new Set(Object.keys(settings?.FavoritePlayers ?? {}));
 
   // ── Loading ───────────────────────────────────────────────────────────
 
@@ -383,20 +530,77 @@ export default function SettingsScreen() {
             <Text style={styles.addRowBtnText}>Add New Favorite Player</Text>
           </TouchableOpacity>
 
-          {(settings?.FavoritePlayers ?? []).length === 0 ? (
+          {Object.keys(settings?.FavoritePlayers ?? {}).length === 0 ? (
             <Text style={styles.emptyHint}>No favorite players yet.</Text>
           ) : (
-            settings!.FavoritePlayers.map(p => (
-              <View key={p.player_id} style={styles.favCard}>
-                <View style={styles.favCardHeader}>
-                  <Text style={styles.favName}>{p.name}</Text>
-                  <TouchableOpacity onPress={() => removePlayer(p.player_id)} style={styles.removeBtn}>
-                    <Text style={styles.removeBtnText}>Remove</Text>
+            Object.entries(settings!.FavoritePlayers).map(([pid, p]) => {
+              const edit = playerEdits[pid] ?? {
+                total_pts:     String(p.total_pts     ?? 40),
+                hot_start_q:   String(p.hot_start_q   ?? 1),
+                hot_start_pts: String(p.hot_start_pts ?? 15),
+                td_watch:      p.td_watch ?? true,
+              };
+              const setEdit = (patch: Partial<typeof edit>) =>
+                setPlayerEdits(prev => ({ ...prev, [pid]: { ...edit, ...patch } }));
+
+              return (
+                <View key={pid} style={styles.favCard}>
+                  <View style={styles.favCardHeader}>
+                    <Text style={styles.favName}>{p.name}</Text>
+                    <TouchableOpacity onPress={() => removePlayer(pid)} style={styles.removeBtn}>
+                      <Text style={styles.removeBtnText}>Remove</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Total PTS threshold */}
+                  <Text style={styles.inputLabel}>TOTAL PTS ALERT</Text>
+                  <TextInput
+                    style={styles.numInput}
+                    keyboardType="numeric"
+                    value={edit.total_pts}
+                    onChangeText={v => setEdit({ total_pts: v })}
+                    placeholderTextColor={C.textMuted}
+                  />
+
+                  {/* Hot Start */}
+                  <Text style={styles.inputLabel}>HOT START — ALERT IF HE HAS THIS MANY PTS...</Text>
+                  <TextInput
+                    style={styles.numInput}
+                    keyboardType="numeric"
+                    value={edit.hot_start_pts}
+                    onChangeText={v => setEdit({ hot_start_pts: v })}
+                    placeholderTextColor={C.textMuted}
+                  />
+                  <Text style={styles.inputLabel}>...BY THE END OF THIS QUARTER</Text>
+                  <QRow
+                    value={edit.hot_start_q}
+                    onChange={q => setEdit({ hot_start_q: q })}
+                  />
+
+                  {/* Triple-Double Watch */}
+                  <View style={[styles.switchRow, { marginTop: 4 }]}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.rowLabel}>Triple-Double Watch</Text>
+                      <Text style={styles.rowSub}>Alert when approaching 9+ in 3 categories</Text>
+                    </View>
+                    <Switch
+                      value={edit.td_watch}
+                      onValueChange={v => setEdit({ td_watch: v })}
+                      trackColor={{ false: C.border, true: C.accentBlue }}
+                      thumbColor={edit.td_watch ? C.accentBlue : C.textMuted}
+                    />
+                  </View>
+
+                  <TouchableOpacity
+                    style={[styles.updateBtn, { marginTop: 12 }]}
+                    onPress={() => savePlayerSettings(pid, p.name, p.alert_type)}
+                    disabled={saving}
+                  >
+                    <Text style={styles.updateBtnText}>Update</Text>
                   </TouchableOpacity>
                 </View>
-                <Text style={styles.rowSub}>Monitored automatically using global thresholds below</Text>
-              </View>
-            ))
+              );
+            })
           )}
         </View>
 
@@ -573,6 +777,23 @@ export default function SettingsScreen() {
               ))}
             </>
           )}
+        </View>
+
+        {/* ── Test Alarm ──────────────────────────────────────────── */}
+        <View style={[styles.section, { marginBottom: 32 }]}>
+          <Text style={styles.sectionTitle}>DEBUG</Text>
+          <Text style={[styles.rowSub, { marginBottom: 12 }]}>
+            Lock your screen or go to home, then tap the button. The overlay should appear when you return.
+          </Text>
+          <TouchableOpacity
+            style={[styles.confirmBtn, testCountdown !== null && { backgroundColor: C.border }]}
+            onPress={scheduleTestAlarm}
+            disabled={testCountdown !== null}
+          >
+            <Text style={styles.confirmBtnText}>
+              {testCountdown !== null ? `Firing in ${testCountdown}s…` : 'Test Alarm (5s delay)'}
+            </Text>
+          </TouchableOpacity>
         </View>
 
       </ScrollView>
@@ -763,15 +984,52 @@ export default function SettingsScreen() {
                     {pickedPlayer.position ? `  ·  ${pickedPlayer.position}` : ''}
                   </Text>
 
-                  <View style={[styles.configSummary, { marginTop: 20 }]}>
+                  {/* Total PTS */}
+                  <Text style={[styles.inputLabel, { marginTop: 20 }]}>TOTAL PTS ALERT</Text>
+                  <TextInput
+                    style={styles.numInput}
+                    keyboardType="numeric"
+                    value={newTotalPts}
+                    onChangeText={setNewTotalPts}
+                    placeholderTextColor={C.textMuted}
+                    autoFocus
+                  />
+
+                  {/* Hot Start */}
+                  <Text style={styles.inputLabel}>HOT START — ALERT IF HE HAS THIS MANY PTS...</Text>
+                  <TextInput
+                    style={styles.numInput}
+                    keyboardType="numeric"
+                    value={newHotStartPts}
+                    onChangeText={setNewHotStartPts}
+                    placeholderTextColor={C.textMuted}
+                  />
+                  <Text style={styles.inputLabel}>...BY THE END OF THIS QUARTER</Text>
+                  <QRow value={newHotStartQ} onChange={setNewHotStartQ} />
+
+                  {/* Triple-Double Watch */}
+                  <View style={[styles.switchRow, { marginVertical: 12 }]}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.rowLabel}>Triple-Double Watch</Text>
+                      <Text style={styles.rowSub}>Alert when approaching 9+ in 3 categories</Text>
+                    </View>
+                    <Switch
+                      value={newTdWatch}
+                      onValueChange={setNewTdWatch}
+                      trackColor={{ false: C.border, true: C.accentBlue }}
+                      thumbColor={newTdWatch ? C.accentBlue : C.textMuted}
+                    />
+                  </View>
+
+                  <View style={styles.configSummary}>
                     <Ionicons name="information-circle-outline" size={14} color={C.textMuted} />
                     <Text style={styles.configSummaryText}>
-                      This player will be monitored automatically during live games using the global thresholds set in Settings.
+                      Alert at {newTotalPts || '40'} total pts · Hot start: {newHotStartPts || '15'} pts by Q{newHotStartQ}{newTdWatch ? ' · TD watch on' : ''}
                     </Text>
                   </View>
 
                   <TouchableOpacity
-                    style={[styles.confirmBtn, saving && styles.confirmBtnDisabled, { marginTop: 16 }]}
+                    style={[styles.confirmBtn, saving && styles.confirmBtnDisabled]}
                     onPress={confirmAddPlayer}
                     disabled={saving}
                   >

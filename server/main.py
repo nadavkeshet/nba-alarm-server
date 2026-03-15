@@ -288,22 +288,34 @@ def remove_team(team_id: str):
 # ── Favorite Players settings ─────────────────────────────────────────────────
 
 class FavoritePlayer(BaseModel):
-    player_id: str
-    name: str
-    alert_type: str = "silent"
+    player_id:     str
+    name:          str
+    total_pts:     int  = 40
+    hot_start_q:   int  = 1
+    hot_start_pts: int  = 15
+    td_watch:      bool = True
+    alert_type:    str  = "silent"
 
 
 @app.post("/settings/players")
 def upsert_player(req: FavoritePlayer):
     """Add or update a favorite player."""
-    print(f"DEBUG: Received player from app: {req.name} (id={req.player_id})", flush=True)
+    print(
+        f"DEBUG: Received player: {req.name} (id={req.player_id}, "
+        f"total_pts={req.total_pts}, hot_start_q={req.hot_start_q}, "
+        f"hot_start_pts={req.hot_start_pts}, td_watch={req.td_watch})",
+        flush=True,
+    )
     prefs = get_preferences()
-    players = [p for p in prefs.get("FavoritePlayers", []) if p["player_id"] != req.player_id]
-    players.append({
-        "player_id":  req.player_id,
-        "name":       req.name,
-        "alert_type": req.alert_type,
-    })
+    players: dict = prefs.get("FavoritePlayers", {})
+    players[req.player_id] = {
+        "name":          req.name,
+        "total_pts":     req.total_pts,
+        "hot_start_q":   req.hot_start_q,
+        "hot_start_pts": req.hot_start_pts,
+        "td_watch":      req.td_watch,
+        "alert_type":    req.alert_type,
+    }
     prefs["FavoritePlayers"] = players
     save_preferences(prefs)
     _maybe_start_radar()  # favorite player added → radar needed
@@ -314,9 +326,11 @@ def upsert_player(req: FavoritePlayer):
 def remove_player(player_id: str):
     """Remove a favorite player."""
     prefs = get_preferences()
-    prefs["FavoritePlayers"] = [p for p in prefs.get("FavoritePlayers", []) if p["player_id"] != player_id]
+    players: dict = prefs.get("FavoritePlayers", {})
+    players.pop(player_id, None)
+    prefs["FavoritePlayers"] = players
     save_preferences(prefs)
-    return {"status": "removed", "FavoritePlayers": prefs["FavoritePlayers"]}
+    return {"status": "removed", "FavoritePlayers": players}
 
 
 # ── Historical Mode settings ──────────────────────────────────────────────────
@@ -399,7 +413,7 @@ def active_monitors():
             "start_quarter": radar_cfg.get("start_quarter", 4),
         },
         "favorite_teams":   prefs.get("FavoriteTeams", []),
-        "favorite_players": prefs.get("FavoritePlayers", []),
+        "favorite_players": prefs.get("FavoritePlayers", {}),
         "historical_mode":  prefs.get("HistoricalMode", {
             "enabled": False,
             "categories": {

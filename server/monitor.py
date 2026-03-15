@@ -145,7 +145,7 @@ _DEFAULT_PREFS: dict = {
         "start_quarter": 4,
     },
     "FavoriteTeams":   [],   # [{team_id, team_name, max_diff, start_quarter}]
-    "FavoritePlayers": [],   # [{player_id, name, alert_type}]
+    "FavoritePlayers": {},   # {player_id: {name, threshold, alert_type}}
     "GlobalThresholds": {
         "pts_threshold":        40,    # alert when fav player hits this many pts
         "triple_double_watch":  True,  # alert when fav player approaches a triple-double
@@ -185,6 +185,35 @@ def get_preferences() -> dict:
     for key, default_val in _DEFAULT_PREFS.items():
         if key not in prefs:
             prefs[key] = default_val
+    # Migrate FavoritePlayers: list → dict (old v1 format)
+    if isinstance(prefs.get("FavoritePlayers"), list):
+        old_list = prefs["FavoritePlayers"]
+        prefs["FavoritePlayers"] = {
+            p["player_id"]: {
+                "name":          p.get("name", "?"),
+                "total_pts":     p.get("threshold", 40),
+                "hot_start_q":   1,
+                "hot_start_pts": 15,
+                "td_watch":      True,
+                "alert_type":    p.get("alert_type", "silent"),
+            }
+            for p in old_list if "player_id" in p
+        }
+        save_preferences(prefs)
+        log.info("Migrated FavoritePlayers list → dict (v2).")
+    else:
+        # Migrate dict entries that still use old "threshold" key (v1 dict format)
+        changed = False
+        for pid, p in prefs.get("FavoritePlayers", {}).items():
+            if "threshold" in p and "total_pts" not in p:
+                p["total_pts"]     = p.pop("threshold")
+                p.setdefault("hot_start_q",   1)
+                p.setdefault("hot_start_pts", 15)
+                p.setdefault("td_watch",      True)
+                changed = True
+        if changed:
+            save_preferences(prefs)
+            log.info("Migrated FavoritePlayers dict entries to v2 schema.")
     return prefs
 
 
@@ -584,11 +613,17 @@ def _send_push_notification(
         "sound":            ios_sound,
         "priority":         "high",
         "channelId":        sound_channel,
+        # Attach the 'alarm' category so the app's registered DISMISS action
+        # button appears directly on the notification on both iOS and Android.
+        "categoryId":       "alarm" if alert_type == "alarm" else None,
         # iOS: content-available wakes the app in background so the
         # notification-response listener can fire without user interaction
         "mutableContent":   True,
         "data":             {"alert_type": alert_type},
     }
+    # Remove None values — Expo push API ignores unknown keys but a null
+    # categoryId would clear any category, which we don't want.
+    payload = {k: v for k, v in payload.items() if v is not None}
     try:
         resp = requests.post(
             "https://exp.host/--/api/v2/push/send",
@@ -908,12 +943,12 @@ def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
     radar_cfg       = prefs.get("GlobalGameRadar", {})
     radar_alert_type = radar_cfg.get("alert_type", "silent")
     fav_teams       = {t["team_id"]: t for t in prefs.get("FavoriteTeams", [])}
-    fav_players     = {p["player_id"]: p for p in prefs.get("FavoritePlayers", [])}
+    fav_players     = prefs.get("FavoritePlayers", {})   # {player_id: {name, threshold, alert_type}}
     global_thresh   = prefs.get("GlobalThresholds", {})
     if not fav_players:
         print("DEBUG: Radar is ticking – no favorite players configured.", flush=True)
     else:
-        print(f"DEBUG: Radar watching {len(fav_players)} favorite player(s): {[p.get('name','?') for p in prefs.get('FavoritePlayers', [])]}", flush=True)
+        print(f"DEBUG: Radar watching {len(fav_players)} favorite player(s): {[v.get('name','?') for v in fav_players.values()]}", flush=True)
     hist_cfg        = prefs.get("HistoricalMode", {})
     hist_enabled    = hist_cfg.get("enabled", False)
     hist_alert_type = hist_cfg.get("alert_type", "silent")
@@ -998,18 +1033,19 @@ def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
                     blk    = int(raw.get("BLK",  0) or 0)
                     threes = int(raw.get("3PM",  0) or 0)
 
-                    # ── Favorite Player Alerts (global thresholds) ──────────
+                    # ── Favorite Player Alerts (fully per-player settings) ──
                     if player_id in fav_players:
-                        fav_cfg      = fav_players[player_id]
-                        p_alert_type = fav_cfg.get("alert_type", "silent")
-                        pts_thresh   = int(global_thresh.get("pts_threshold", 40))
-                        td_watch     = bool(global_thresh.get("triple_double_watch", True))
-                        ppq_thresh   = int(global_thresh.get("pts_per_quarter", 15))
+                        fav_cfg        = fav_players[player_id]
+                        p_alert_type   = fav_cfg.get("alert_type", "silent")
+                        total_pts_thr  = int(fav_cfg.get("total_pts",     40))
+                        hot_start_q    = int(fav_cfg.get("hot_start_q",    1))
+                        hot_start_pts  = int(fav_cfg.get("hot_start_pts", 15))
+                        td_watch       = bool(fav_cfg.get("td_watch",     True))
 
-                        # PTS threshold: player reaches X pts total in the game
-                        if pts >= pts_thresh:
-                            print(f"Checking {player_name}: {pts} pts >= threshold {pts_thresh}. FIRING!", flush=True)
-                            if _fire_once(f"{game_id}_{player_id}_pts_thresh"):
+                        # Total PTS threshold: alert when player reaches X pts in the game
+                        if pts >= total_pts_thr:
+                            print(f"Checking {player_name}: {pts} pts >= total_pts {total_pts_thr}. FIRING!", flush=True)
+                            if _fire_once(f"{game_id}_{player_id}_total_pts"):
                                 _send_push_notification(
                                     push_token=push_token,
                                     title="Scoring Alert!",
@@ -1018,7 +1054,19 @@ def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
                                     alert_type=p_alert_type,
                                 )
                         else:
-                            print(f"Checking {player_name}: {pts} pts / threshold {pts_thresh}. No alarm.", flush=True)
+                            print(f"Checking {player_name}: {pts} pts / total_pts {total_pts_thr}. No alarm.", flush=True)
+
+                        # Hot Start: alert when player hits hot_start_pts by end of hot_start_q
+                        # Fires as soon as the target quarter is active and the threshold is met.
+                        if quarter == hot_start_q and pts >= hot_start_pts:
+                            if _fire_once(f"{game_id}_{player_id}_hot_start_q{hot_start_q}"):
+                                _send_push_notification(
+                                    push_token=push_token,
+                                    title="Hot Start Alert!",
+                                    body=f"{player_name}: {pts} pts in Q{quarter} of {game_name} — on fire!",
+                                    sound_channel=sound_channel,
+                                    alert_type=p_alert_type,
+                                )
 
                         # Triple-double watch: 3+ categories at 9+
                         if td_watch and _check_triple_double(pts, reb, ast, stl, blk):
@@ -1028,17 +1076,6 @@ def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
                                     push_token=push_token,
                                     title="Triple-Double Watch!",
                                     body=f"{player_name}: {' / '.join(hot)} in {game_name}!",
-                                    sound_channel=sound_channel,
-                                    alert_type=p_alert_type,
-                                )
-
-                        # Hot Q1 start: ppq_thresh pts in Q1
-                        if quarter == 1 and pts >= ppq_thresh:
-                            if _fire_once(f"{game_id}_{player_id}_hot_start"):
-                                _send_push_notification(
-                                    push_token=push_token,
-                                    title="Hot Start Alert!",
-                                    body=f"{player_name}: {pts} pts in Q1 of {game_name} — on fire!",
                                     sound_channel=sound_channel,
                                     alert_type=p_alert_type,
                                 )
@@ -1099,7 +1136,7 @@ def _has_passive_monitoring(prefs: dict) -> bool:
         return True
     if prefs.get("FavoriteTeams", []):
         return True
-    if any(p.get("monitor_career_high", True) for p in prefs.get("FavoritePlayers", [])):
+    if bool(prefs.get("FavoritePlayers", {})):
         return True
     if prefs.get("HistoricalMode", {}).get("enabled", False):
         return True
