@@ -63,13 +63,14 @@ class Alarm(_Base):
     id             = Column(Integer, primary_key=True, index=True)
     user_token     = Column(String,  nullable=False)   # Expo push token
     target_id      = Column(String,  nullable=False)   # player_id or game_id
+    target_name    = Column(String,  nullable=True)    # human-readable name
     condition_type = Column(String,  nullable=False)   # "points" | "score_diff" | "triple_double"
     threshold      = Column(Integer, nullable=False)
     is_active      = Column(Boolean, default=True, nullable=False)
 
 
 def _init_db() -> None:
-    """Create tables if they don't already exist."""
+    """Create tables if they don't already exist, and run lightweight migrations."""
     if engine is None:
         print("DB: No DATABASE_URL set – skipping table creation.", flush=True)
         return
@@ -78,6 +79,15 @@ def _init_db() -> None:
         print("DB: Tables ready.", flush=True)
     except Exception as exc:
         print(f"DB: Failed to create tables – {exc}", flush=True)
+        return
+    # Migration: add target_name column if it doesn't exist yet
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE alarms ADD COLUMN target_name VARCHAR"))
+            conn.commit()
+            print("DB: Migration applied – added target_name column.", flush=True)
+    except Exception:
+        pass  # Column already exists – safe to ignore
 
 
 # ── Background Async Poller ────────────────────────────────────────────────────
@@ -272,7 +282,8 @@ def health():
 class SetAlarmRequest(BaseModel):
     user_token:     str
     target_id:      str
-    condition_type: str   # "points" | "score_diff" | "triple_double"
+    target_name:    str = ""   # human-readable player/game name
+    condition_type: str        # "points" | "score_diff" | "triple_double"
     threshold:      int
 
 
@@ -290,6 +301,7 @@ def set_alarm(req: SetAlarmRequest):
         alarm = Alarm(
             user_token=req.user_token,
             target_id=req.target_id,
+            target_name=req.target_name or req.target_id,
             condition_type=req.condition_type,
             threshold=req.threshold,
             is_active=True,
@@ -687,6 +699,7 @@ def active_monitors(user_token: str = ""):
                 {
                     "alarm_id":       r.id,
                     "target_id":      r.target_id,
+                    "target_name":    r.target_name or r.target_id,
                     "condition_type": r.condition_type,
                     "threshold":      r.threshold,
                 }

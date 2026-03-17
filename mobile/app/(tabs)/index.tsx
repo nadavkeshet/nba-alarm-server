@@ -644,6 +644,7 @@ export default function HomeScreen() {
         const dbPayload = {
           user_token:     freshToken,
           target_id:      selectedGame.id,
+          target_name:    selectedGame.name,
           condition_type: 'score_diff',
           threshold:      parseInt(maxDiff, 10),
         };
@@ -700,6 +701,7 @@ export default function HomeScreen() {
         const dbPayload = {
           user_token:     freshToken,
           target_id:      selectedPlayer.id,
+          target_name:    selectedPlayer.name,
           condition_type: isTripleDouble ? 'triple_double' : 'points',
           threshold:      isTripleDouble ? 0 : parseInt(ptsThreshold, 10),
         };

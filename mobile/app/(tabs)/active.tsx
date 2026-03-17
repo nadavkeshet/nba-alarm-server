@@ -68,6 +68,7 @@ interface FavPlayer {
 interface DbAlarm {
   alarm_id:       number;
   target_id:      string;
+  target_name:    string;
   condition_type: string;  // "points" | "score_diff" | "triple_double"
   threshold:      number;
 }
@@ -351,118 +352,125 @@ export default function ActiveScreen() {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
 
-        {/* ── Game Alarms (scheduled + live) ───────────────────────────── */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>GAME ALARMS</Text>
-            <View style={[styles.badge, { backgroundColor: data?.game_alarms.length ? C.red : C.border }]}>
-              <Text style={styles.badgeText}>{data?.game_alarms.length ?? 0}</Text>
-            </View>
-          </View>
-
-          {(data?.game_alarms ?? []).length === 0 ? (
-            <View style={styles.emptyState}>
-              <Ionicons name="notifications-off-outline" size={28} color={C.border} />
-              <Text style={styles.emptyHint}>No game alarms set. Tap a game on the Home tab to create one.</Text>
-            </View>
-          ) : (
-            data!.game_alarms.map(alarm => (
-              <View key={alarm.game_id} style={styles.alarmCard}>
-                <View style={styles.alarmCardLeft}>
-                  <GameStatusPill status={alarm.status ?? 'scheduled'} />
-                  <Text style={styles.alarmGame}>{alarm.game_name}</Text>
-                  <Text style={styles.alarmSub}>
-                    Alert if diff ≤ {alarm.max_diff} pts from Q{alarm.start_quarter}
-                  </Text>
-                  <Text style={styles.alarmSub}>
-                    {alarm.alert_type === 'alarm' ? '🚨 Alarm' : '🔕 Silent'}
-                  </Text>
+        {/* ── Game Alarms ──────────────────────────────────────────────── */}
+        {(() => {
+          const liveGames = data?.game_alarms ?? [];
+          const dbGames   = (data?.db_alarms ?? []).filter(a => a.condition_type === 'score_diff');
+          const total     = liveGames.length + dbGames.length;
+          return (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>GAME ALARMS</Text>
+                <View style={[styles.badge, { backgroundColor: total ? C.red : C.border }]}>
+                  <Text style={styles.badgeText}>{total}</Text>
                 </View>
-                <TouchableOpacity
-                  style={styles.cancelBtn}
-                  onPress={() => cancelGameAlarm(alarm)}
-                >
-                  <Text style={styles.cancelBtnText}>Cancel</Text>
-                </TouchableOpacity>
               </View>
-            ))
-          )}
-        </View>
 
-        {/* ── Player Alarms (scheduled + live) ─────────────────────────── */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>PLAYER ALARMS</Text>
-            <View style={[styles.badge, { backgroundColor: data?.player_alarms.length ? C.orange : C.border }]}>
-              <Text style={styles.badgeText}>{data?.player_alarms.length ?? 0}</Text>
-            </View>
-          </View>
-
-          {(data?.player_alarms ?? []).length === 0 ? (
-            <View style={styles.emptyState}>
-              <Ionicons name="person-outline" size={28} color={C.border} />
-              <Text style={styles.emptyHint}>No player alarms set. Open a game and choose "Player Alarm".</Text>
-            </View>
-          ) : (
-            data!.player_alarms.map(alarm => (
-              <View key={alarm.player_id} style={styles.alarmCard}>
-                <View style={styles.alarmCardLeft}>
-                  <PlayerStatusPill status={alarm.status ?? 'scheduled'} />
-                  <Text style={styles.alarmGame}>{alarm.player_name}</Text>
-                  <Text style={styles.alarmSub}>
-                    {CONDITION_LABEL[alarm.condition] ?? alarm.condition}
-                    {alarm.condition !== 'triple_double' ? ` · ${alarm.pts_threshold} pts` : ''}
-                  </Text>
-                  <Text style={[styles.alarmSub, { marginTop: 1 }]}>{alarm.game_name}</Text>
-                  <Text style={styles.alarmSub}>
-                    {alarm.alert_type === 'alarm' ? '🚨 Alarm' : '🔕 Silent'}
-                  </Text>
+              {total === 0 ? (
+                <View style={styles.emptyState}>
+                  <Ionicons name="notifications-off-outline" size={28} color={C.border} />
+                  <Text style={styles.emptyHint}>No game alarms set. Tap a game on the Home tab to create one.</Text>
                 </View>
-                <TouchableOpacity
-                  style={styles.cancelBtn}
-                  onPress={() => cancelPlayerAlarm(alarm)}
-                >
-                  <Text style={styles.cancelBtnText}>Cancel</Text>
-                </TouchableOpacity>
+              ) : (
+                <>
+                  {liveGames.map(alarm => (
+                    <View key={`live-${alarm.game_id}`} style={styles.alarmCard}>
+                      <View style={styles.alarmCardLeft}>
+                        <GameStatusPill status={alarm.status ?? 'scheduled'} />
+                        <Text style={styles.alarmGame}>{alarm.game_name}</Text>
+                        <Text style={styles.alarmSub}>Alert if diff ≤ {alarm.max_diff} pts from Q{alarm.start_quarter}</Text>
+                        <Text style={styles.alarmSub}>{alarm.alert_type === 'alarm' ? '🚨 Alarm' : '🔕 Silent'}</Text>
+                      </View>
+                      <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelGameAlarm(alarm)}>
+                        <Text style={styles.cancelBtnText}>Cancel</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                  {dbGames.map(alarm => (
+                    <View key={`db-${alarm.alarm_id}`} style={styles.alarmCard}>
+                      <View style={styles.alarmCardLeft}>
+                        <View style={[styles.livePill, { backgroundColor: 'rgba(77,140,245,0.12)' }]}>
+                          <View style={[styles.liveDot, { backgroundColor: C.accentBlue }]} />
+                          <Text style={[styles.liveText, { color: C.accentBlue }]}>SAVED</Text>
+                        </View>
+                        <Text style={styles.alarmGame}>{alarm.target_name}</Text>
+                        <Text style={styles.alarmSub}>Score gap ≤ {alarm.threshold} pts</Text>
+                      </View>
+                      <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelDbAlarm(alarm)}>
+                        <Text style={styles.cancelBtnText}>Delete</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </>
+              )}
+            </View>
+          );
+        })()}
+
+        {/* ── Player Alarms ────────────────────────────────────────────── */}
+        {(() => {
+          const livePlayers = data?.player_alarms ?? [];
+          const dbPlayers   = (data?.db_alarms ?? []).filter(
+            a => a.condition_type === 'points' || a.condition_type === 'triple_double',
+          );
+          const total = livePlayers.length + dbPlayers.length;
+          return (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>PLAYER ALARMS</Text>
+                <View style={[styles.badge, { backgroundColor: total ? C.orange : C.border }]}>
+                  <Text style={styles.badgeText}>{total}</Text>
+                </View>
               </View>
-            ))
-          )}
-        </View>
 
-        {/* ── DB Alarms (PostgreSQL) ───────────────────────────────────── */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>SAVED ALARMS (DATABASE)</Text>
-            <View style={[styles.badge, { backgroundColor: (data?.db_alarms.length ?? 0) > 0 ? C.accentBlue : C.border }]}>
-              <Text style={styles.badgeText}>{data?.db_alarms.length ?? 0}</Text>
-            </View>
-          </View>
-
-          {(data?.db_alarms ?? []).length === 0 ? (
-            <View style={styles.emptyState}>
-              <Ionicons name="cloud-outline" size={28} color={C.border} />
-              <Text style={styles.emptyHint}>No saved alarms in the database.</Text>
-            </View>
-          ) : (
-            data!.db_alarms.map(alarm => {
-              const condLabel =
-                alarm.condition_type === 'triple_double' ? 'Triple-Double Watch' :
-                alarm.condition_type === 'score_diff'    ? `Score diff ≤ ${alarm.threshold} pts` :
-                                                           `Points ≥ ${alarm.threshold}`;
-              return (
-                <View key={alarm.alarm_id} style={styles.alarmCard}>
-                  <View style={styles.alarmCardLeft}>
-                    <Text style={styles.alarmGame}>{alarm.target_id}</Text>
-                    <Text style={styles.alarmSub}>{condLabel}</Text>
-                  </View>
-                  <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelDbAlarm(alarm)}>
-                    <Text style={styles.cancelBtnText}>Delete</Text>
-                  </TouchableOpacity>
+              {total === 0 ? (
+                <View style={styles.emptyState}>
+                  <Ionicons name="person-outline" size={28} color={C.border} />
+                  <Text style={styles.emptyHint}>No player alarms set. Open a game and choose "Player Alarm".</Text>
                 </View>
-              );
-            })
-          )}
-        </View>
+              ) : (
+                <>
+                  {livePlayers.map(alarm => (
+                    <View key={`live-${alarm.player_id}`} style={styles.alarmCard}>
+                      <View style={styles.alarmCardLeft}>
+                        <PlayerStatusPill status={alarm.status ?? 'scheduled'} />
+                        <Text style={styles.alarmGame}>{alarm.player_name}</Text>
+                        <Text style={styles.alarmSub}>
+                          {CONDITION_LABEL[alarm.condition] ?? alarm.condition}
+                          {alarm.condition !== 'triple_double' ? ` · ${alarm.pts_threshold} pts` : ''}
+                        </Text>
+                        <Text style={[styles.alarmSub, { marginTop: 1 }]}>{alarm.game_name}</Text>
+                        <Text style={styles.alarmSub}>{alarm.alert_type === 'alarm' ? '🚨 Alarm' : '🔕 Silent'}</Text>
+                      </View>
+                      <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelPlayerAlarm(alarm)}>
+                        <Text style={styles.cancelBtnText}>Cancel</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                  {dbPlayers.map(alarm => (
+                    <View key={`db-${alarm.alarm_id}`} style={styles.alarmCard}>
+                      <View style={styles.alarmCardLeft}>
+                        <View style={[styles.livePill, { backgroundColor: 'rgba(224,92,0,0.12)' }]}>
+                          <View style={[styles.liveDot, { backgroundColor: C.orange }]} />
+                          <Text style={[styles.liveText, { color: C.orange }]}>SAVED</Text>
+                        </View>
+                        <Text style={styles.alarmGame}>{alarm.target_name}</Text>
+                        <Text style={styles.alarmSub}>
+                          {alarm.condition_type === 'triple_double'
+                            ? 'Triple-Double Watch'
+                            : `Points ≥ ${alarm.threshold}`}
+                        </Text>
+                      </View>
+                      <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelDbAlarm(alarm)}>
+                        <Text style={styles.cancelBtnText}>Delete</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </>
+              )}
+            </View>
+          );
+        })()}
 
         {/* ── Global Radar Status ──────────────────────────────────────── */}
         <View style={styles.section}>
