@@ -662,12 +662,40 @@ def refresh_rosters():
 
 
 @app.get("/active-monitors")
-def active_monitors():
-    prefs = get_preferences()
+def active_monitors(user_token: str = ""):
+    prefs     = get_preferences()
     radar_cfg = prefs.get("GlobalGameRadar", {})
+
+    # Filter in-memory alarms by token when one is provided
+    game_alarms   = get_active_alarms()
+    player_alarms = get_active_player_alarms()
+    if user_token:
+        game_alarms   = [a for a in game_alarms   if a.get("push_token") == user_token]
+        player_alarms = [a for a in player_alarms if a.get("push_token") == user_token]
+
+    # DB alarms filtered by token
+    db_alarms: list[dict] = []
+    if engine is not None and user_token:
+        with Session(engine) as session:
+            rows = (
+                session.query(Alarm)
+                       .filter(Alarm.user_token == user_token, Alarm.is_active.is_(True))
+                       .all()
+            )
+        db_alarms = [
+            {
+                "alarm_id":       r.id,
+                "target_id":      r.target_id,
+                "condition_type": r.condition_type,
+                "threshold":      r.threshold,
+            }
+            for r in rows
+        ]
+
     return {
-        "game_alarms":   get_active_alarms(),
-        "player_alarms": get_active_player_alarms(),
+        "game_alarms":   game_alarms,
+        "player_alarms": player_alarms,
+        "db_alarms":     db_alarms,
         "global_radar": {
             "enabled":       radar_cfg.get("enabled", False),
             "running":       get_radar_status(),
@@ -688,15 +716,34 @@ def active_monitors():
 
 
 @app.delete("/active-monitors/game/{game_id}")
-def cancel_game(game_id: str):
+def cancel_game(game_id: str, user_token: str = ""):
     cancelled = cancel_game_alarm(game_id)
     return {"cancelled": cancelled, "game_id": game_id}
 
 
 @app.delete("/active-monitors/player/{player_id}")
-def cancel_player(player_id: str):
+def cancel_player(player_id: str, user_token: str = ""):
     cancelled = cancel_player_alarm(player_id)
     return {"cancelled": cancelled, "player_id": player_id}
+
+
+@app.delete("/active-monitors/db/{alarm_id}")
+def cancel_db_alarm(alarm_id: int, user_token: str = ""):
+    """Permanently delete a PostgreSQL alarm after verifying ownership."""
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Database not configured.")
+    if not user_token:
+        raise HTTPException(status_code=400, detail="user_token is required.")
+    with Session(engine) as session:
+        alarm = session.get(Alarm, alarm_id)
+        if alarm is None:
+            raise HTTPException(status_code=404, detail="Alarm not found.")
+        if alarm.user_token != user_token:
+            raise HTTPException(status_code=403, detail="Not your alarm.")
+        session.delete(alarm)
+        session.commit()
+    print(f"DB: Alarm {alarm_id} permanently deleted for token ...{user_token[-10:]}", flush=True)
+    return {"deleted": True, "alarm_id": alarm_id}
 
 
 # ── Entry Point ────────────────────────────────────────────────────────────────

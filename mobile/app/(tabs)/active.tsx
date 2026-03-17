@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Notifications from 'expo-notifications';
 import { useFocusEffect } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   Alert,
   ScrollView,
@@ -14,6 +15,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { SkeletonAlarmCard } from '../../components/skeleton-card';
 
 import { SERVER_URL } from '../../config';
+
+const EXPO_PROJECT_ID = '19104813-313d-40c1-975a-63b78d3ae7fc';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -62,6 +65,13 @@ interface FavPlayer {
   alert_type:    string;
 }
 
+interface DbAlarm {
+  alarm_id:       number;
+  target_id:      string;
+  condition_type: string;  // "points" | "score_diff" | "triple_double"
+  threshold:      number;
+}
+
 interface HistoricalCats {
   scoring_40_half: boolean;
   threes_11: boolean;
@@ -71,6 +81,7 @@ interface HistoricalCats {
 interface ActiveMonitors {
   game_alarms:      GameAlarm[];
   player_alarms:    PlayerAlarm[];
+  db_alarms:        DbAlarm[];
   global_radar:     GlobalRadar;
   favorite_teams:   FavTeam[];                  // always an array from server
   favorite_players: Record<string, FavPlayer>;  // dict from server
@@ -142,17 +153,50 @@ function PlayerStatusPill({ status }: { status: string }) {
 export default function ActiveScreen() {
   const [data, setData]       = useState<ActiveMonitors | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState<string | null>(null);
+  const tokenRef              = useRef<string | null>(null);
 
-  const load = useCallback(() => {
-    setLoading(true);
-    fetch(`${SERVER_URL}/active-monitors`)
-      .then(r => r.json())
-      .then((d: ActiveMonitors) => setData(d))
-      .catch(e => console.error('Active monitors load error:', e))
-      .finally(() => setLoading(false));
+  /** Resolve the push token: use cached ref, else call Notifications API. */
+  const resolveToken = useCallback(async (): Promise<string | null> => {
+    if (tokenRef.current) return tokenRef.current;
+    try {
+      const { data: token } = await Notifications.getExpoPushTokenAsync({
+        projectId: EXPO_PROJECT_ID,
+      });
+      tokenRef.current = token;
+      console.log('[Active] Resolved push token:', token.slice(0, 30) + '...');
+      return token;
+    } catch (e) {
+      console.warn('[Active] Could not resolve push token:', e);
+      return null;
+    }
   }, []);
 
-  // Non-async useFocusEffect — refreshes every time the tab is focused
+  const load = useCallback(async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      const token = await resolveToken();
+      if (!token) {
+        setError('Push token unavailable. Please restart the app.');
+        return;
+      }
+      console.log('[Active] Fetching monitors with token:', token.slice(0, 30) + '...');
+      const resp = await fetch(
+        `${SERVER_URL}/active-monitors?user_token=${encodeURIComponent(token)}`,
+      );
+      if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
+      const d: ActiveMonitors = await resp.json();
+      setData(d);
+    } catch (e: any) {
+      console.error('[Active] Load error:', e);
+      setError(e?.message ?? 'Failed to load. Check your connection.');
+    } finally {
+      setLoading(false);
+    }
+  }, [resolveToken]);
+
+  // Refresh every time the tab is focused
   useFocusEffect(
     useCallback(() => {
       load();
@@ -169,7 +213,9 @@ export default function ActiveScreen() {
           text: 'Cancel Alarm',
           style: 'destructive',
           onPress: () => {
-            fetch(`${SERVER_URL}/active-monitors/game/${alarm.game_id}`, { method: 'DELETE' })
+            const t = tokenRef.current;
+            const tokenParam = t ? `?user_token=${encodeURIComponent(t)}` : '';
+            fetch(`${SERVER_URL}/active-monitors/game/${alarm.game_id}${tokenParam}`, { method: 'DELETE' })
               .then(() => load())
               .catch(e => console.error('Cancel game alarm error:', e));
           },
@@ -188,9 +234,58 @@ export default function ActiveScreen() {
           text: 'Cancel Alarm',
           style: 'destructive',
           onPress: () => {
-            fetch(`${SERVER_URL}/active-monitors/player/${alarm.player_id}`, { method: 'DELETE' })
+            const t = tokenRef.current;
+            const tokenParam = t ? `?user_token=${encodeURIComponent(t)}` : '';
+            fetch(`${SERVER_URL}/active-monitors/player/${alarm.player_id}${tokenParam}`, { method: 'DELETE' })
               .then(() => load())
               .catch(e => console.error('Cancel player alarm error:', e));
+          },
+        },
+      ],
+    );
+  };
+
+  const cancelDbAlarm = (alarm: DbAlarm) => {
+    const label = alarm.condition_type === 'triple_double'
+      ? `Triple-Double watch for ${alarm.target_id}`
+      : `${alarm.condition_type === 'score_diff' ? 'Game' : 'Player'} alarm (threshold: ${alarm.threshold})`;
+
+    Alert.alert(
+      'Delete Alarm',
+      `Permanently remove "${label}" from the database?`,
+      [
+        { text: 'Keep', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const t = tokenRef.current;
+            if (!t) {
+              Alert.alert('Error', 'Push token not available. Please restart the app.');
+              return;
+            }
+            const url = `${SERVER_URL}/active-monitors/db/${alarm.alarm_id}?user_token=${encodeURIComponent(t)}`;
+            console.log('[Active] DELETE DB alarm →', url);
+            try {
+              const resp = await fetch(url, { method: 'DELETE' });
+              if (!resp.ok) {
+                const body = await resp.json().catch(() => ({}));
+                const msg = body?.detail ?? `Server error ${resp.status}`;
+                console.error('[Active] DB delete failed:', msg);
+                Alert.alert('Delete Failed', msg);
+                return;
+              }
+              const result = await resp.json();
+              console.log('[Active] DB alarm deleted ✓', result);
+              // Only update UI after confirmed server deletion
+              setData(prev => prev ? {
+                ...prev,
+                db_alarms: prev.db_alarms.filter(a => a.alarm_id !== alarm.alarm_id),
+              } : prev);
+            } catch (e: any) {
+              console.error('[Active] DB delete network error:', e);
+              Alert.alert('Delete Failed', 'Could not reach the server. Check your connection.');
+            }
           },
         },
       ],
@@ -209,6 +304,21 @@ export default function ActiveScreen() {
             </View>
           ))}
         </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (error) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <Text style={styles.header}>Mission Control</Text>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 }}>
+          <Ionicons name="cloud-offline-outline" size={48} color={C.border} />
+          <Text style={[styles.emptyHint, { marginTop: 12 }]}>{error}</Text>
+          <TouchableOpacity style={[styles.refreshBtn, { marginTop: 24 }]} onPress={() => load()}>
+            <Text style={styles.refreshBtnText}>Try Again</Text>
+          </TouchableOpacity>
+        </View>
       </SafeAreaView>
     );
   }
@@ -304,6 +414,41 @@ export default function ActiveScreen() {
                 </TouchableOpacity>
               </View>
             ))
+          )}
+        </View>
+
+        {/* ── DB Alarms (PostgreSQL) ───────────────────────────────────── */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>SAVED ALARMS (DATABASE)</Text>
+            <View style={[styles.badge, { backgroundColor: (data?.db_alarms.length ?? 0) > 0 ? C.accentBlue : C.border }]}>
+              <Text style={styles.badgeText}>{data?.db_alarms.length ?? 0}</Text>
+            </View>
+          </View>
+
+          {(data?.db_alarms ?? []).length === 0 ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="cloud-outline" size={28} color={C.border} />
+              <Text style={styles.emptyHint}>No saved alarms in the database.</Text>
+            </View>
+          ) : (
+            data!.db_alarms.map(alarm => {
+              const condLabel =
+                alarm.condition_type === 'triple_double' ? 'Triple-Double Watch' :
+                alarm.condition_type === 'score_diff'    ? `Score diff ≤ ${alarm.threshold} pts` :
+                                                           `Points ≥ ${alarm.threshold}`;
+              return (
+                <View key={alarm.alarm_id} style={styles.alarmCard}>
+                  <View style={styles.alarmCardLeft}>
+                    <Text style={styles.alarmGame}>{alarm.target_id}</Text>
+                    <Text style={styles.alarmSub}>{condLabel}</Text>
+                  </View>
+                  <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelDbAlarm(alarm)}>
+                    <Text style={styles.cancelBtnText}>Delete</Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })
           )}
         </View>
 
@@ -418,7 +563,7 @@ export default function ActiveScreen() {
         </View>
 
         {/* ── Refresh ──────────────────────────────────────────────────── */}
-        <TouchableOpacity style={styles.refreshBtn} onPress={load} disabled={loading}>
+        <TouchableOpacity style={styles.refreshBtn} onPress={() => load()} disabled={loading}>
           <Text style={styles.refreshBtnText}>Refresh</Text>
         </TouchableOpacity>
 
