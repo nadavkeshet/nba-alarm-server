@@ -186,7 +186,19 @@ export default function ActiveScreen() {
         `${SERVER_URL}/active-monitors?user_token=${encodeURIComponent(token)}`,
       );
       if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
-      const d: ActiveMonitors = await resp.json();
+      const raw = await resp.json();
+      console.log('[Active] Raw data from server:', JSON.stringify(raw));
+      // Ensure db_alarms is always an array regardless of server shape
+      const d: ActiveMonitors = {
+        ...raw,
+        db_alarms:     Array.isArray(raw.db_alarms)     ? raw.db_alarms     : [],
+        game_alarms:   Array.isArray(raw.game_alarms)   ? raw.game_alarms   : [],
+        player_alarms: Array.isArray(raw.player_alarms) ? raw.player_alarms : [],
+        favorite_teams: Array.isArray(raw.favorite_teams) ? raw.favorite_teams : [],
+        favorite_players: raw.favorite_players && typeof raw.favorite_players === 'object'
+          ? raw.favorite_players : {},
+      };
+      console.log('[Active] db_alarms count:', d.db_alarms.length);
       setData(d);
     } catch (e: any) {
       console.error('[Active] Load error:', e);

@@ -682,15 +682,17 @@ def active_monitors(user_token: str = ""):
                        .filter(Alarm.user_token == user_token, Alarm.is_active.is_(True))
                        .all()
             )
-        db_alarms = [
-            {
-                "alarm_id":       r.id,
-                "target_id":      r.target_id,
-                "condition_type": r.condition_type,
-                "threshold":      r.threshold,
-            }
-            for r in rows
-        ]
+            # Build dicts INSIDE the session so attributes are never detached
+            db_alarms = [
+                {
+                    "alarm_id":       r.id,
+                    "target_id":      r.target_id,
+                    "condition_type": r.condition_type,
+                    "threshold":      r.threshold,
+                }
+                for r in rows
+            ]
+        print(f"DB: Returning {len(db_alarms)} active alarms for token ...{user_token[-10:]}", flush=True)
 
     return {
         "game_alarms":   game_alarms,
