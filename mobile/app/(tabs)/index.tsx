@@ -647,6 +647,7 @@ export default function HomeScreen() {
           target_name:    selectedGame.name,
           condition_type: 'score_diff',
           threshold:      parseInt(maxDiff, 10),
+          start_quarter:  parseInt(startQuarter, 10),
         };
         fetch(`${SERVER_URL}/set_alarm`, {
           method: 'POST',

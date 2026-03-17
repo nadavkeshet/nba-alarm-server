@@ -66,6 +66,7 @@ class Alarm(_Base):
     target_name    = Column(String,  nullable=True)    # human-readable name
     condition_type = Column(String,  nullable=False)   # "points" | "score_diff" | "triple_double"
     threshold      = Column(Integer, nullable=False)
+    start_quarter  = Column(Integer, nullable=True)    # earliest quarter to fire score_diff (default 4)
     is_active      = Column(Boolean, default=True, nullable=False)
 
 
@@ -80,14 +81,19 @@ def _init_db() -> None:
     except Exception as exc:
         print(f"DB: Failed to create tables – {exc}", flush=True)
         return
-    # Migration: add target_name column if it doesn't exist yet
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE alarms ADD COLUMN target_name VARCHAR"))
-            conn.commit()
-            print("DB: Migration applied – added target_name column.", flush=True)
-    except Exception:
-        pass  # Column already exists – safe to ignore
+    # Migrations: add new columns (safe to re-run; silently skips if already present)
+    migrations = [
+        "ALTER TABLE alarms ADD COLUMN target_name   VARCHAR",
+        "ALTER TABLE alarms ADD COLUMN start_quarter INTEGER",
+    ]
+    with engine.connect() as conn:
+        for sql in migrations:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+                print(f"DB: Migration applied – {sql}", flush=True)
+            except Exception:
+                pass  # column already exists
 
 
 # ── Background Async Poller ────────────────────────────────────────────────────
@@ -102,6 +108,22 @@ def _fetch_scoreboard() -> dict:
     resp = http.get(ESPN_SCOREBOARD, timeout=10)
     resp.raise_for_status()
     return resp.json()
+
+
+def _get_event_state(event: dict) -> str:
+    """Return ESPN status state: 'pre' | 'in' | 'post'."""
+    try:
+        return event.get("status", {}).get("type", {}).get("state", "pre")
+    except Exception:
+        return "pre"
+
+
+def _get_event_period(event: dict) -> int:
+    """Return current period (quarter) of the event, or 0 if not started."""
+    try:
+        return int(event.get("status", {}).get("period", 0))
+    except Exception:
+        return 0
 
 
 def _extract_game_diff(event: dict) -> int | None:
@@ -152,11 +174,22 @@ def _extract_player_stats(event: dict, target_id: str) -> dict[str, int]:
 def _check_and_fire(alarm: Alarm, events: list[dict]) -> bool:
     """Return True if the alarm condition is met against the live scoreboard."""
     if alarm.condition_type == "score_diff":
+        required_quarter = alarm.start_quarter or 4   # default: only fire from Q4
         for event in events:
-            if str(event.get("id")) == str(alarm.target_id):
-                diff = _extract_game_diff(event)
-                if diff is not None and diff <= alarm.threshold:
-                    return True
+            if str(event.get("id")) != str(alarm.target_id):
+                continue
+            state  = _get_event_state(event)
+            period = _get_event_period(event)
+            # Must be live AND have reached the target quarter
+            if state != "in":
+                print(f"Poller: score_diff alarm {alarm.id} – game not live (state={state}), skipping.", flush=True)
+                continue
+            if period < required_quarter:
+                print(f"Poller: score_diff alarm {alarm.id} – Q{period} < Q{required_quarter} target, skipping.", flush=True)
+                continue
+            diff = _extract_game_diff(event)
+            if diff is not None and diff <= alarm.threshold:
+                return True
 
     elif alarm.condition_type == "points":
         for event in events:
@@ -285,6 +318,7 @@ class SetAlarmRequest(BaseModel):
     target_name:    str = ""   # human-readable player/game name
     condition_type: str        # "points" | "score_diff" | "triple_double"
     threshold:      int
+    start_quarter:  int = 4    # for score_diff: earliest quarter to fire (default Q4)
 
 
 @app.post("/set_alarm")
@@ -305,6 +339,7 @@ def set_alarm(req: SetAlarmRequest):
             target_name=req.target_name or req.target_id,
             condition_type=condition_type,   # always stored lowercase + trimmed
             threshold=req.threshold,
+            start_quarter=req.start_quarter,
             is_active=True,
         )
         session.add(alarm)
@@ -695,6 +730,9 @@ def active_monitors(user_token: str = ""):
                        .filter(Alarm.user_token == user_token, Alarm.is_active.is_(True))
                        .all()
             )
+            print(f"DEBUG: Found {len(rows)} rows in DB for user ...{user_token[-10:]}", flush=True)
+            for r in rows:
+                print(f"DEBUG: alarm id={r.id} type={r.condition_type} target={r.target_name} active={r.is_active}", flush=True)
             # Build dicts INSIDE the session so attributes are never detached
             db_alarms = [
                 {
@@ -703,6 +741,7 @@ def active_monitors(user_token: str = ""):
                     "target_name":    r.target_name or r.target_id,
                     "condition_type": r.condition_type,
                     "threshold":      r.threshold,
+                    "start_quarter":  r.start_quarter or 4,
                 }
                 for r in rows
             ]
