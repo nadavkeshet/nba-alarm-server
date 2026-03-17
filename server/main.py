@@ -292,7 +292,8 @@ def set_alarm(req: SetAlarmRequest):
     """Persist a new alarm to PostgreSQL."""
     if engine is None:
         raise HTTPException(status_code=503, detail="Database not configured.")
-    if req.condition_type not in ("points", "score_diff", "triple_double"):
+    condition_type = req.condition_type.strip().lower()
+    if condition_type not in ("points", "score_diff", "triple_double"):
         raise HTTPException(
             status_code=400,
             detail="condition_type must be 'points', 'score_diff', or 'triple_double'.",
@@ -302,7 +303,7 @@ def set_alarm(req: SetAlarmRequest):
             user_token=req.user_token,
             target_id=req.target_id,
             target_name=req.target_name or req.target_id,
-            condition_type=req.condition_type,
+            condition_type=condition_type,   # always stored lowercase + trimmed
             threshold=req.threshold,
             is_active=True,
         )

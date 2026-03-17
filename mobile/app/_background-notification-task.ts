@@ -20,59 +20,81 @@ import * as TaskManager from 'expo-task-manager';
 export const BACKGROUND_NOTIFICATION_TASK = 'NBA_ALARM_BACKGROUND_NOTIFICATION';
 
 TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error }: any) => {
+  // ── Hard error from the task runner itself ───────────────────────────────
   if (error) {
-    console.error('[BGTask] Error in background notification task:', error);
+    console.error('[BGTask] Task runner error:', error);
     return;
   }
 
-  const notification = data?.notification as Notifications.Notification | undefined;
-  if (!notification) return;
-
-  const content   = notification.request.content;
-  const notifData = content.data as any;
-
-  if (notifData?.alert_type !== 'alarm') return;
-
-  const title = content.title ?? 'NBA Alarm';
-  const body  = content.body  ?? '';
-
-  // ── 1. Persist to AsyncStorage ─────────────────────────────────────────────
-  // HomeScreen reads this on AppState → 'active' and shows the overlay.
+  // ── Wrap everything so a bad payload never crashes the task ─────────────
   try {
-    await AsyncStorage.setItem(
-      'pendingAlarm',
-      JSON.stringify({ title, body, ts: Date.now() }),
-    );
-    console.log('[BGTask] Alarm stored for foreground pickup:', title);
-  } catch (e) {
-    console.error('[BGTask] AsyncStorage write failed:', e);
-  }
+    // Expo can deliver the notification under different shapes depending on
+    // SDK version and whether the app was killed vs backgrounded.
+    // Use optional chaining at every level so nothing throws.
+    const notification = data?.notification;
+    const request      = notification?.request ?? notification;   // some SDKs omit .request
+    const content      = request?.content ?? request?.trigger?.remoteMessage?.notification;
 
-  // ── 2. Fire an immediate local notification with Full Screen Intent ────────
-  // Our withFullScreenIntent config plugin patches ExpoNotificationBuilder to
-  // call builder.setFullScreenIntent() on every notification, so this local
-  // notification will wake the screen and launch the app to the foreground
-  // exactly like an alarm clock, even when the app is completely killed.
-  //
-  // We use trigger: null to fire instantly (no delay).
-  try {
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title,
-        body,
-        sound:    'classic_alarm.wav',
-        priority: Notifications.AndroidNotificationPriority.MAX,
-        data:     { alert_type: 'alarm', fromBackground: true },
-        sticky:   false,
-      },
-      trigger: {
-        type:      Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-        seconds:   1,        // minimum allowed; fires almost immediately
-        channelId: 'classic_alarm',
-      },
-    });
-    console.log('[BGTask] FSI local notification scheduled.');
-  } catch (e) {
-    console.error('[BGTask] Could not schedule local notification:', e);
+    if (!content) {
+      console.warn('[BGTask] Received task with no parseable content – ignoring.', JSON.stringify(data));
+      return;
+    }
+
+    const notifData = (content.data ?? content.dataJSON ?? {}) as Record<string, unknown>;
+
+    // Only handle our alarm notifications
+    if (notifData?.alert_type !== 'alarm') {
+      console.log('[BGTask] Non-alarm notification – skipping.');
+      return;
+    }
+
+    const title = (content.title as string | undefined) ?? 'NBA Alarm';
+    const body  = (content.body  as string | undefined) ?? '';
+
+    console.log('[BGTask] Processing alarm notification:', title);
+
+    // ── 1. Persist to AsyncStorage ─────────────────────────────────────────
+    // HomeScreen reads this on AppState → 'active' and shows the overlay.
+    try {
+      await AsyncStorage.setItem(
+        'pendingAlarm',
+        JSON.stringify({ title, body, ts: Date.now() }),
+      );
+      console.log('[BGTask] Alarm stored for foreground pickup:', title);
+    } catch (storageErr) {
+      console.error('[BGTask] AsyncStorage write failed:', storageErr);
+      // Non-fatal – still attempt the local notification below
+    }
+
+    // ── 2. Fire an immediate local notification with Full Screen Intent ────
+    // Our withFullScreenIntent config plugin patches ExpoNotificationBuilder to
+    // call builder.setFullScreenIntent() on every notification, so this local
+    // notification will wake the screen and launch the app to the foreground
+    // exactly like an alarm clock, even when the app is completely killed.
+    try {
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title,
+          body,
+          sound:    'classic_alarm.wav',
+          priority: Notifications.AndroidNotificationPriority.MAX,
+          data:     { alert_type: 'alarm', fromBackground: true },
+          sticky:   false,
+        },
+        trigger: {
+          type:      Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+          seconds:   1,        // minimum allowed; fires almost immediately
+          channelId: 'classic_alarm',
+        },
+      });
+      console.log('[BGTask] FSI local notification scheduled.');
+    } catch (scheduleErr) {
+      console.error('[BGTask] Could not schedule local notification:', scheduleErr);
+    }
+
+  } catch (unexpectedErr) {
+    // Catch-all: log and exit cleanly so TaskManager doesn't mark the
+    // task as failed and clear any pending UI state.
+    console.error('[BGTask] Unexpected error – task aborted safely:', unexpectedErr);
   }
 });
