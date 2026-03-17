@@ -14,7 +14,7 @@
 
 const LOCAL_IP  = "192.168.1.119";           // ← local Wi-Fi (for development only)
 const LOCAL_URL = `http://${LOCAL_IP}:8001`;
-const PROD_URL  = "https://nba-alarm-server.onrender.com";
+const PROD_URL  = "https://nba-alarm-server-production.up.railway.app";
 
 // ↓ Switch to LOCAL_URL for local development
 export const SERVER_URL = PROD_URL;

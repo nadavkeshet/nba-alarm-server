@@ -69,7 +69,7 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 
 // ─── Hardcoded project ID (bypasses any app.json lookup issues) ───────────────
 const EXPO_PROJECT_ID = '19104813-313d-40c1-975a-63b78d3ae7fc';
-const REGISTER_TOKEN_URL = 'https://nba-alarm-server.onrender.com/register-token';
+const REGISTER_TOKEN_URL = `${SERVER_URL}/register-token`;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -641,6 +641,22 @@ export default function HomeScreen() {
         }),
       });
       if (response.ok) {
+        // Persist to PostgreSQL via /set_alarm
+        const dbPayload = {
+          user_token:     freshToken,
+          target_id:      selectedGame.id,
+          condition_type: 'score_diff',
+          threshold:      parseInt(maxDiff, 10),
+        };
+        fetch(`${SERVER_URL}/set_alarm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(dbPayload),
+        })
+          .then(r => r.json())
+          .then(data => console.log('[DB] Game alarm saved to PostgreSQL:', data))
+          .catch(err => console.warn('[DB] /set_alarm failed (non-critical):', err));
+
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         alert(`Game alarm set for ${selectedGame.name}!`);
       } else {
@@ -680,6 +696,22 @@ export default function HomeScreen() {
         }),
       });
       if (response.ok) {
+        // Persist to PostgreSQL via /set_alarm
+        const dbPayload = {
+          user_token:     freshToken,
+          target_id:      selectedPlayer.id,
+          condition_type: 'points',
+          threshold:      parseInt(ptsThreshold, 10),
+        };
+        fetch(`${SERVER_URL}/set_alarm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(dbPayload),
+        })
+          .then(r => r.json())
+          .then(data => console.log('[DB] Player alarm saved to PostgreSQL:', data))
+          .catch(err => console.warn('[DB] /set_alarm failed (non-critical):', err));
+
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         alert(`Player alarm set for ${selectedPlayer.name}!`);
       } else {
