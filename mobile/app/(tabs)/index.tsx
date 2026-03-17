@@ -699,12 +699,16 @@ export default function HomeScreen() {
       if (response.ok) {
         // Persist to PostgreSQL via /set_alarm
         const isTripleDouble = playerCondition === 'triple_double';
+        const isPtsEarly     = playerCondition === 'pts_early';
         const dbPayload = {
           user_token:     freshToken,
           target_id:      selectedPlayer.id,
           target_name:    selectedPlayer.name,
           condition_type: isTripleDouble ? 'triple_double' : 'points',
           threshold:      isTripleDouble ? 0 : parseInt(ptsThreshold, 10),
+          // pts_early uses quarterDeadline as an upper bound (fire only if still in that quarter or earlier)
+          // pts_goal and triple_double have no quarter limit → send 0
+          start_quarter:  isPtsEarly ? parseInt(quarterDeadline, 10) : 0,
         };
         fetch(`${SERVER_URL}/set_alarm`, {
           method: 'POST',

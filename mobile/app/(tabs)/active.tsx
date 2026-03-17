@@ -71,6 +71,7 @@ interface DbAlarm {
   target_name:    string;
   condition_type: string;  // "points" | "score_diff" | "triple_double"
   threshold:      number;
+  start_quarter?: number;  // player: upper bound (fire only ≤ this Q); game: lower bound (fire only ≥ this Q)
 }
 
 interface HistoricalCats {
@@ -417,7 +418,9 @@ export default function ActiveScreen() {
                       <Text style={[styles.liveText, { color: C.accentBlue }]}>SAVED</Text>
                     </View>
                     <Text style={styles.alarmGame}>{alarm.target_name || alarm.target_id || 'Unknown Game'}</Text>
-                    <Text style={styles.alarmSub}>Score gap ≤ {alarm.threshold ?? '?'} pts</Text>
+                    <Text style={styles.alarmSub}>
+                      Score gap ≤ {alarm.threshold ?? '?'} pts · From Q{alarm.start_quarter ?? 4}
+                    </Text>
                   </View>
                   <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelDbAlarm(alarm)}>
                     <Text style={styles.cancelBtnText}>Delete</Text>
@@ -474,7 +477,9 @@ export default function ActiveScreen() {
                     <Text style={styles.alarmSub}>
                       {(alarm.condition_type ?? '').toLowerCase() === 'triple_double'
                         ? 'Triple-Double Watch'
-                        : `Points ≥ ${alarm.threshold ?? '?'}`}
+                        : alarm.start_quarter && alarm.start_quarter > 0
+                          ? `${alarm.threshold ?? '?'}+ pts (Before Q${alarm.start_quarter})`
+                          : `${alarm.threshold ?? '?'}+ pts (Any Quarter)`}
                     </Text>
                   </View>
                   <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelDbAlarm(alarm)}>

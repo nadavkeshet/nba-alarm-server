@@ -193,7 +193,18 @@ def _check_and_fire(alarm: Alarm, events: list[dict]) -> bool:
                 return True
 
     elif alarm.condition_type == "points":
+        # start_quarter > 0 means "only fire if still in that quarter or earlier"
+        # start_quarter == 0 / None means no quarter limit (pts_goal)
+        quarter_limit = alarm.start_quarter or 0
         for event in events:
+            period = _get_event_period(event)
+            if quarter_limit > 0 and period > quarter_limit:
+                print(
+                    f"Poller: points alarm {alarm.id} ({alarm.target_name}) – "
+                    f"Q{period} exceeded Q{quarter_limit} limit, alarm expired.",
+                    flush=True,
+                )
+                return False   # quarter has passed – condition can never be met now
             pts = _extract_player_pts(event, alarm.target_id)
             if pts is not None and pts >= alarm.threshold:
                 return True
