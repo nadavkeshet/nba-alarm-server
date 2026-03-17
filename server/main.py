@@ -81,19 +81,20 @@ def _init_db() -> None:
     except Exception as exc:
         print(f"DB: Failed to create tables – {exc}", flush=True)
         return
-    # Migrations: add new columns (safe to re-run; silently skips if already present)
+    # Migrations: each statement gets its own connection+transaction so a
+    # "column already exists" failure on one doesn't abort the others.
     migrations = [
         "ALTER TABLE alarms ADD COLUMN target_name   VARCHAR",
         "ALTER TABLE alarms ADD COLUMN start_quarter INTEGER",
     ]
-    with engine.connect() as conn:
-        for sql in migrations:
-            try:
+    for sql in migrations:
+        try:
+            with engine.connect() as conn:
                 conn.execute(text(sql))
                 conn.commit()
-                print(f"DB: Migration applied – {sql}", flush=True)
-            except Exception:
-                pass  # column already exists
+            print(f"DB: Migration applied – {sql}", flush=True)
+        except Exception:
+            pass  # column already exists – safe to ignore
 
 
 # ── Background Async Poller ────────────────────────────────────────────────────
@@ -711,63 +712,85 @@ def refresh_rosters():
 
 @app.get("/active-monitors")
 def active_monitors(user_token: str = ""):
-    prefs     = get_preferences()
-    radar_cfg = prefs.get("GlobalGameRadar", {})
-
-    # Filter in-memory alarms by token when one is provided
-    game_alarms   = get_active_alarms()
-    player_alarms = get_active_player_alarms()
-    if user_token:
-        game_alarms   = [a for a in game_alarms   if a.get("push_token") == user_token]
-        player_alarms = [a for a in player_alarms if a.get("push_token") == user_token]
-
-    # DB alarms filtered by token
-    db_alarms: list[dict] = []
-    if engine is not None and user_token:
-        with Session(engine) as session:
-            rows = (
-                session.query(Alarm)
-                       .filter(Alarm.user_token == user_token, Alarm.is_active.is_(True))
-                       .all()
-            )
-            print(f"DEBUG: Found {len(rows)} rows in DB for user ...{user_token[-10:]}", flush=True)
-            for r in rows:
-                print(f"DEBUG: alarm id={r.id} type={r.condition_type} target={r.target_name} active={r.is_active}", flush=True)
-            # Build dicts INSIDE the session so attributes are never detached
-            db_alarms = [
-                {
-                    "alarm_id":       r.id,
-                    "target_id":      r.target_id,
-                    "target_name":    r.target_name or r.target_id,
-                    "condition_type": r.condition_type,
-                    "threshold":      r.threshold,
-                    "start_quarter":  r.start_quarter or 4,
-                }
-                for r in rows
-            ]
-        print(f"DB: Returning {len(db_alarms)} active alarms for token ...{user_token[-10:]}", flush=True)
-
-    return {
-        "game_alarms":   game_alarms,
-        "player_alarms": player_alarms,
-        "db_alarms":     db_alarms,
-        "global_radar": {
-            "enabled":       radar_cfg.get("enabled", False),
-            "running":       get_radar_status(),
-            "max_diff":      radar_cfg.get("max_diff", 5),
-            "start_quarter": radar_cfg.get("start_quarter", 4),
-        },
-        "favorite_teams":   prefs.get("FavoriteTeams", []),
-        "favorite_players": prefs.get("FavoritePlayers", {}),
-        "historical_mode":  prefs.get("HistoricalMode", {
-            "enabled": False,
-            "categories": {
-                "scoring_40_half":    False,
-                "threes_11":          False,
-                "quad_double_threat": False,
-            },
-        }),
+    # Safe defaults returned on any error so the app never gets a 500
+    _empty_response = {
+        "game_alarms":   [],
+        "player_alarms": [],
+        "db_alarms":     [],
+        "global_radar":  {"enabled": False, "running": False, "max_diff": 5, "start_quarter": 4},
+        "favorite_teams":   [],
+        "favorite_players": {},
+        "historical_mode":  {"enabled": False, "categories": {
+            "scoring_40_half": False, "threes_11": False, "quad_double_threat": False,
+        }},
     }
+
+    try:
+        prefs     = get_preferences()
+        radar_cfg = prefs.get("GlobalGameRadar", {})
+
+        # Filter in-memory alarms by token when one is provided
+        game_alarms   = get_active_alarms()
+        player_alarms = get_active_player_alarms()
+        if user_token:
+            game_alarms   = [a for a in game_alarms   if a.get("push_token") == user_token]
+            player_alarms = [a for a in player_alarms if a.get("push_token") == user_token]
+
+        # DB alarms filtered by token
+        db_alarms: list[dict] = []
+        if engine is not None and user_token:
+            try:
+                with Session(engine) as session:
+                    rows = (
+                        session.query(Alarm)
+                               .filter(Alarm.user_token == user_token, Alarm.is_active.is_(True))
+                               .all()
+                    )
+                    print(f"DEBUG: Found {len(rows)} rows in DB for user ...{user_token[-10:]}", flush=True)
+                    for r in rows:
+                        print(f"DEBUG: alarm id={r.id} type={r.condition_type} target={r.target_name} active={r.is_active}", flush=True)
+                    # Build dicts INSIDE the session so attributes are never detached
+                    db_alarms = [
+                        {
+                            "alarm_id":       r.id,
+                            "target_id":      r.target_id,
+                            "target_name":    r.target_name or r.target_id,
+                            "condition_type": r.condition_type,
+                            "threshold":      r.threshold,
+                            "start_quarter":  r.start_quarter if r.start_quarter is not None else 4,
+                        }
+                        for r in rows
+                    ]
+                print(f"DB: Returning {len(db_alarms)} active alarms for token ...{user_token[-10:]}", flush=True)
+            except Exception as db_err:
+                print(f"CRITICAL DB ERROR in active_monitors query: {db_err}", flush=True)
+                db_alarms = []   # degrade gracefully – don't 500
+
+        return {
+            "game_alarms":   game_alarms,
+            "player_alarms": player_alarms,
+            "db_alarms":     db_alarms,
+            "global_radar": {
+                "enabled":       radar_cfg.get("enabled", False),
+                "running":       get_radar_status(),
+                "max_diff":      radar_cfg.get("max_diff", 5),
+                "start_quarter": radar_cfg.get("start_quarter", 4),
+            },
+            "favorite_teams":   prefs.get("FavoriteTeams", []),
+            "favorite_players": prefs.get("FavoritePlayers", {}),
+            "historical_mode":  prefs.get("HistoricalMode", {
+                "enabled": False,
+                "categories": {
+                    "scoring_40_half":    False,
+                    "threes_11":          False,
+                    "quad_double_threat": False,
+                },
+            }),
+        }
+
+    except Exception as e:
+        print(f"CRITICAL SERVER ERROR in active_monitors: {e}", flush=True)
+        return _empty_response
 
 
 @app.delete("/active-monitors/game/{game_id}")
