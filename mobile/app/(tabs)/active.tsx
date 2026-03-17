@@ -54,9 +54,12 @@ interface FavTeam {
 }
 
 interface FavPlayer {
-  player_id: string;
-  name: string;
-  monitor_career_high: boolean;
+  name:          string;
+  total_pts:     number;
+  hot_start_q:   number;
+  hot_start_pts: number;
+  td_watch:      boolean;
+  alert_type:    string;
 }
 
 interface HistoricalCats {
@@ -66,12 +69,12 @@ interface HistoricalCats {
 }
 
 interface ActiveMonitors {
-  game_alarms: GameAlarm[];
-  player_alarms: PlayerAlarm[];
-  global_radar: GlobalRadar;
-  favorite_teams: FavTeam[];
-  favorite_players: FavPlayer[];
-  historical_mode: { enabled: boolean; categories: HistoricalCats };
+  game_alarms:      GameAlarm[];
+  player_alarms:    PlayerAlarm[];
+  global_radar:     GlobalRadar;
+  favorite_teams:   FavTeam[];                  // always an array from server
+  favorite_players: Record<string, FavPlayer>;  // dict from server
+  historical_mode:  { enabled: boolean; categories: HistoricalCats };
 }
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
@@ -343,12 +346,12 @@ export default function ActiveScreen() {
             <Text style={styles.sectionTitle}>FAVORITES BEING TRACKED</Text>
             <View style={[styles.badge, { backgroundColor: C.blue }]}>
               <Text style={styles.badgeText}>
-                {(data?.favorite_teams.length ?? 0) + (data?.favorite_players.length ?? 0)}
+                {(data?.favorite_teams.length ?? 0) + Object.keys(data?.favorite_players ?? {}).length}
               </Text>
             </View>
           </View>
 
-          {(data?.favorite_teams ?? []).length === 0 && (data?.favorite_players ?? []).length === 0 ? (
+          {(data?.favorite_teams ?? []).length === 0 && Object.keys(data?.favorite_players ?? {}).length === 0 ? (
             <View style={styles.emptyState}>
               <Ionicons name="star-outline" size={28} color={C.border} />
               <Text style={styles.emptyHint}>No favorites set. Add teams and players in Settings.</Text>
@@ -366,13 +369,13 @@ export default function ActiveScreen() {
                   </View>
                 </View>
               ))}
-              {(data?.favorite_players ?? []).map(p => (
-                <View key={p.player_id} style={styles.favItem}>
+              {Object.entries(data?.favorite_players ?? {}).map(([pid, p]) => (
+                <View key={pid} style={styles.favItem}>
                   <Text style={styles.favIcon}>⭐</Text>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.favName}>{p.name}</Text>
                     <Text style={styles.rowSub}>
-                      {p.monitor_career_high ? 'Career High Watch' : 'Career High off'}
+                      {p.total_pts} pts · Hot start Q{p.hot_start_q} @ {p.hot_start_pts} pts{p.td_watch ? ' · TD watch' : ''}
                     </Text>
                   </View>
                 </View>

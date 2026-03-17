@@ -1,5 +1,4 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Haptics from 'expo-haptics';
 import * as Notifications from 'expo-notifications';
@@ -354,7 +353,7 @@ export default function HomeScreen() {
       if (!resp.ok) return;
       const prefs = await resp.json();
       setFavoriteTeamIds(new Set((prefs.FavoriteTeams ?? []).map((t: any) => t.team_id)));
-      setFavoritePlayerIds(new Set((prefs.FavoritePlayers ?? []).map((p: any) => p.player_id)));
+      setFavoritePlayerIds(new Set(Object.keys(prefs.FavoritePlayers ?? {})));
     } catch (e) {
       console.error('loadFavorites error:', e);
     }
@@ -540,7 +539,7 @@ export default function HomeScreen() {
 
       // Register background notification task (safe to call if already registered)
       try {
-        const isRegistered = await Notifications.isTaskRegisteredAsync(BACKGROUND_NOTIFICATION_TASK).catch(() => false);
+        const isRegistered = await TaskManager.isTaskRegisteredAsync(BACKGROUND_NOTIFICATION_TASK).catch(() => false);
         if (!isRegistered) {
           await Notifications.registerTaskAsync(BACKGROUND_NOTIFICATION_TASK);
           console.log('[BGTask] Registered background notification task.');
@@ -697,11 +696,12 @@ export default function HomeScreen() {
       });
       if (response.ok) {
         // Persist to PostgreSQL via /set_alarm
+        const isTripleDouble = playerCondition === 'triple_double';
         const dbPayload = {
           user_token:     freshToken,
           target_id:      selectedPlayer.id,
-          condition_type: 'points',
-          threshold:      parseInt(ptsThreshold, 10),
+          condition_type: isTripleDouble ? 'triple_double' : 'points',
+          threshold:      isTripleDouble ? 0 : parseInt(ptsThreshold, 10),
         };
         fetch(`${SERVER_URL}/set_alarm`, {
           method: 'POST',

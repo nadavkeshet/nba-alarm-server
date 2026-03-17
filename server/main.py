@@ -63,7 +63,7 @@ class Alarm(_Base):
     id             = Column(Integer, primary_key=True, index=True)
     user_token     = Column(String,  nullable=False)   # Expo push token
     target_id      = Column(String,  nullable=False)   # player_id or game_id
-    condition_type = Column(String,  nullable=False)   # "points" | "score_diff"
+    condition_type = Column(String,  nullable=False)   # "points" | "score_diff" | "triple_double"
     threshold      = Column(Integer, nullable=False)
     is_active      = Column(Boolean, default=True, nullable=False)
 
@@ -105,25 +105,38 @@ def _extract_game_diff(event: dict) -> int | None:
 
 
 def _extract_player_pts(event: dict, target_id: str) -> int | None:
-    """
-    Return the current point total for target_id player in this event,
-    or None if the player is not found in the boxscore leaders.
-    """
+    """Return the current point total for target_id player, or None if not found."""
     try:
-        leaders = (
-            event.get("competitions", [{}])[0]
-                 .get("leaders", [])
-        )
+        leaders = event.get("competitions", [{}])[0].get("leaders", [])
         for cat in leaders:
             if cat.get("abbreviation") != "PTS":
                 continue
             for leader in cat.get("leaders", []):
-                athlete = leader.get("athlete", {})
-                if str(athlete.get("id")) == str(target_id):
+                if str(leader.get("athlete", {}).get("id")) == str(target_id):
                     return int(float(leader.get("value", 0)))
     except Exception:
         pass
     return None
+
+
+def _extract_player_stats(event: dict, target_id: str) -> dict[str, int]:
+    """
+    Return a dict of stat totals (PTS, REB, AST, STL, BLK) for target_id
+    using the ESPN leaders block. Returns empty dict if player not found.
+    """
+    stats: dict[str, int] = {}
+    try:
+        leaders = event.get("competitions", [{}])[0].get("leaders", [])
+        for cat in leaders:
+            abbr = cat.get("abbreviation", "")
+            if abbr not in ("PTS", "REB", "AST", "STL", "BLK"):
+                continue
+            for leader in cat.get("leaders", []):
+                if str(leader.get("athlete", {}).get("id")) == str(target_id):
+                    stats[abbr] = int(float(leader.get("value", 0)))
+    except Exception:
+        pass
+    return stats
 
 
 def _check_and_fire(alarm: Alarm, events: list[dict]) -> bool:
@@ -140,6 +153,15 @@ def _check_and_fire(alarm: Alarm, events: list[dict]) -> bool:
             pts = _extract_player_pts(event, alarm.target_id)
             if pts is not None and pts >= alarm.threshold:
                 return True
+
+    elif alarm.condition_type == "triple_double":
+        # Fire when the player has 8+ in at least 3 stat categories (near TD)
+        for event in events:
+            stats = _extract_player_stats(event, alarm.target_id)
+            if stats:
+                near_double = sum(1 for v in stats.values() if v >= 8)
+                if near_double >= 3:
+                    return True
 
     return False
 
@@ -250,7 +272,7 @@ def health():
 class SetAlarmRequest(BaseModel):
     user_token:     str
     target_id:      str
-    condition_type: str   # "points" | "score_diff"
+    condition_type: str   # "points" | "score_diff" | "triple_double"
     threshold:      int
 
 
@@ -259,10 +281,10 @@ def set_alarm(req: SetAlarmRequest):
     """Persist a new alarm to PostgreSQL."""
     if engine is None:
         raise HTTPException(status_code=503, detail="Database not configured.")
-    if req.condition_type not in ("points", "score_diff"):
+    if req.condition_type not in ("points", "score_diff", "triple_double"):
         raise HTTPException(
             status_code=400,
-            detail="condition_type must be 'points' or 'score_diff'.",
+            detail="condition_type must be 'points', 'score_diff', or 'triple_double'.",
         )
     with Session(engine) as session:
         alarm = Alarm(

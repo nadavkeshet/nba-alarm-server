@@ -31,7 +31,6 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <Ionicons name="pulse" size={26} color={color} />,
         }}
       />
-      <Tabs.Screen name="explore" options={{ href: null }} />
       <Tabs.Screen
         name="settings"
         options={{
