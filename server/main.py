@@ -3,6 +3,7 @@ import asyncio
 import threading
 import requests as http
 from contextlib import asynccontextmanager
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -57,17 +58,59 @@ class _Base(DeclarativeBase):
 
 
 class Alarm(_Base):
-    """Persistent alarms stored in PostgreSQL."""
+    """One-shot alarms (game / per-game player). Deactivated after firing."""
     __tablename__ = "alarms"
 
     id             = Column(Integer, primary_key=True, index=True)
-    user_token     = Column(String,  nullable=False)   # Expo push token
-    target_id      = Column(String,  nullable=False)   # player_id or game_id
-    target_name    = Column(String,  nullable=True)    # human-readable name
+    user_token     = Column(String,  nullable=False)
+    target_id      = Column(String,  nullable=False)
+    target_name    = Column(String,  nullable=True)
     condition_type = Column(String,  nullable=False)   # "points" | "score_diff" | "triple_double"
     threshold      = Column(Integer, nullable=False)
-    start_quarter  = Column(Integer, nullable=True)    # earliest quarter to fire score_diff (default 4)
+    start_quarter  = Column(Integer, nullable=True)
     is_active      = Column(Boolean, default=True, nullable=False)
+
+
+class FavoritePlayerDB(_Base):
+    """Persistent favorite player — stays active across restarts."""
+    __tablename__ = "favorites"
+
+    id            = Column(Integer, primary_key=True, index=True)
+    user_token    = Column(String,  nullable=False, index=True)
+    target_id     = Column(String,  nullable=False)   # ESPN player id
+    target_name   = Column(String,  nullable=True)
+    team_name     = Column(String,  nullable=True)
+    total_pts     = Column(Integer, nullable=True)    # None = condition disabled
+    hot_start_pts = Column(Integer, nullable=True)
+    hot_start_q   = Column(Integer, nullable=True)
+    td_watch      = Column(Boolean, default=False, nullable=False)
+
+
+class FavoriteTeamDB(_Base):
+    """Persistent favorite team — stays active across restarts."""
+    __tablename__ = "favorite_teams"
+
+    id            = Column(Integer, primary_key=True, index=True)
+    user_token    = Column(String,  nullable=False, index=True)
+    team_id       = Column(String,  nullable=False)
+    team_name     = Column(String,  nullable=True)
+    score_gap     = Column(Integer, nullable=True)    # max_diff
+    start_quarter = Column(Integer, nullable=True)
+
+
+class UserPreferenceDB(_Base):
+    """Global radar + historical mode settings, keyed by push token."""
+    __tablename__ = "user_preferences"
+
+    user_token              = Column(String,  primary_key=True)
+    radar_enabled           = Column(Boolean, default=False,   nullable=False)
+    radar_gap               = Column(Integer, default=5,       nullable=False)
+    radar_start_q           = Column(Integer, default=4,       nullable=False)
+    historical_mode_enabled = Column(Boolean, default=False,   nullable=False)
+    alert_type              = Column(String,  default="silent", nullable=False)
+    hist_scoring_40_half    = Column(Boolean, default=False,   nullable=False)
+    hist_threes_11          = Column(Boolean, default=False,   nullable=False)
+    hist_quad_double        = Column(Boolean, default=False,   nullable=False)
 
 
 def _init_db() -> None:
@@ -97,7 +140,76 @@ def _init_db() -> None:
             pass  # column already exists – safe to ignore
 
 
+# ── Startup Restore ────────────────────────────────────────────────────────────
+
+def _restore_prefs_from_db(user_token: str) -> None:
+    """
+    Read all 3 PostgreSQL tables and rebuild the local JSON cache so that
+    monitor.py's radar starts with the correct favorites after a cold restart.
+    """
+    if engine is None or not user_token:
+        return
+    try:
+        with Session(engine) as session:
+            players = session.query(FavoritePlayerDB).filter_by(user_token=user_token).all()
+            teams   = session.query(FavoriteTeamDB).filter_by(user_token=user_token).all()
+            pref    = session.get(UserPreferenceDB, user_token)
+
+            fav_players = {
+                p.target_id: {
+                    "name":          p.target_name or "",
+                    "total_pts":     p.total_pts,
+                    "hot_start_q":   p.hot_start_q,
+                    "hot_start_pts": p.hot_start_pts,
+                    "td_watch":      bool(p.td_watch),
+                    "alert_type":    "silent",
+                }
+                for p in players
+            }
+            fav_teams = [
+                {
+                    "team_id":       t.team_id,
+                    "team_name":     t.team_name or "",
+                    "max_diff":      t.score_gap or 5,
+                    "start_quarter": t.start_quarter or 4,
+                    "alert_type":    "silent",
+                }
+                for t in teams
+            ]
+
+        prefs = get_preferences()
+        prefs["FavoritePlayers"] = fav_players
+        prefs["FavoriteTeams"]   = fav_teams
+        if pref:
+            prefs["GlobalGameRadar"] = {
+                "enabled":       pref.radar_enabled,
+                "max_diff":      pref.radar_gap,
+                "start_quarter": pref.radar_start_q,
+                "alert_type":    pref.alert_type,
+            }
+            prefs["HistoricalMode"] = {
+                "enabled":    pref.historical_mode_enabled,
+                "alert_type": pref.alert_type,
+                "categories": {
+                    "scoring_40_half":    pref.hist_scoring_40_half,
+                    "threes_11":          pref.hist_threes_11,
+                    "quad_double_threat": pref.hist_quad_double,
+                },
+            }
+        save_preferences(prefs)
+        print(
+            f"DB: Restored {len(fav_players)} players, {len(fav_teams)} teams "
+            f"for ...{user_token[-10:]}",
+            flush=True,
+        )
+    except Exception as exc:
+        print(f"DB: _restore_prefs_from_db failed – {exc}", flush=True)
+
+
 # ── Background Async Poller ────────────────────────────────────────────────────
+
+# Fire-once guard for persistent favorites (cleared on restart; one entry per game-day)
+_fav_fired: set[str] = set()
 
 ESPN_SCOREBOARD = (
     "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
@@ -221,6 +333,81 @@ def _check_and_fire(alarm: Alarm, events: list[dict]) -> bool:
     return False
 
 
+def _check_fav_player(fav: FavoritePlayerDB, events: list[dict]) -> None:
+    """Fire notifications for a persistent favorite player when conditions are met."""
+    import datetime
+    today = datetime.date.today().isoformat()
+    for event in events:
+        if _get_event_state(event) != "in":
+            continue
+        period = _get_event_period(event)
+        pts    = _extract_player_pts(event, fav.target_id)
+        if pts is None:
+            continue
+        eid = event.get("id", "?")
+        name = fav.target_name or fav.target_id
+
+        if fav.total_pts is not None:
+            key = f"{today}_{eid}_{fav.target_id}_total"
+            if pts >= fav.total_pts and key not in _fav_fired:
+                _fav_fired.add(key)
+                _send_push_notification(
+                    push_token=fav.user_token, title="Scoring Alert!",
+                    body=f"{name} has {pts} pts!", sound_channel="classic_alarm",
+                )
+
+        if fav.hot_start_q is not None and fav.hot_start_pts is not None:
+            key = f"{today}_{eid}_{fav.target_id}_hot_q{fav.hot_start_q}"
+            if period == fav.hot_start_q and pts >= fav.hot_start_pts and key not in _fav_fired:
+                _fav_fired.add(key)
+                _send_push_notification(
+                    push_token=fav.user_token, title="Hot Start Alert!",
+                    body=f"{name}: {pts} pts in Q{period}!", sound_channel="classic_alarm",
+                )
+
+        if fav.td_watch:
+            stats = _extract_player_stats(event, fav.target_id)
+            key   = f"{today}_{eid}_{fav.target_id}_td"
+            if stats and sum(1 for v in stats.values() if v >= 8) >= 3 and key not in _fav_fired:
+                _fav_fired.add(key)
+                _send_push_notification(
+                    push_token=fav.user_token, title="Triple-Double Watch!",
+                    body=f"{name} is approaching a triple-double!", sound_channel="classic_alarm",
+                )
+
+
+def _check_fav_team(fav: FavoriteTeamDB, events: list[dict]) -> None:
+    """Fire a notification when a favorite team's game hits the score-gap threshold."""
+    import datetime
+    if fav.score_gap is None:
+        return
+    today   = datetime.date.today().isoformat()
+    start_q = fav.start_quarter or 4
+    for event in events:
+        if _get_event_state(event) != "in":
+            continue
+        if _get_event_period(event) < start_q:
+            continue
+        try:
+            comps    = event["competitions"][0]["competitors"]
+            team_ids = [c.get("team", {}).get("id", "") for c in comps]
+            if fav.team_id not in team_ids:
+                continue
+        except Exception:
+            continue
+        diff = _extract_game_diff(event)
+        if diff is None:
+            continue
+        key = f"{today}_{event.get('id', '?')}_{fav.team_id}_gap"
+        if diff <= fav.score_gap and key not in _fav_fired:
+            _fav_fired.add(key)
+            _send_push_notification(
+                push_token=fav.user_token, title="Game Alert!",
+                body=f"{fav.team_name or 'Your team'} game is close — {diff} pt gap!",
+                sound_channel="classic_alarm",
+            )
+
+
 async def _alarm_poller() -> None:
     """
     Every 60 s:
@@ -249,7 +436,7 @@ async def _alarm_poller() -> None:
                         _send_push_notification(
                             push_token=alarm.user_token,
                             title="NBA Alarm",
-                            body=f"Condition met for target {alarm.target_id}!",
+                            body=f"Condition met for {alarm.target_name or alarm.target_id}!",
                             sound_channel="classic_alarm",
                         )
                         with Session(engine) as session:
@@ -265,6 +452,24 @@ async def _alarm_poller() -> None:
                 except Exception as alarm_err:
                     print(f"Poller: error processing alarm {alarm.id} – {alarm_err}", flush=True)
 
+            # ── Persistent favorite players ──────────────────────────────
+            try:
+                with Session(engine) as session:
+                    fav_players = session.query(FavoritePlayerDB).all()
+                for fav in fav_players:
+                    _check_fav_player(fav, events)
+            except Exception as exc:
+                print(f"Poller: fav_players error – {exc}", flush=True)
+
+            # ── Persistent favorite teams ────────────────────────────────
+            try:
+                with Session(engine) as session:
+                    fav_teams = session.query(FavoriteTeamDB).all()
+                for fav in fav_teams:
+                    _check_fav_team(fav, events)
+            except Exception as exc:
+                print(f"Poller: fav_teams error – {exc}", flush=True)
+
         except Exception as exc:
             print(f"Poller: cycle error – {exc}", flush=True)
 
@@ -279,6 +484,7 @@ async def lifespan(_app: FastAPI):
     threading.Thread(target=update_all_rosters, daemon=True).start()
     token, channel = get_saved_push_token()
     if token:
+        _restore_prefs_from_db(token)   # rebuild JSON cache from PostgreSQL
         threading.Thread(target=start_radar_job, args=(token, channel), daemon=True).start()
     # Start the async DB poller
     poller_task = asyncio.create_task(_alarm_poller())
@@ -521,25 +727,99 @@ def radar_status():
 # ── Settings ───────────────────────────────────────────────────────────────────
 
 @app.get("/settings")
-def get_settings():
-    return get_preferences()
+def get_settings(user_token: str = ""):
+    json_prefs = get_preferences()
+    if engine is None or not user_token:
+        return json_prefs
+    try:
+        with Session(engine) as session:
+            players = session.query(FavoritePlayerDB).filter_by(user_token=user_token).all()
+            teams   = session.query(FavoriteTeamDB).filter_by(user_token=user_token).all()
+            pref    = session.get(UserPreferenceDB, user_token)
+
+            fav_players = {
+                p.target_id: {
+                    "name":          p.target_name or "",
+                    "total_pts":     p.total_pts,
+                    "hot_start_q":   p.hot_start_q,
+                    "hot_start_pts": p.hot_start_pts,
+                    "td_watch":      bool(p.td_watch),
+                    "alert_type":    "silent",
+                }
+                for p in players
+            }
+            fav_teams = [
+                {
+                    "team_id":       t.team_id,
+                    "team_name":     t.team_name or "",
+                    "max_diff":      t.score_gap or 5,
+                    "start_quarter": t.start_quarter or 4,
+                    "alert_type":    "silent",
+                }
+                for t in teams
+            ]
+            radar_cfg = json_prefs.get("GlobalGameRadar", {})
+            hist_cfg  = json_prefs.get("HistoricalMode",  {})
+            if pref:
+                radar_cfg = {
+                    "enabled":       pref.radar_enabled,
+                    "max_diff":      pref.radar_gap,
+                    "start_quarter": pref.radar_start_q,
+                    "alert_type":    pref.alert_type,
+                }
+                hist_cfg = {
+                    "enabled":    pref.historical_mode_enabled,
+                    "alert_type": pref.alert_type,
+                    "categories": {
+                        "scoring_40_half":    pref.hist_scoring_40_half,
+                        "threes_11":          pref.hist_threes_11,
+                        "quad_double_threat": pref.hist_quad_double,
+                    },
+                }
+        return {
+            **json_prefs,
+            "FavoritePlayers": fav_players,
+            "FavoriteTeams":   fav_teams,
+            "GlobalGameRadar": radar_cfg,
+            "HistoricalMode":  hist_cfg,
+        }
+    except Exception as exc:
+        print(f"DB: /settings read error – {exc}", flush=True)
+        return json_prefs
 
 
 class GlobalRadarSettings(BaseModel):
-    enabled: bool
-    max_diff: int      = 5
+    user_token:    str = ""
+    enabled:       bool
+    max_diff:      int = 5
     start_quarter: int = 4
-    alert_type: str    = "silent"
+    alert_type:    str = "silent"
 
 
 @app.post("/settings/global-radar")
 def update_global_radar(req: GlobalRadarSettings):
+    if engine is not None and req.user_token:
+        try:
+            with Session(engine) as session:
+                pref = session.get(UserPreferenceDB, req.user_token)
+                if pref:
+                    pref.radar_enabled = req.enabled
+                    pref.radar_gap     = req.max_diff
+                    pref.radar_start_q = req.start_quarter
+                    pref.alert_type    = req.alert_type
+                else:
+                    session.add(UserPreferenceDB(
+                        user_token=req.user_token,
+                        radar_enabled=req.enabled, radar_gap=req.max_diff,
+                        radar_start_q=req.start_quarter, alert_type=req.alert_type,
+                    ))
+                session.commit()
+        except Exception as exc:
+            print(f"DB: update_global_radar failed – {exc}", flush=True)
     prefs = get_preferences()
     prefs["GlobalGameRadar"] = {
-        "enabled":       req.enabled,
-        "max_diff":      req.max_diff,
-        "start_quarter": req.start_quarter,
-        "alert_type":    req.alert_type,
+        "enabled": req.enabled, "max_diff": req.max_diff,
+        "start_quarter": req.start_quarter, "alert_type": req.alert_type,
     }
     save_preferences(prefs)
     if req.enabled:
@@ -548,56 +828,104 @@ def update_global_radar(req: GlobalRadarSettings):
 
 
 class FavoriteTeam(BaseModel):
-    team_id: str
-    team_name: str
-    max_diff: int      = 5
+    user_token:    str = ""
+    team_id:       str
+    team_name:     str
+    max_diff:      int = 5
     start_quarter: int = 4
-    alert_type: str    = "silent"
+    alert_type:    str = "silent"
 
 
 @app.post("/settings/teams")
 def upsert_team(req: FavoriteTeam):
+    if engine is not None and req.user_token:
+        try:
+            with Session(engine) as session:
+                existing = session.query(FavoriteTeamDB).filter_by(
+                    user_token=req.user_token, team_id=req.team_id
+                ).first()
+                if existing:
+                    existing.team_name     = req.team_name
+                    existing.score_gap     = req.max_diff
+                    existing.start_quarter = req.start_quarter
+                else:
+                    session.add(FavoriteTeamDB(
+                        user_token=req.user_token, team_id=req.team_id,
+                        team_name=req.team_name, score_gap=req.max_diff,
+                        start_quarter=req.start_quarter,
+                    ))
+                session.commit()
+            print(f"DB: Upserted favorite team {req.team_name}", flush=True)
+        except Exception as exc:
+            print(f"DB: upsert_team failed – {exc}", flush=True)
     prefs = get_preferences()
     teams = [t for t in prefs.get("FavoriteTeams", []) if t["team_id"] != req.team_id]
     teams.append({
-        "team_id":       req.team_id,
-        "team_name":     req.team_name,
-        "max_diff":      req.max_diff,
-        "start_quarter": req.start_quarter,
-        "alert_type":    req.alert_type,
+        "team_id": req.team_id, "team_name": req.team_name,
+        "max_diff": req.max_diff, "start_quarter": req.start_quarter,
+        "alert_type": req.alert_type,
     })
     prefs["FavoriteTeams"] = teams
     save_preferences(prefs)
     _maybe_start_radar()
-    return {"status": "updated", "FavoriteTeams": teams}
+    return {"status": "updated"}
 
 
 @app.delete("/settings/teams/{team_id}")
-def remove_team(team_id: str):
+def remove_team(team_id: str, user_token: str = ""):
+    if engine is not None and user_token:
+        try:
+            with Session(engine) as session:
+                row = session.query(FavoriteTeamDB).filter_by(
+                    user_token=user_token, team_id=team_id
+                ).first()
+                if row:
+                    session.delete(row)
+                    session.commit()
+        except Exception as exc:
+            print(f"DB: remove_team failed – {exc}", flush=True)
     prefs = get_preferences()
     prefs["FavoriteTeams"] = [t for t in prefs.get("FavoriteTeams", []) if t["team_id"] != team_id]
     save_preferences(prefs)
-    return {"status": "removed", "FavoriteTeams": prefs["FavoriteTeams"]}
+    return {"status": "removed"}
 
 
 class FavoritePlayer(BaseModel):
+    user_token:    str = ""
     player_id:     str
     name:          str
-    total_pts:     int  = 40
-    hot_start_q:   int  = 1
-    hot_start_pts: int  = 15
-    td_watch:      bool = True
-    alert_type:    str  = "silent"
+    total_pts:     Optional[int]  = None   # None = condition disabled
+    hot_start_q:   Optional[int]  = None
+    hot_start_pts: Optional[int]  = None
+    td_watch:      bool           = False
+    alert_type:    str            = "silent"
 
 
 @app.post("/settings/players")
 def upsert_player(req: FavoritePlayer):
-    print(
-        f"DEBUG: Player upsert: {req.name} (id={req.player_id}, "
-        f"total_pts={req.total_pts}, hot_start_q={req.hot_start_q}, "
-        f"hot_start_pts={req.hot_start_pts}, td_watch={req.td_watch})",
-        flush=True,
-    )
+    if engine is not None and req.user_token:
+        try:
+            with Session(engine) as session:
+                existing = session.query(FavoritePlayerDB).filter_by(
+                    user_token=req.user_token, target_id=req.player_id
+                ).first()
+                if existing:
+                    existing.target_name   = req.name
+                    existing.total_pts     = req.total_pts
+                    existing.hot_start_q   = req.hot_start_q
+                    existing.hot_start_pts = req.hot_start_pts
+                    existing.td_watch      = req.td_watch
+                else:
+                    session.add(FavoritePlayerDB(
+                        user_token=req.user_token, target_id=req.player_id,
+                        target_name=req.name, total_pts=req.total_pts,
+                        hot_start_q=req.hot_start_q, hot_start_pts=req.hot_start_pts,
+                        td_watch=req.td_watch,
+                    ))
+                session.commit()
+            print(f"DB: Upserted favorite player {req.name}", flush=True)
+        except Exception as exc:
+            print(f"DB: upsert_player failed – {exc}", flush=True)
     prefs = get_preferences()
     players: dict = prefs.get("FavoritePlayers", {})
     players[req.player_id] = {
@@ -611,17 +939,28 @@ def upsert_player(req: FavoritePlayer):
     prefs["FavoritePlayers"] = players
     save_preferences(prefs)
     _maybe_start_radar()
-    return {"status": "updated", "FavoritePlayers": players}
+    return {"status": "updated"}
 
 
 @app.delete("/settings/players/{player_id}")
-def remove_player(player_id: str):
+def remove_player(player_id: str, user_token: str = ""):
+    if engine is not None and user_token:
+        try:
+            with Session(engine) as session:
+                row = session.query(FavoritePlayerDB).filter_by(
+                    user_token=user_token, target_id=player_id
+                ).first()
+                if row:
+                    session.delete(row)
+                    session.commit()
+        except Exception as exc:
+            print(f"DB: remove_player failed – {exc}", flush=True)
     prefs = get_preferences()
     players: dict = prefs.get("FavoritePlayers", {})
     players.pop(player_id, None)
     prefs["FavoritePlayers"] = players
     save_preferences(prefs)
-    return {"status": "removed", "FavoritePlayers": players}
+    return {"status": "removed"}
 
 
 class HistoricalCategories(BaseModel):
@@ -631,17 +970,39 @@ class HistoricalCategories(BaseModel):
 
 
 class HistoricalSettings(BaseModel):
-    enabled: bool
-    categories: HistoricalCategories = HistoricalCategories()
-    alert_type: str                  = "silent"
+    user_token:  str = ""
+    enabled:     bool
+    categories:  HistoricalCategories = HistoricalCategories()
+    alert_type:  str                  = "silent"
 
 
 @app.post("/settings/historical")
 def update_historical(req: HistoricalSettings):
+    if engine is not None and req.user_token:
+        try:
+            with Session(engine) as session:
+                pref = session.get(UserPreferenceDB, req.user_token)
+                if pref:
+                    pref.historical_mode_enabled = req.enabled
+                    pref.hist_scoring_40_half    = req.categories.scoring_40_half
+                    pref.hist_threes_11          = req.categories.threes_11
+                    pref.hist_quad_double        = req.categories.quad_double_threat
+                    pref.alert_type              = req.alert_type
+                else:
+                    session.add(UserPreferenceDB(
+                        user_token=req.user_token,
+                        historical_mode_enabled=req.enabled,
+                        hist_scoring_40_half=req.categories.scoring_40_half,
+                        hist_threes_11=req.categories.threes_11,
+                        hist_quad_double=req.categories.quad_double_threat,
+                        alert_type=req.alert_type,
+                    ))
+                session.commit()
+        except Exception as exc:
+            print(f"DB: update_historical failed – {exc}", flush=True)
     prefs = get_preferences()
     prefs["HistoricalMode"] = {
-        "enabled": req.enabled,
-        "alert_type": req.alert_type,
+        "enabled": req.enabled, "alert_type": req.alert_type,
         "categories": {
             "scoring_40_half":    req.categories.scoring_40_half,
             "threes_11":          req.categories.threes_11,

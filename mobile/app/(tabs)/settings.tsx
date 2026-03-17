@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -25,9 +25,9 @@ interface FavTeam          { team_id: string; team_name: string; max_diff: numbe
 // Stored on server as { player_id: { name, total_pts, hot_start_q, hot_start_pts, td_watch, alert_type } }
 interface FavPlayerEntry {
   name:          string;
-  total_pts:     number;
-  hot_start_q:   number;
-  hot_start_pts: number;
+  total_pts:     number | null;   // null = condition disabled
+  hot_start_q:   number | null;
+  hot_start_pts: number | null;
   td_watch:      boolean;
   alert_type:    string;
 }
@@ -79,6 +79,7 @@ function QRow({ value, onChange }: { value: string; onChange: (q: string) => voi
 // ─── SettingsScreen ───────────────────────────────────────────────────────────
 
 export default function SettingsScreen() {
+  const [userToken, setUserToken]       = useState('');
   const [settings, setSettings]         = useState<AppSettings | null>(null);
   const [loading, setLoading]           = useState(true);
   const [radarRunning, setRadarRunning] = useState(false);
@@ -106,28 +107,41 @@ export default function SettingsScreen() {
   // ── Test Alarm state ─────────────────────────────────────────────────
   const [testCountdown, setTestCountdown] = useState<number | null>(null);
 
-  // Per-player in-place edit state (all 4 conditions)
+  // Per-player in-place edit state (all 4 conditions + enabled toggles)
   const [playerEdits, setPlayerEdits] = useState<Record<string, {
-    total_pts: string; hot_start_q: string; hot_start_pts: string; td_watch: boolean;
+    totalPtsEnabled: boolean; total_pts: string;
+    hotStartEnabled: boolean; hot_start_q: string; hot_start_pts: string;
+    td_watch: boolean;
   }>>({});
 
   // ── Add Player Modal state ────────────────────────────────────────────
   const [playerModalVisible, setPlayerModalVisible]   = useState(false);
   const [pickedTeamForPlayer, setPickedTeamForPlayer] = useState<CachedTeam | null>(null);
   const [pickedPlayer, setPickedPlayer]               = useState<CachedPlayer | null>(null);
-  // New player config
-  const [newTotalPts,    setNewTotalPts]    = useState('40');
-  const [newHotStartQ,   setNewHotStartQ]   = useState('1');
-  const [newHotStartPts, setNewHotStartPts] = useState('15');
-  const [newTdWatch,     setNewTdWatch]     = useState(true);
+  // New player config — toggles default OFF; inputs only appear when toggled ON
+  const [newTotalPtsEnabled,  setNewTotalPtsEnabled]  = useState(false);
+  const [newTotalPts,         setNewTotalPts]         = useState('40');
+  const [newHotStartEnabled,  setNewHotStartEnabled]  = useState(false);
+  const [newHotStartQ,        setNewHotStartQ]        = useState('1');
+  const [newHotStartPts,      setNewHotStartPts]      = useState('15');
+  const [newTdWatch,          setNewTdWatch]          = useState(false);
+
+  // ── Load push token once ───────────────────────────────────────────────
+
+  useEffect(() => {
+    Notifications.getExpoPushTokenAsync({ projectId: '19104813-313d-40c1-975a-63b78d3ae7fc' })
+      .then(t => setUserToken(t.data))
+      .catch(() => {});
+  }, []);
 
   // ── Load all data ──────────────────────────────────────────────────────
 
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
+      const tokenParam = userToken ? `?user_token=${encodeURIComponent(userToken)}` : '';
       const [sRes, rRes, tRes] = await Promise.all([
-        fetch(`${SERVER_URL}/settings`),
+        fetch(`${SERVER_URL}/settings${tokenParam}`),
         fetch(`${SERVER_URL}/radar-status`),
         fetch(`${SERVER_URL}/all-teams-and-players`),
       ]);
@@ -151,14 +165,20 @@ export default function SettingsScreen() {
       }
       setTeamEdits(edits);
 
-      // Init per-player editable fields
-      const pEdits: Record<string, { total_pts: string; hot_start_q: string; hot_start_pts: string; td_watch: boolean }> = {};
+      // Init per-player editable fields — derive enabled state from null checks
+      const pEdits: Record<string, {
+        totalPtsEnabled: boolean; total_pts: string;
+        hotStartEnabled: boolean; hot_start_q: string; hot_start_pts: string;
+        td_watch: boolean;
+      }> = {};
       for (const [pid, p] of Object.entries(s.FavoritePlayers ?? {})) {
         pEdits[pid] = {
-          total_pts:     String(p.total_pts     ?? 40),
-          hot_start_q:   String(p.hot_start_q   ?? 1),
-          hot_start_pts: String(p.hot_start_pts ?? 15),
-          td_watch:      p.td_watch ?? true,
+          totalPtsEnabled: p.total_pts     != null,
+          total_pts:       String(p.total_pts     ?? 40),
+          hotStartEnabled: p.hot_start_pts != null && p.hot_start_q != null,
+          hot_start_q:     String(p.hot_start_q   ?? 1),
+          hot_start_pts:   String(p.hot_start_pts ?? 15),
+          td_watch:        p.td_watch ?? false,
         };
       }
       setPlayerEdits(pEdits);
@@ -167,7 +187,7 @@ export default function SettingsScreen() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [userToken]);
 
   useFocusEffect(
     useCallback(() => { loadAll(); }, [loadAll]),
@@ -227,7 +247,7 @@ export default function SettingsScreen() {
     try {
       await fetch(`${SERVER_URL}/settings/global-radar`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(next),
+        body: JSON.stringify({ ...next, user_token: userToken }),
       });
       setSettings(s => s ? { ...s, GlobalGameRadar: next } : s);
       // If radar was just enabled, also start the background loop
@@ -265,7 +285,7 @@ export default function SettingsScreen() {
     try {
       await fetch(`${SERVER_URL}/settings/historical`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(next),
+        body: JSON.stringify({ ...next, user_token: userToken }),
       });
       setSettings(s => s ? { ...s, HistoricalMode: next } : s);
     } finally { setSaving(false); }
@@ -278,7 +298,7 @@ export default function SettingsScreen() {
     try {
       await fetch(`${SERVER_URL}/settings/teams`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, user_token: userToken }),
       });
       setSettings(s => s ? {
         ...s,
@@ -292,7 +312,8 @@ export default function SettingsScreen() {
   };
 
   const removeTeam = async (team_id: string) => {
-    await fetch(`${SERVER_URL}/settings/teams/${team_id}`, { method: 'DELETE' });
+    const q = userToken ? `?user_token=${encodeURIComponent(userToken)}` : '';
+    await fetch(`${SERVER_URL}/settings/teams/${team_id}${q}`, { method: 'DELETE' });
     setSettings(s => s ? { ...s, FavoriteTeams: s.FavoriteTeams.filter(t => t.team_id !== team_id) } : s);
     setTeamEdits(prev => { const n = { ...prev }; delete n[team_id]; return n; });
   };
@@ -321,12 +342,18 @@ export default function SettingsScreen() {
 
   const confirmAddPlayer = async () => {
     if (!pickedPlayer) return;
+    if (!newTotalPtsEnabled && !newHotStartEnabled && !newTdWatch) {
+      alert('Please enable at least one condition before adding.');
+      return;
+    }
     const payload = {
+      user_token:    userToken,
       player_id:     pickedPlayer.id,
       name:          pickedPlayer.name,
-      total_pts:     parseInt(newTotalPts,    10) || 40,
-      hot_start_q:   parseInt(newHotStartQ,   10) || 1,
-      hot_start_pts: parseInt(newHotStartPts, 10) || 15,
+      // Send null for disabled conditions — server will store as NULL
+      total_pts:     newTotalPtsEnabled  ? (parseInt(newTotalPts,    10) || 40) : null,
+      hot_start_q:   newHotStartEnabled  ? (parseInt(newHotStartQ,   10) || 1)  : null,
+      hot_start_pts: newHotStartEnabled  ? (parseInt(newHotStartPts, 10) || 15) : null,
       td_watch:      newTdWatch,
       alert_type:    'silent',
     };
@@ -353,10 +380,12 @@ export default function SettingsScreen() {
       setPlayerEdits(prev => ({
         ...prev,
         [pickedPlayer.id]: {
-          total_pts:     String(payload.total_pts),
-          hot_start_q:   String(payload.hot_start_q),
-          hot_start_pts: String(payload.hot_start_pts),
-          td_watch:      payload.td_watch,
+          totalPtsEnabled: payload.total_pts    != null,
+          total_pts:       String(payload.total_pts    ?? 40),
+          hotStartEnabled: payload.hot_start_pts != null,
+          hot_start_q:     String(payload.hot_start_q  ?? 1),
+          hot_start_pts:   String(payload.hot_start_pts ?? 15),
+          td_watch:        payload.td_watch,
         },
       }));
       closePlayerModal();
@@ -367,11 +396,12 @@ export default function SettingsScreen() {
     const edit = playerEdits[player_id];
     if (!edit) return;
     const payload = {
+      user_token:    userToken,
       player_id,
       name,
-      total_pts:     parseInt(edit.total_pts,     10) || 40,
-      hot_start_q:   parseInt(edit.hot_start_q,   10) || 1,
-      hot_start_pts: parseInt(edit.hot_start_pts, 10) || 15,
+      total_pts:     edit.totalPtsEnabled  ? (parseInt(edit.total_pts,     10) || 40) : null,
+      hot_start_q:   edit.hotStartEnabled  ? (parseInt(edit.hot_start_q,   10) || 1)  : null,
+      hot_start_pts: edit.hotStartEnabled  ? (parseInt(edit.hot_start_pts, 10) || 15) : null,
       td_watch:      edit.td_watch,
       alert_type,
     };
@@ -399,7 +429,8 @@ export default function SettingsScreen() {
   };
 
   const removePlayer = async (player_id: string) => {
-    await fetch(`${SERVER_URL}/settings/players/${player_id}`, { method: 'DELETE' });
+    const q = userToken ? `?user_token=${encodeURIComponent(userToken)}` : '';
+    await fetch(`${SERVER_URL}/settings/players/${player_id}${q}`, { method: 'DELETE' });
     setSettings(s => {
       if (!s) return s;
       const next = { ...s.FavoritePlayers };
@@ -428,10 +459,12 @@ export default function SettingsScreen() {
     setPlayerModalVisible(false);
     setPickedTeamForPlayer(null);
     setPickedPlayer(null);
+    setNewTotalPtsEnabled(false);
     setNewTotalPts('40');
+    setNewHotStartEnabled(false);
     setNewHotStartQ('1');
     setNewHotStartPts('15');
-    setNewTdWatch(true);
+    setNewTdWatch(false);
   };
 
   // ── Derived ───────────────────────────────────────────────────────────
@@ -535,10 +568,12 @@ export default function SettingsScreen() {
           ) : (
             Object.entries(settings!.FavoritePlayers).map(([pid, p]) => {
               const edit = playerEdits[pid] ?? {
-                total_pts:     String(p.total_pts     ?? 40),
-                hot_start_q:   String(p.hot_start_q   ?? 1),
-                hot_start_pts: String(p.hot_start_pts ?? 15),
-                td_watch:      p.td_watch ?? true,
+                totalPtsEnabled: p.total_pts     != null,
+                total_pts:       String(p.total_pts     ?? 40),
+                hotStartEnabled: p.hot_start_pts != null && p.hot_start_q != null,
+                hot_start_q:     String(p.hot_start_q   ?? 1),
+                hot_start_pts:   String(p.hot_start_pts ?? 15),
+                td_watch:        p.td_watch ?? false,
               };
               const setEdit = (patch: Partial<typeof edit>) =>
                 setPlayerEdits(prev => ({ ...prev, [pid]: { ...edit, ...patch } }));
@@ -552,47 +587,76 @@ export default function SettingsScreen() {
                     </TouchableOpacity>
                   </View>
 
-                  {/* Total PTS threshold */}
-                  <Text style={styles.inputLabel}>TOTAL PTS ALERT</Text>
-                  <TextInput
-                    style={styles.numInput}
-                    keyboardType="numeric"
-                    value={edit.total_pts}
-                    onChangeText={v => setEdit({ total_pts: v })}
-                    placeholderTextColor={C.textMuted}
-                  />
+                  {/* Total PTS */}
+                  <View style={styles.condCard}>
+                    <View style={styles.condCardHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.condCardTitle}>Total Points Alert</Text>
+                      </View>
+                      <Switch
+                        value={edit.totalPtsEnabled}
+                        onValueChange={v => setEdit({ totalPtsEnabled: v })}
+                        trackColor={{ false: C.border, true: C.accentBlue }}
+                        thumbColor={edit.totalPtsEnabled ? C.accentBlue : C.textMuted}
+                      />
+                    </View>
+                    {edit.totalPtsEnabled && (
+                      <TextInput
+                        style={[styles.numInput, { marginTop: 10, marginBottom: 0 }]}
+                        keyboardType="numeric"
+                        value={edit.total_pts}
+                        onChangeText={v => setEdit({ total_pts: v })}
+                        placeholderTextColor={C.textMuted}
+                      />
+                    )}
+                  </View>
 
                   {/* Hot Start */}
-                  <Text style={styles.inputLabel}>HOT START — ALERT IF HE HAS THIS MANY PTS...</Text>
-                  <TextInput
-                    style={styles.numInput}
-                    keyboardType="numeric"
-                    value={edit.hot_start_pts}
-                    onChangeText={v => setEdit({ hot_start_pts: v })}
-                    placeholderTextColor={C.textMuted}
-                  />
-                  <Text style={styles.inputLabel}>...BY THE END OF THIS QUARTER</Text>
-                  <QRow
-                    value={edit.hot_start_q}
-                    onChange={q => setEdit({ hot_start_q: q })}
-                  />
+                  <View style={styles.condCard}>
+                    <View style={styles.condCardHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.condCardTitle}>Hot Start Alert</Text>
+                      </View>
+                      <Switch
+                        value={edit.hotStartEnabled}
+                        onValueChange={v => setEdit({ hotStartEnabled: v })}
+                        trackColor={{ false: C.border, true: C.accentBlue }}
+                        thumbColor={edit.hotStartEnabled ? C.accentBlue : C.textMuted}
+                      />
+                    </View>
+                    {edit.hotStartEnabled && (
+                      <>
+                        <Text style={[styles.inputLabel, { marginTop: 10 }]}>POINTS THRESHOLD</Text>
+                        <TextInput
+                          style={styles.numInput}
+                          keyboardType="numeric"
+                          value={edit.hot_start_pts}
+                          onChangeText={v => setEdit({ hot_start_pts: v })}
+                          placeholderTextColor={C.textMuted}
+                        />
+                        <Text style={styles.inputLabel}>BY END OF QUARTER</Text>
+                        <QRow value={edit.hot_start_q} onChange={q => setEdit({ hot_start_q: q })} />
+                      </>
+                    )}
+                  </View>
 
                   {/* Triple-Double Watch */}
-                  <View style={[styles.switchRow, { marginTop: 4 }]}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.rowLabel}>Triple-Double Watch</Text>
-                      <Text style={styles.rowSub}>Alert when approaching 9+ in 3 categories</Text>
+                  <View style={styles.condCard}>
+                    <View style={styles.condCardHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.condCardTitle}>Triple-Double Watch</Text>
+                      </View>
+                      <Switch
+                        value={edit.td_watch}
+                        onValueChange={v => setEdit({ td_watch: v })}
+                        trackColor={{ false: C.border, true: C.accentBlue }}
+                        thumbColor={edit.td_watch ? C.accentBlue : C.textMuted}
+                      />
                     </View>
-                    <Switch
-                      value={edit.td_watch}
-                      onValueChange={v => setEdit({ td_watch: v })}
-                      trackColor={{ false: C.border, true: C.accentBlue }}
-                      thumbColor={edit.td_watch ? C.accentBlue : C.textMuted}
-                    />
                   </View>
 
                   <TouchableOpacity
-                    style={[styles.updateBtn, { marginTop: 12 }]}
+                    style={[styles.updateBtn, { marginTop: 4 }]}
                     onPress={() => savePlayerSettings(pid, p.name, p.alert_type)}
                     disabled={saving}
                   >
@@ -983,50 +1047,97 @@ export default function SettingsScreen() {
                     {pickedPlayer.jersey ? `  ·  #${pickedPlayer.jersey}` : ''}
                     {pickedPlayer.position ? `  ·  ${pickedPlayer.position}` : ''}
                   </Text>
+                  <Text style={[styles.configSub, { marginBottom: 16 }]}>
+                    Toggle on the alerts you want. All others will be ignored.
+                  </Text>
 
-                  {/* Total PTS */}
-                  <Text style={[styles.inputLabel, { marginTop: 20 }]}>TOTAL PTS ALERT</Text>
-                  <TextInput
-                    style={styles.numInput}
-                    keyboardType="numeric"
-                    value={newTotalPts}
-                    onChangeText={setNewTotalPts}
-                    placeholderTextColor={C.textMuted}
-                    autoFocus
-                  />
-
-                  {/* Hot Start */}
-                  <Text style={styles.inputLabel}>HOT START — ALERT IF HE HAS THIS MANY PTS...</Text>
-                  <TextInput
-                    style={styles.numInput}
-                    keyboardType="numeric"
-                    value={newHotStartPts}
-                    onChangeText={setNewHotStartPts}
-                    placeholderTextColor={C.textMuted}
-                  />
-                  <Text style={styles.inputLabel}>...BY THE END OF THIS QUARTER</Text>
-                  <QRow value={newHotStartQ} onChange={setNewHotStartQ} />
-
-                  {/* Triple-Double Watch */}
-                  <View style={[styles.switchRow, { marginVertical: 12 }]}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.rowLabel}>Triple-Double Watch</Text>
-                      <Text style={styles.rowSub}>Alert when approaching 9+ in 3 categories</Text>
+                  {/* ── Total Points Alert ── */}
+                  <View style={styles.condCard}>
+                    <View style={styles.condCardHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.condCardTitle}>Total Points Alert</Text>
+                        <Text style={styles.condCardSub}>Alert when he reaches a scoring total</Text>
+                      </View>
+                      <Switch
+                        value={newTotalPtsEnabled}
+                        onValueChange={setNewTotalPtsEnabled}
+                        trackColor={{ false: C.border, true: C.accentBlue }}
+                        thumbColor={newTotalPtsEnabled ? C.accentBlue : C.textMuted}
+                      />
                     </View>
-                    <Switch
-                      value={newTdWatch}
-                      onValueChange={setNewTdWatch}
-                      trackColor={{ false: C.border, true: C.accentBlue }}
-                      thumbColor={newTdWatch ? C.accentBlue : C.textMuted}
-                    />
+                    {newTotalPtsEnabled && (
+                      <TextInput
+                        style={[styles.numInput, { marginTop: 10, marginBottom: 0 }]}
+                        keyboardType="numeric"
+                        value={newTotalPts}
+                        onChangeText={setNewTotalPts}
+                        placeholder="e.g. 40"
+                        placeholderTextColor={C.textMuted}
+                        autoFocus
+                      />
+                    )}
                   </View>
 
-                  <View style={styles.configSummary}>
-                    <Ionicons name="information-circle-outline" size={14} color={C.textMuted} />
-                    <Text style={styles.configSummaryText}>
-                      Alert at {newTotalPts || '40'} total pts · Hot start: {newHotStartPts || '15'} pts by Q{newHotStartQ}{newTdWatch ? ' · TD watch on' : ''}
-                    </Text>
+                  {/* ── Hot Start Alert ── */}
+                  <View style={styles.condCard}>
+                    <View style={styles.condCardHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.condCardTitle}>Hot Start Alert</Text>
+                        <Text style={styles.condCardSub}>Alert if he hits a threshold early in the game</Text>
+                      </View>
+                      <Switch
+                        value={newHotStartEnabled}
+                        onValueChange={setNewHotStartEnabled}
+                        trackColor={{ false: C.border, true: C.accentBlue }}
+                        thumbColor={newHotStartEnabled ? C.accentBlue : C.textMuted}
+                      />
+                    </View>
+                    {newHotStartEnabled && (
+                      <>
+                        <Text style={[styles.inputLabel, { marginTop: 10 }]}>POINTS THRESHOLD</Text>
+                        <TextInput
+                          style={styles.numInput}
+                          keyboardType="numeric"
+                          value={newHotStartPts}
+                          onChangeText={setNewHotStartPts}
+                          placeholder="e.g. 15"
+                          placeholderTextColor={C.textMuted}
+                        />
+                        <Text style={styles.inputLabel}>BY END OF QUARTER</Text>
+                        <QRow value={newHotStartQ} onChange={setNewHotStartQ} />
+                      </>
+                    )}
                   </View>
+
+                  {/* ── Triple-Double Watch ── */}
+                  <View style={styles.condCard}>
+                    <View style={styles.condCardHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.condCardTitle}>Triple-Double Watch</Text>
+                        <Text style={styles.condCardSub}>Alert when approaching 9+ in 3 stats</Text>
+                      </View>
+                      <Switch
+                        value={newTdWatch}
+                        onValueChange={setNewTdWatch}
+                        trackColor={{ false: C.border, true: C.accentBlue }}
+                        thumbColor={newTdWatch ? C.accentBlue : C.textMuted}
+                      />
+                    </View>
+                  </View>
+
+                  {/* ── Summary ── */}
+                  {(newTotalPtsEnabled || newHotStartEnabled || newTdWatch) && (
+                    <View style={styles.configSummary}>
+                      <Ionicons name="information-circle-outline" size={14} color={C.textMuted} />
+                      <Text style={styles.configSummaryText}>
+                        {[
+                          newTotalPtsEnabled  && `${newTotalPts || '40'}+ pts`,
+                          newHotStartEnabled  && `${newHotStartPts || '15'} pts by Q${newHotStartQ}`,
+                          newTdWatch          && 'Triple-Double watch',
+                        ].filter(Boolean).join('  ·  ')}
+                      </Text>
+                    </View>
+                  )}
 
                   <TouchableOpacity
                     style={[styles.confirmBtn, saving && styles.confirmBtnDisabled]}
@@ -1080,6 +1191,16 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   addRowBtnText: { color: C.accentBlue, fontWeight: '700', fontSize: 14 },
+
+  // Condition toggle card (inside player cards and modal step 3)
+  condCard: {
+    backgroundColor: C.card, borderRadius: 10,
+    borderWidth: 1, borderColor: C.border,
+    padding: 12, marginBottom: 8,
+  },
+  condCardHeader: { flexDirection: 'row', alignItems: 'center' },
+  condCardTitle:  { fontSize: 14, fontWeight: '700', color: C.textPrimary },
+  condCardSub:    { fontSize: 12, color: C.textMuted, marginTop: 2 },
 
   // Favorite card (existing items)
   favCard: {

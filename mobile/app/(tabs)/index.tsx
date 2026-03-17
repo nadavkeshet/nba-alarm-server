@@ -19,6 +19,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -71,8 +72,6 @@ const EXPO_PROJECT_ID = '19104813-313d-40c1-975a-63b78d3ae7fc';
 const REGISTER_TOKEN_URL = `${SERVER_URL}/register-token`;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-
-type PlayerCondition = 'pts_goal' | 'pts_early' | 'triple_double';
 
 // ─── Notification setup ───────────────────────────────────────────────────────
 
@@ -331,9 +330,13 @@ export default function HomeScreen() {
   const [teams, setTeams]                   = useState<any[]>([]);
   const [rosterLoading, setRosterLoading]   = useState(false);
   const [selectedPlayer, setSelectedPlayer] = useState<any>(null);
-  const [playerCondition, setPlayerCondition] = useState<PlayerCondition>('pts_goal');
-  const [ptsThreshold, setPtsThreshold]       = useState('20');
-  const [quarterDeadline, setQuarterDeadline] = useState('3');
+  // Multi-condition toggles (each fires independently)
+  const [ptsGoalEnabled,    setPtsGoalEnabled]    = useState(true);
+  const [ptsGoalThreshold,  setPtsGoalThreshold]  = useState('25');
+  const [ptsEarlyEnabled,   setPtsEarlyEnabled]   = useState(false);
+  const [earlyPtsThreshold, setEarlyPtsThreshold] = useState('15');
+  const [earlyQuarter,      setEarlyQuarter]      = useState('3');
+  const [tdWatchEnabled,    setTdWatchEnabled]    = useState(false);
 
   // ── Android "Draw over other apps" banner ────────────────────────
   // Shows ONCE ever (AsyncStorage persists across app kills).
@@ -613,7 +616,12 @@ export default function HomeScreen() {
     setAlertType('alarm');
     setTeams([]);
     setSelectedPlayer(null);
-    setPlayerCondition('pts_goal');
+    setPtsGoalEnabled(true);
+    setPtsGoalThreshold('25');
+    setPtsEarlyEnabled(false);
+    setEarlyPtsThreshold('15');
+    setEarlyQuarter('3');
+    setTdWatchEnabled(false);
   };
 
   // ── Start game alarm ─────────────────────────────────────────────
@@ -673,54 +681,76 @@ export default function HomeScreen() {
   // ── Start player alarm ───────────────────────────────────────────
   const startPlayerMonitoring = async () => {
     if (!selectedGame || !selectedPlayer) return;
-    // Re-register token before sending alarm
+    if (!ptsGoalEnabled && !ptsEarlyEnabled && !tdWatchEnabled) {
+      alert('Please enable at least one alarm condition.');
+      return;
+    }
     const freshToken = expoPushToken || (await getPushToken()) || '';
     if (freshToken && freshToken !== expoPushToken) {
       setExpoPushToken(freshToken);
       sendTokenToServer(freshToken);
     }
+
+    // Build the list of enabled conditions — each fires independently
+    const conditions: Array<{
+      condition: string; pts_threshold: number; quarter_deadline: number;
+      condition_type: string; threshold: number; start_quarter: number;
+    }> = [];
+    if (ptsGoalEnabled) conditions.push({
+      condition: 'pts_goal', pts_threshold: parseInt(ptsGoalThreshold, 10), quarter_deadline: 0,
+      condition_type: 'points', threshold: parseInt(ptsGoalThreshold, 10), start_quarter: 0,
+    });
+    if (ptsEarlyEnabled) conditions.push({
+      condition: 'pts_early', pts_threshold: parseInt(earlyPtsThreshold, 10), quarter_deadline: parseInt(earlyQuarter, 10),
+      condition_type: 'points', threshold: parseInt(earlyPtsThreshold, 10), start_quarter: parseInt(earlyQuarter, 10),
+    });
+    if (tdWatchEnabled) conditions.push({
+      condition: 'triple_double', pts_threshold: 0, quarter_deadline: 0,
+      condition_type: 'triple_double', threshold: 0, start_quarter: 0,
+    });
+
     try {
-      const response = await fetch(`${SERVER_URL}/start-player-alarm`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          game_id:          selectedGame.id,
-          game_name:        selectedGame.name,
-          player_id:        selectedPlayer.id,
-          player_name:      selectedPlayer.name,
-          push_token:       freshToken,
-          sound_channel:    ALARM_CHANNEL,
-          condition:        playerCondition,
-          pts_threshold:    parseInt(ptsThreshold, 10),
-          quarter_deadline: parseInt(quarterDeadline, 10),
-          alert_type:       alertType,
-        }),
-      });
-      if (response.ok) {
-        // Persist to PostgreSQL via /set_alarm
-        const isTripleDouble = playerCondition === 'triple_double';
-        const isPtsEarly     = playerCondition === 'pts_early';
-        const dbPayload = {
-          user_token:     freshToken,
-          target_id:      selectedPlayer.id,
-          target_name:    selectedPlayer.name,
-          condition_type: isTripleDouble ? 'triple_double' : 'points',
-          threshold:      isTripleDouble ? 0 : parseInt(ptsThreshold, 10),
-          // pts_early uses quarterDeadline as an upper bound (fire only if still in that quarter or earlier)
-          // pts_goal and triple_double have no quarter limit → send 0
-          start_quarter:  isPtsEarly ? parseInt(quarterDeadline, 10) : 0,
-        };
+      let successCount = 0;
+      for (const cond of conditions) {
+        const response = await fetch(`${SERVER_URL}/start-player-alarm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            game_id:          selectedGame.id,
+            game_name:        selectedGame.name,
+            player_id:        selectedPlayer.id,
+            player_name:      selectedPlayer.name,
+            push_token:       freshToken,
+            sound_channel:    ALARM_CHANNEL,
+            condition:        cond.condition,
+            pts_threshold:    cond.pts_threshold,
+            quarter_deadline: cond.quarter_deadline,
+            alert_type:       alertType,
+          }),
+        });
+        if (!response.ok) continue;
+        successCount++;
+        // Persist each condition as its own DB row
         fetch(`${SERVER_URL}/set_alarm`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(dbPayload),
+          body: JSON.stringify({
+            user_token:     freshToken,
+            target_id:      selectedPlayer.id,
+            target_name:    selectedPlayer.name,
+            condition_type: cond.condition_type,
+            threshold:      cond.threshold,
+            start_quarter:  cond.start_quarter,
+          }),
         })
           .then(r => r.json())
-          .then(data => console.log('[DB] Player alarm saved to PostgreSQL:', data))
+          .then(data => console.log(`[DB] Saved ${cond.condition_type} alarm:`, data))
           .catch(err => console.warn('[DB] /set_alarm failed (non-critical):', err));
+      }
 
+      if (successCount > 0) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        alert(`Player alarm set for ${selectedPlayer.name}!`);
+        alert(`${successCount} alarm${successCount > 1 ? 's' : ''} set for ${selectedPlayer.name}!`);
       } else {
         alert('Server error. Make sure the server is running.');
       }
@@ -941,75 +971,97 @@ export default function HomeScreen() {
                       </TouchableOpacity>
                     </View>
 
-                    <Text style={styles.inputLabel}>Alarm Condition</Text>
-                    <View style={styles.conditionRow}>
-                      {([
-                        { key: 'pts_goal',      label: 'Points Goal'     },
-                        { key: 'pts_early',     label: 'Early Points'    },
-                        { key: 'triple_double', label: 'Near Triple-Dbl' },
-                      ] as { key: PlayerCondition; label: string }[]).map(({ key, label }) => (
-                        <TouchableOpacity
-                          key={key}
-                          style={[styles.conditionBtn, playerCondition === key && styles.conditionBtnActive]}
-                          onPress={() => setPlayerCondition(key)}
-                        >
-                          <Text style={[styles.conditionBtnText, playerCondition === key && styles.conditionBtnTextActive]}>
-                            {label}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
+                    <Text style={styles.inputLabel}>Alarm Conditions</Text>
+                    <Text style={styles.conditionHint}>Enable one or more — each fires independently</Text>
 
-                    {playerCondition === 'pts_goal' && (
-                      <>
-                        <Text style={styles.inputLabel}>Points Threshold</Text>
+                    {/* ── Points Goal ── */}
+                    <View style={styles.conditionCard}>
+                      <View style={styles.conditionCardHeader}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.conditionCardTitle}>Points Goal</Text>
+                          <Text style={styles.conditionCardSub}>Alert when player hits a point total</Text>
+                        </View>
+                        <Switch
+                          value={ptsGoalEnabled}
+                          onValueChange={setPtsGoalEnabled}
+                          trackColor={{ false: C.border, true: C.blue }}
+                          thumbColor={ptsGoalEnabled ? C.blue : C.textMuted}
+                        />
+                      </View>
+                      {ptsGoalEnabled && (
                         <TextInput
-                          style={styles.input}
+                          style={[styles.input, { marginTop: 10 }]}
                           keyboardType="numeric"
-                          value={ptsThreshold}
-                          onChangeText={setPtsThreshold}
+                          value={ptsGoalThreshold}
+                          onChangeText={setPtsGoalThreshold}
+                          placeholder="25"
                           placeholderTextColor="#555"
                         />
-                      </>
-                    )}
+                      )}
+                    </View>
 
-                    {playerCondition === 'pts_early' && (
-                      <View style={styles.earlyRow}>
-                        <View style={styles.earlyField}>
-                          <Text style={styles.inputLabel}>Points</Text>
-                          <TextInput
-                            style={[styles.input, styles.inputSmall]}
-                            keyboardType="numeric"
-                            value={ptsThreshold}
-                            onChangeText={setPtsThreshold}
-                            placeholderTextColor="#555"
-                          />
+                    {/* ── Early Points ── */}
+                    <View style={styles.conditionCard}>
+                      <View style={styles.conditionCardHeader}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.conditionCardTitle}>Early Points</Text>
+                          <Text style={styles.conditionCardSub}>Alert if threshold is hit before a quarter ends</Text>
                         </View>
-                        <Text style={styles.earlyBy}>by</Text>
-                        <View style={styles.earlyField}>
-                          <Text style={styles.inputLabel}>Before Q</Text>
-                          <View style={styles.miniQuarterRow}>
-                            {['2', '3', '4'].map(q => (
-                              <TouchableOpacity
-                                key={q}
-                                style={[styles.miniQBtn, quarterDeadline === q && styles.quarterButtonActive]}
-                                onPress={() => setQuarterDeadline(q)}
-                              >
-                                <Text style={[styles.quarterText, quarterDeadline === q && styles.quarterTextActive]}>
-                                  Q{q}
-                                </Text>
-                              </TouchableOpacity>
-                            ))}
+                        <Switch
+                          value={ptsEarlyEnabled}
+                          onValueChange={setPtsEarlyEnabled}
+                          trackColor={{ false: C.border, true: C.blue }}
+                          thumbColor={ptsEarlyEnabled ? C.blue : C.textMuted}
+                        />
+                      </View>
+                      {ptsEarlyEnabled && (
+                        <View style={[styles.earlyRow, { marginBottom: 0, marginTop: 10 }]}>
+                          <View style={styles.earlyField}>
+                            <Text style={styles.inputLabel}>Points</Text>
+                            <TextInput
+                              style={[styles.input, styles.inputSmall]}
+                              keyboardType="numeric"
+                              value={earlyPtsThreshold}
+                              onChangeText={setEarlyPtsThreshold}
+                              placeholderTextColor="#555"
+                            />
+                          </View>
+                          <Text style={styles.earlyBy}>by</Text>
+                          <View style={styles.earlyField}>
+                            <Text style={styles.inputLabel}>Before Q</Text>
+                            <View style={styles.miniQuarterRow}>
+                              {['2', '3', '4'].map(q => (
+                                <TouchableOpacity
+                                  key={q}
+                                  style={[styles.miniQBtn, earlyQuarter === q && styles.quarterButtonActive]}
+                                  onPress={() => setEarlyQuarter(q)}
+                                >
+                                  <Text style={[styles.quarterText, earlyQuarter === q && styles.quarterTextActive]}>
+                                    Q{q}
+                                  </Text>
+                                </TouchableOpacity>
+                              ))}
+                            </View>
                           </View>
                         </View>
-                      </View>
-                    )}
+                      )}
+                    </View>
 
-                    {playerCondition === 'triple_double' && (
-                      <Text style={styles.tripleDoubleHint}>
-                        Alert fires when the player has 9+ in at least 3 of: Points, Rebounds, Assists, Steals, Blocks.
-                      </Text>
-                    )}
+                    {/* ── Triple-Double Watch ── */}
+                    <View style={styles.conditionCard}>
+                      <View style={styles.conditionCardHeader}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.conditionCardTitle}>Triple-Double Watch</Text>
+                          <Text style={styles.conditionCardSub}>Alert when approaching 9+ in 3 stats</Text>
+                        </View>
+                        <Switch
+                          value={tdWatchEnabled}
+                          onValueChange={setTdWatchEnabled}
+                          trackColor={{ false: C.border, true: C.blue }}
+                          thumbColor={tdWatchEnabled ? C.blue : C.textMuted}
+                        />
+                      </View>
+                    </View>
 
                     <TouchableOpacity style={styles.startButton} onPress={startPlayerMonitoring}>
                       <Text style={styles.startButtonText}>Start Monitoring</Text>
@@ -1195,16 +1247,14 @@ const styles = StyleSheet.create({
   selectedPlayerLabel: { fontSize: 15, fontWeight: '800', color: C.textPrimary },
   playerStarBtn:       { padding: 4 },
 
-  conditionRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
-  conditionBtn: {
-    flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: 'center',
+  conditionHint: { fontSize: 12, color: C.textMuted, marginTop: -8, marginBottom: 12 },
+  conditionCard: {
     backgroundColor: C.bg, borderWidth: 1, borderColor: C.border,
+    borderRadius: 10, padding: 12, marginBottom: 10,
   },
-  conditionBtnActive:     { backgroundColor: C.blue, borderColor: C.blue },
-  conditionBtnText:       { fontSize: 11, fontWeight: '700', color: C.textMuted },
-  conditionBtnTextActive: { color: '#fff' },
-
-  tripleDoubleHint: { fontSize: 13, color: C.textMuted, lineHeight: 18, marginBottom: 16 },
+  conditionCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  conditionCardTitle:  { fontSize: 14, fontWeight: '700', color: C.textPrimary },
+  conditionCardSub:    { fontSize: 12, color: C.textMuted, marginTop: 2 },
 
   earlyRow:  { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
   earlyField:{ flex: 1 },

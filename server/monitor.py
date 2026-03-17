@@ -1035,40 +1035,45 @@ def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
 
                     # ── Favorite Player Alerts (fully per-player settings) ──
                     if player_id in fav_players:
-                        fav_cfg        = fav_players[player_id]
-                        p_alert_type   = fav_cfg.get("alert_type", "silent")
-                        total_pts_thr  = int(fav_cfg.get("total_pts",     40))
-                        hot_start_q    = int(fav_cfg.get("hot_start_q",    1))
-                        hot_start_pts  = int(fav_cfg.get("hot_start_pts", 15))
-                        td_watch       = bool(fav_cfg.get("td_watch",     True))
+                        fav_cfg       = fav_players[player_id]
+                        p_alert_type  = fav_cfg.get("alert_type", "silent")
+                        # None = user did not enable that condition — skip it entirely
+                        total_pts_thr = fav_cfg.get("total_pts")      # int or None
+                        hot_start_q   = fav_cfg.get("hot_start_q")    # int or None
+                        hot_start_pts = fav_cfg.get("hot_start_pts")  # int or None
+                        td_watch      = bool(fav_cfg.get("td_watch", False))
 
-                        # Total PTS threshold: alert when player reaches X pts in the game
-                        if pts >= total_pts_thr:
-                            print(f"Checking {player_name}: {pts} pts >= total_pts {total_pts_thr}. FIRING!", flush=True)
-                            if _fire_once(f"{game_id}_{player_id}_total_pts"):
-                                _send_push_notification(
-                                    push_token=push_token,
-                                    title="Scoring Alert!",
-                                    body=f"{player_name} has {pts} pts in {game_name}!",
-                                    sound_channel=sound_channel,
-                                    alert_type=p_alert_type,
-                                )
-                        else:
-                            print(f"Checking {player_name}: {pts} pts / total_pts {total_pts_thr}. No alarm.", flush=True)
+                        # Total PTS threshold (only if condition is enabled)
+                        if total_pts_thr is not None:
+                            total_pts_thr = int(total_pts_thr)
+                            if pts >= total_pts_thr:
+                                print(f"Checking {player_name}: {pts} pts >= total_pts {total_pts_thr}. FIRING!", flush=True)
+                                if _fire_once(f"{game_id}_{player_id}_total_pts"):
+                                    _send_push_notification(
+                                        push_token=push_token,
+                                        title="Scoring Alert!",
+                                        body=f"{player_name} has {pts} pts in {game_name}!",
+                                        sound_channel=sound_channel,
+                                        alert_type=p_alert_type,
+                                    )
+                            else:
+                                print(f"Checking {player_name}: {pts} pts / total_pts {total_pts_thr}. No alarm.", flush=True)
 
-                        # Hot Start: alert when player hits hot_start_pts by end of hot_start_q
-                        # Fires as soon as the target quarter is active and the threshold is met.
-                        if quarter == hot_start_q and pts >= hot_start_pts:
-                            if _fire_once(f"{game_id}_{player_id}_hot_start_q{hot_start_q}"):
-                                _send_push_notification(
-                                    push_token=push_token,
-                                    title="Hot Start Alert!",
-                                    body=f"{player_name}: {pts} pts in Q{quarter} of {game_name} — on fire!",
-                                    sound_channel=sound_channel,
-                                    alert_type=p_alert_type,
-                                )
+                        # Hot Start (only if both fields are enabled)
+                        if hot_start_q is not None and hot_start_pts is not None:
+                            hot_start_q   = int(hot_start_q)
+                            hot_start_pts = int(hot_start_pts)
+                            if quarter == hot_start_q and pts >= hot_start_pts:
+                                if _fire_once(f"{game_id}_{player_id}_hot_start_q{hot_start_q}"):
+                                    _send_push_notification(
+                                        push_token=push_token,
+                                        title="Hot Start Alert!",
+                                        body=f"{player_name}: {pts} pts in Q{quarter} of {game_name} — on fire!",
+                                        sound_channel=sound_channel,
+                                        alert_type=p_alert_type,
+                                    )
 
-                        # Triple-double watch: 3+ categories at 9+
+                        # Triple-double watch (only if enabled)
                         if td_watch and _check_triple_double(pts, reb, ast, stl, blk):
                             hot = [f"{n} {v}" for n, v in zip(["PTS","REB","AST","STL","BLK"], [pts,reb,ast,stl,blk]) if v >= 9]
                             if _fire_once(f"{game_id}_{player_id}_triple_double"):
