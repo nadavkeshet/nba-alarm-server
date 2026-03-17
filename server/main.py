@@ -1,9 +1,17 @@
 import os
+import asyncio
 import threading
-from fastapi import FastAPI
+import requests as http
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
+
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, text
+from sqlalchemy.orm import DeclarativeBase, Session
+
 from monitor import (
     # Alarm jobs
     start_monitoring_job,
@@ -34,7 +42,183 @@ from monitor import (
     clear_stale_state,
 )
 
-app = FastAPI(title="NBA Smart Alarm Server")
+
+# ── Database Setup ─────────────────────────────────────────────────────────────
+
+_raw_db_url = os.environ.get("DATABASE_URL", "")
+# Railway provides postgres:// but SQLAlchemy 1.4+ requires postgresql://
+DATABASE_URL = _raw_db_url.replace("postgres://", "postgresql://", 1) if _raw_db_url else ""
+
+engine = create_engine(DATABASE_URL, pool_pre_ping=True) if DATABASE_URL else None
+
+
+class _Base(DeclarativeBase):
+    pass
+
+
+class Alarm(_Base):
+    """Persistent alarms stored in PostgreSQL."""
+    __tablename__ = "alarms"
+
+    id             = Column(Integer, primary_key=True, index=True)
+    user_token     = Column(String,  nullable=False)   # Expo push token
+    target_id      = Column(String,  nullable=False)   # player_id or game_id
+    condition_type = Column(String,  nullable=False)   # "points" | "score_diff"
+    threshold      = Column(Integer, nullable=False)
+    is_active      = Column(Boolean, default=True, nullable=False)
+
+
+def _init_db() -> None:
+    """Create tables if they don't already exist."""
+    if engine is None:
+        print("DB: No DATABASE_URL set – skipping table creation.", flush=True)
+        return
+    try:
+        _Base.metadata.create_all(bind=engine)
+        print("DB: Tables ready.", flush=True)
+    except Exception as exc:
+        print(f"DB: Failed to create tables – {exc}", flush=True)
+
+
+# ── Background Async Poller ────────────────────────────────────────────────────
+
+ESPN_SCOREBOARD = (
+    "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
+)
+
+
+def _fetch_scoreboard() -> dict:
+    """Blocking ESPN fetch – called from a thread executor."""
+    resp = http.get(ESPN_SCOREBOARD, timeout=10)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _extract_game_diff(event: dict) -> int | None:
+    """Return absolute score difference for a live/finished event, or None."""
+    try:
+        comps = event["competitions"][0]["competitors"]
+        scores = [int(c["score"]) for c in comps]
+        return abs(scores[0] - scores[1])
+    except Exception:
+        return None
+
+
+def _extract_player_pts(event: dict, target_id: str) -> int | None:
+    """
+    Return the current point total for target_id player in this event,
+    or None if the player is not found in the boxscore leaders.
+    """
+    try:
+        leaders = (
+            event.get("competitions", [{}])[0]
+                 .get("leaders", [])
+        )
+        for cat in leaders:
+            if cat.get("abbreviation") != "PTS":
+                continue
+            for leader in cat.get("leaders", []):
+                athlete = leader.get("athlete", {})
+                if str(athlete.get("id")) == str(target_id):
+                    return int(float(leader.get("value", 0)))
+    except Exception:
+        pass
+    return None
+
+
+def _check_and_fire(alarm: Alarm, events: list[dict]) -> bool:
+    """Return True if the alarm condition is met against the live scoreboard."""
+    if alarm.condition_type == "score_diff":
+        for event in events:
+            if str(event.get("id")) == str(alarm.target_id):
+                diff = _extract_game_diff(event)
+                if diff is not None and diff <= alarm.threshold:
+                    return True
+
+    elif alarm.condition_type == "points":
+        for event in events:
+            pts = _extract_player_pts(event, alarm.target_id)
+            if pts is not None and pts >= alarm.threshold:
+                return True
+
+    return False
+
+
+async def _alarm_poller() -> None:
+    """
+    Every 60 s:
+      1. Fetch the ESPN scoreboard once.
+      2. Load all is_active alarms from DB.
+      3. Check each alarm; fire + deactivate on match.
+    """
+    while True:
+        await asyncio.sleep(60)
+        if engine is None:
+            continue
+        try:
+            data = await asyncio.to_thread(_fetch_scoreboard)
+            events: list[dict] = data.get("events", [])
+
+            with Session(engine) as session:
+                alarms = (
+                    session.query(Alarm)
+                           .filter(Alarm.is_active.is_(True))
+                           .all()
+                )
+
+            for alarm in alarms:
+                try:
+                    if _check_and_fire(alarm, events):
+                        _send_push_notification(
+                            push_token=alarm.user_token,
+                            title="NBA Alarm",
+                            body=f"Condition met for target {alarm.target_id}!",
+                            sound_channel="classic_alarm",
+                        )
+                        with Session(engine) as session:
+                            db_row = session.get(Alarm, alarm.id)
+                            if db_row:
+                                db_row.is_active = False
+                                session.commit()
+                        print(
+                            f"Poller: fired + deactivated alarm {alarm.id} "
+                            f"({alarm.condition_type} / {alarm.target_id})",
+                            flush=True,
+                        )
+                except Exception as alarm_err:
+                    print(f"Poller: error processing alarm {alarm.id} – {alarm_err}", flush=True)
+
+        except Exception as exc:
+            print(f"Poller: cycle error – {exc}", flush=True)
+
+
+# ── App Lifespan ───────────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # ── Startup ──
+    _init_db()
+    clear_stale_state()
+    threading.Thread(target=update_all_rosters, daemon=True).start()
+    token, channel = get_saved_push_token()
+    if token:
+        threading.Thread(target=start_radar_job, args=(token, channel), daemon=True).start()
+    # Start the async DB poller
+    poller_task = asyncio.create_task(_alarm_poller())
+
+    yield  # server is running
+
+    # ── Shutdown ──
+    poller_task.cancel()
+    try:
+        await poller_task
+    except asyncio.CancelledError:
+        pass
+
+
+# ── App Instance ───────────────────────────────────────────────────────────────
+
+app = FastAPI(title="NBA Smart Alarm Server", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -44,18 +228,64 @@ app.add_middleware(
 )
 
 
-@app.on_event("startup")
-def _startup():
-    """Pre-load rosters and auto-start the background radar on server start."""
-    # Always clear ghost monitors/career-high cache from any previous deployment
-    clear_stale_state()
-    threading.Thread(target=update_all_rosters, daemon=True).start()
-    token, channel = get_saved_push_token()
-    if token:
-        threading.Thread(target=start_radar_job, args=(token, channel), daemon=True).start()
+# ── Health ─────────────────────────────────────────────────────────────────────
+
+@app.get("/health")
+def health():
+    db_ok = False
+    db_msg = "no DATABASE_URL configured"
+    if engine is not None:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            db_ok = True
+            db_msg = "connected"
+        except Exception as exc:
+            db_msg = str(exc)
+    return {"status": "ok", "db": {"connected": db_ok, "detail": db_msg}}
 
 
-# ── Game Alarm ────────────────────────────────────────────────────────────────
+# ── DB Alarm Endpoint ──────────────────────────────────────────────────────────
+
+class SetAlarmRequest(BaseModel):
+    user_token:     str
+    target_id:      str
+    condition_type: str   # "points" | "score_diff"
+    threshold:      int
+
+
+@app.post("/set_alarm")
+def set_alarm(req: SetAlarmRequest):
+    """Persist a new alarm to PostgreSQL."""
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Database not configured.")
+    if req.condition_type not in ("points", "score_diff"):
+        raise HTTPException(
+            status_code=400,
+            detail="condition_type must be 'points' or 'score_diff'.",
+        )
+    with Session(engine) as session:
+        alarm = Alarm(
+            user_token=req.user_token,
+            target_id=req.target_id,
+            condition_type=req.condition_type,
+            threshold=req.threshold,
+            is_active=True,
+        )
+        session.add(alarm)
+        session.commit()
+        session.refresh(alarm)
+        alarm_id = alarm.id
+    return {
+        "status":         "alarm_set",
+        "alarm_id":       alarm_id,
+        "target_id":      req.target_id,
+        "condition_type": req.condition_type,
+        "threshold":      req.threshold,
+    }
+
+
+# ── Game Alarm ─────────────────────────────────────────────────────────────────
 
 class AlarmRequest(BaseModel):
     game_id: str
@@ -77,7 +307,6 @@ async def start_alarm(req: AlarmRequest):
               req.push_token, req.sound_channel, req.alert_type),
         daemon=True,
     ).start()
-    # Also ensure the radar is running (singleton – safe to call repeatedly)
     threading.Thread(
         target=start_radar_job,
         args=(req.push_token, req.sound_channel),
@@ -91,7 +320,7 @@ async def start_alarm(req: AlarmRequest):
     }
 
 
-# ── Player Alarm ──────────────────────────────────────────────────────────────
+# ── Player Alarm ───────────────────────────────────────────────────────────────
 
 class PlayerAlarmRequest(BaseModel):
     game_id: str
@@ -100,7 +329,7 @@ class PlayerAlarmRequest(BaseModel):
     player_name: str
     push_token: str
     sound_channel: str    = "classic_alarm"
-    condition: str        = "pts_goal"   # "pts_goal" | "pts_early" | "triple_double"
+    condition: str        = "pts_goal"
     pts_threshold: int    = 20
     quarter_deadline: int = 3
     alert_type: str       = "alarm"
@@ -121,7 +350,6 @@ async def start_player_alarm(req: PlayerAlarmRequest):
         ),
         daemon=True,
     ).start()
-    # Also ensure the radar is running (singleton – safe to call repeatedly)
     threading.Thread(
         target=start_radar_job,
         args=(req.push_token, req.sound_channel),
@@ -135,7 +363,7 @@ async def start_player_alarm(req: PlayerAlarmRequest):
     }
 
 
-# ── Test Endpoints ────────────────────────────────────────────────────────────
+# ── Test Endpoints ─────────────────────────────────────────────────────────────
 
 class TestAlarmRequest(BaseModel):
     push_token: str
@@ -144,7 +372,6 @@ class TestAlarmRequest(BaseModel):
 
 @app.post("/test-alarm")
 def test_alarm(req: TestAlarmRequest):
-    """Immediately fire a test push notification."""
     _send_push_notification(
         push_token=req.push_token,
         title="Test Notification",
@@ -157,16 +384,11 @@ def test_alarm(req: TestAlarmRequest):
 @app.get("/test-player-alarm")
 def test_player_alarm(
     push_token: str,
-    condition: str    = "triple_double",
-    player_name: str  = "Test Player",
+    condition: str     = "triple_double",
+    player_name: str   = "Test Player",
     pts_threshold: int = 20,
     sound_channel: str = "classic_alarm",
 ):
-    """
-    Start a player monitoring job in test_mode using mock stats.
-    Fires immediately – no live game needed.
-    Mock stats: PTS=25, REB=9, AST=9, STL=2, BLK=9
-    """
     threading.Thread(
         target=start_player_monitoring_job,
         kwargs=dict(
@@ -186,16 +408,21 @@ def test_player_alarm(
     }
 
 
-# ── Background Radar ──────────────────────────────────────────────────────────
+# ── Background Radar ───────────────────────────────────────────────────────────
 
 class RadarRequest(BaseModel):
     push_token: str
     sound_channel: str = "classic_alarm"
 
 
+def _maybe_start_radar() -> None:
+    token, channel = get_saved_push_token()
+    if token:
+        threading.Thread(target=start_radar_job, args=(token, channel), daemon=True).start()
+
+
 @app.post("/start-radar")
 def start_radar(req: RadarRequest):
-    """Start the background radar (singleton – safe to call multiple times)."""
     threading.Thread(
         target=start_radar_job,
         args=(req.push_token, req.sound_channel),
@@ -209,28 +436,18 @@ def radar_status():
     return {"running": get_radar_status()}
 
 
-# ── Settings ──────────────────────────────────────────────────────────────────
+# ── Settings ───────────────────────────────────────────────────────────────────
 
 @app.get("/settings")
 def get_settings():
-    """Return the full user preferences object."""
     return get_preferences()
 
-
-# ── Global Game Radar settings ───────────────────────────────────────────────
 
 class GlobalRadarSettings(BaseModel):
     enabled: bool
     max_diff: int      = 5
     start_quarter: int = 4
     alert_type: str    = "silent"
-
-
-def _maybe_start_radar() -> None:
-    """Start the radar if a push token is saved (safe to call when radar is already running)."""
-    token, channel = get_saved_push_token()
-    if token:
-        threading.Thread(target=start_radar_job, args=(token, channel), daemon=True).start()
 
 
 @app.post("/settings/global-radar")
@@ -248,8 +465,6 @@ def update_global_radar(req: GlobalRadarSettings):
     return {"status": "updated", "GlobalGameRadar": prefs["GlobalGameRadar"]}
 
 
-# ── Favorite Teams settings ───────────────────────────────────────────────────
-
 class FavoriteTeam(BaseModel):
     team_id: str
     team_name: str
@@ -260,7 +475,6 @@ class FavoriteTeam(BaseModel):
 
 @app.post("/settings/teams")
 def upsert_team(req: FavoriteTeam):
-    """Add or update a favorite team."""
     prefs = get_preferences()
     teams = [t for t in prefs.get("FavoriteTeams", []) if t["team_id"] != req.team_id]
     teams.append({
@@ -272,20 +486,17 @@ def upsert_team(req: FavoriteTeam):
     })
     prefs["FavoriteTeams"] = teams
     save_preferences(prefs)
-    _maybe_start_radar()  # favorite team added → radar needed
+    _maybe_start_radar()
     return {"status": "updated", "FavoriteTeams": teams}
 
 
 @app.delete("/settings/teams/{team_id}")
 def remove_team(team_id: str):
-    """Remove a favorite team."""
     prefs = get_preferences()
     prefs["FavoriteTeams"] = [t for t in prefs.get("FavoriteTeams", []) if t["team_id"] != team_id]
     save_preferences(prefs)
     return {"status": "removed", "FavoriteTeams": prefs["FavoriteTeams"]}
 
-
-# ── Favorite Players settings ─────────────────────────────────────────────────
 
 class FavoritePlayer(BaseModel):
     player_id:     str
@@ -299,9 +510,8 @@ class FavoritePlayer(BaseModel):
 
 @app.post("/settings/players")
 def upsert_player(req: FavoritePlayer):
-    """Add or update a favorite player."""
     print(
-        f"DEBUG: Received player: {req.name} (id={req.player_id}, "
+        f"DEBUG: Player upsert: {req.name} (id={req.player_id}, "
         f"total_pts={req.total_pts}, hot_start_q={req.hot_start_q}, "
         f"hot_start_pts={req.hot_start_pts}, td_watch={req.td_watch})",
         flush=True,
@@ -318,13 +528,12 @@ def upsert_player(req: FavoritePlayer):
     }
     prefs["FavoritePlayers"] = players
     save_preferences(prefs)
-    _maybe_start_radar()  # favorite player added → radar needed
+    _maybe_start_radar()
     return {"status": "updated", "FavoritePlayers": players}
 
 
 @app.delete("/settings/players/{player_id}")
 def remove_player(player_id: str):
-    """Remove a favorite player."""
     prefs = get_preferences()
     players: dict = prefs.get("FavoritePlayers", {})
     players.pop(player_id, None)
@@ -332,8 +541,6 @@ def remove_player(player_id: str):
     save_preferences(prefs)
     return {"status": "removed", "FavoritePlayers": players}
 
-
-# ── Historical Mode settings ──────────────────────────────────────────────────
 
 class HistoricalCategories(BaseModel):
     scoring_40_half:    bool = False
@@ -361,51 +568,84 @@ def update_historical(req: HistoricalSettings):
     }
     save_preferences(prefs)
     if req.enabled:
-        _maybe_start_radar()  # historical mode enabled → radar needed
+        _maybe_start_radar()
     return {"status": "updated", "HistoricalMode": prefs["HistoricalMode"]}
 
 
-# ── Data Endpoints ────────────────────────────────────────────────────────────
+class GlobalThresholdsRequest(BaseModel):
+    pts_threshold:       int  = 40
+    triple_double_watch: bool = True
+    pts_per_quarter:     int  = 15
+
+
+@app.post("/settings/thresholds")
+def update_thresholds(req: GlobalThresholdsRequest):
+    prefs = get_preferences()
+    prefs["GlobalThresholds"] = {
+        "pts_threshold":       req.pts_threshold,
+        "triple_double_watch": req.triple_double_watch,
+        "pts_per_quarter":     req.pts_per_quarter,
+    }
+    save_preferences(prefs)
+    return {"status": "updated", "GlobalThresholds": prefs["GlobalThresholds"]}
+
+
+# ── Token Registration ─────────────────────────────────────────────────────────
+
+class RegisterTokenRequest(BaseModel):
+    push_token: str
+    sound_channel: str = "classic_alarm"
+
+
+@app.post("/register-token")
+def register_token(req: RegisterTokenRequest):
+    if not req.push_token:
+        return {"status": "error", "detail": "empty push_token"}
+    print(f"DEBUG: /register-token  token='{req.push_token[:20]}...'  channel='{req.sound_channel}'", flush=True)
+    save_push_token(req.push_token, req.sound_channel)
+    threading.Thread(
+        target=start_radar_job,
+        args=(req.push_token, req.sound_channel),
+        daemon=True,
+    ).start()
+    return {"status": "token_registered", "push_token": req.push_token}
+
+
+# ── Data Endpoints ─────────────────────────────────────────────────────────────
 
 @app.get("/games")
 def games():
-    """Return today's NBA games."""
     return {"games": get_today_games()}
 
 
 @app.get("/roster")
 def roster(game_id: str):
-    """Return both teams' rosters for a game (legacy endpoint)."""
     return fetch_game_roster(game_id)
 
 
 @app.get("/game-summary")
 def game_summary(gameId: str):
-    """Return cached rosters for both teams in the given game."""
     return fetch_game_summary_roster(gameId)
 
 
 @app.get("/all-teams-and-players")
 def all_teams_and_players():
-    """Return all 30 cached NBA teams with their full rosters."""
     return {"teams": get_all_teams()}
 
 
 @app.get("/refresh-rosters")
 def refresh_rosters():
-    """Manually trigger a fresh fetch of all 30 NBA team rosters."""
     threading.Thread(target=update_all_rosters, daemon=True).start()
     return {"status": "roster_refresh_started"}
 
 
 @app.get("/active-monitors")
 def active_monitors():
-    """Return a full snapshot of everything the server is currently watching."""
     prefs = get_preferences()
     radar_cfg = prefs.get("GlobalGameRadar", {})
     return {
-        "game_alarms":    get_active_alarms(),
-        "player_alarms":  get_active_player_alarms(),
+        "game_alarms":   get_active_alarms(),
+        "player_alarms": get_active_player_alarms(),
         "global_radar": {
             "enabled":       radar_cfg.get("enabled", False),
             "running":       get_radar_status(),
@@ -427,68 +667,17 @@ def active_monitors():
 
 @app.delete("/active-monitors/game/{game_id}")
 def cancel_game(game_id: str):
-    """Cancel an active manual game alarm."""
     cancelled = cancel_game_alarm(game_id)
     return {"cancelled": cancelled, "game_id": game_id}
 
 
 @app.delete("/active-monitors/player/{player_id}")
 def cancel_player(player_id: str):
-    """Cancel an active manual player alarm."""
     cancelled = cancel_player_alarm(player_id)
     return {"cancelled": cancelled, "player_id": player_id}
 
 
-class GlobalThresholdsRequest(BaseModel):
-    pts_threshold:       int  = 40
-    triple_double_watch: bool = True
-    pts_per_quarter:     int  = 15
-
-
-@app.post("/settings/thresholds")
-def update_thresholds(req: GlobalThresholdsRequest):
-    """Save global player-alert thresholds used by the radar for all favorite players."""
-    prefs = get_preferences()
-    prefs["GlobalThresholds"] = {
-        "pts_threshold":       req.pts_threshold,
-        "triple_double_watch": req.triple_double_watch,
-        "pts_per_quarter":     req.pts_per_quarter,
-    }
-    save_preferences(prefs)
-    print(f"DEBUG: GlobalThresholds updated → pts={req.pts_threshold}, td={req.triple_double_watch}, ppq={req.pts_per_quarter}", flush=True)
-    return {"status": "updated", "GlobalThresholds": prefs["GlobalThresholds"]}
-
-
-class RegisterTokenRequest(BaseModel):
-    push_token: str
-    sound_channel: str = "classic_alarm"
-
-
-@app.post("/register-token")
-def register_token(req: RegisterTokenRequest):
-    """
-    Called by the app on startup to register the push token with the server.
-    This ensures the radar can send notifications even before any alarm is set.
-    """
-    print(f"DEBUG: /register-token hit. token='{req.push_token[:20]}...' channel='{req.sound_channel}'", flush=True)
-    if not req.push_token:
-        print("DEBUG: /register-token rejected – empty push_token", flush=True)
-        return {"status": "error", "detail": "empty push_token"}
-    save_push_token(req.push_token, req.sound_channel)
-    print(f"DEBUG: Push Token saved successfully: {req.push_token}", flush=True)
-    # Kick off the radar now that we have a token (singleton – safe to call repeatedly)
-    threading.Thread(
-        target=start_radar_job,
-        args=(req.push_token, req.sound_channel),
-        daemon=True,
-    ).start()
-    return {"status": "token_registered", "push_token": req.push_token}
-
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
+# ── Entry Point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8001))
