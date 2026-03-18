@@ -2,7 +2,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Device from 'expo-device';
 import * as Haptics from 'expo-haptics';
 import * as Notifications from 'expo-notifications';
-import * as TaskManager from 'expo-task-manager';
 import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
 import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useRef, useState } from 'react';
@@ -10,11 +9,9 @@ import {
   ActivityIndicator,
   Animated,
   AppState,
-  AppStateStatus,
   FlatList,
   Image,
   LayoutAnimation,
-  Linking,
   Modal,
   Platform,
   ScrollView,
@@ -29,11 +26,6 @@ import {
 import { BasketballToggle } from '../../components/basketball-toggle';
 import { NumericKeypad, useNumericKeypad } from '../../components/numeric-keypad';
 
-import { BACKGROUND_NOTIFICATION_TASK } from '../_background-notification-task';
-
-// ─── Alarm status key (AsyncStorage single source of truth) ───────────────────
-const ALARM_STATUS_KEY = 'ALARM_STATUS';
-
 // ─── Notification category ─────────────────────────────────────────────────
 // Registers the 'alarm' category with a DISMISS action button that appears
 // directly inside every alarm notification. Called once on startup.
@@ -41,26 +33,17 @@ async function registerAlarmCategory(): Promise<void> {
   try {
     await Notifications.setNotificationCategoryAsync('alarm', [
       {
-        identifier: 'DISMISS_ALARM',
+        identifier: 'dismiss',
         buttonTitle: 'DISMISS',
-        options: {
-          // true = Android wakes the JS thread before firing the response listener.
-          // Without this, a suspended background JS thread never receives the
-          // DISMISS_ALARM action and the button appears to do nothing.
-          opensAppToForeground: true,
-          isDestructive:           true,   // red tint on iOS
-          isAuthenticationRequired: false,
-        },
+        options: { isDestructive: true, opensAppToForeground: false },
       },
     ]);
-    console.log('[Category] Alarm category registered.');
   } catch (e) {
     console.warn('[Category] Could not register alarm category:', e);
   }
 }
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { AlarmOverlay } from '../../components/alarm-overlay';
 import { SkeletonGameCard } from '../../components/skeleton-card';
 import { SERVER_URL } from '../../config';
 
@@ -242,9 +225,12 @@ async function getPushToken(): Promise<string | undefined> {
   try {
     if (Platform.OS === 'android') {
       for (const ch of ANDROID_CHANNELS) {
+        // Delete first — Android ignores channel updates after first creation,
+        // so we must recreate to ensure audioAttributes (alarm stream) are applied
+        await Notifications.deleteNotificationChannelAsync(ch.id).catch(() => {});
         await Notifications.setNotificationChannelAsync(ch.id, {
           name:                 ch.name,
-          importance:           ch.isAlarm ? Notifications.AndroidImportance.MAX     : Notifications.AndroidImportance.DEFAULT,
+          importance:           ch.isAlarm ? Notifications.AndroidImportance.MAX : Notifications.AndroidImportance.DEFAULT,
           sound:                ch.sound,
           bypassDnd:            ch.isAlarm,
           showBadge:            true,
@@ -252,6 +238,14 @@ async function getPushToken(): Promise<string | undefined> {
           enableVibrate:        ch.isAlarm,
           vibrationPattern:     ch.isAlarm ? [0, 300, 200, 400] : undefined,
           lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+          // Route through STREAM_ALARM so the sound plays even in Silent / DND.
+          // FLAG_AUDIBILITY_ENFORCED (enforceAudibility) is the key flag that
+          // bypasses the silent switch at the OS level.
+          audioAttributes: ch.isAlarm ? {
+            contentType: Notifications.AndroidAudioContentType.SONIFICATION,
+            usage:        Notifications.AndroidAudioUsage.ALARM,
+            flags:        { enforceAudibility: true, requestHardwareAudioVideoSynchronization: false },
+          } : undefined,
         });
       }
     }
@@ -274,13 +268,10 @@ async function getPushToken(): Promise<string | undefined> {
 
     // Hardcoded projectId – never relies on app.json at runtime
     const projectId = EXPO_PROJECT_ID;
-    console.log('[TokenReg] Using projectId:', projectId);
     const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
-    console.log('[TokenReg] Token obtained:', token);
     return token;
   } catch (error: any) {
     alert(`Token Error: ${error?.message ?? String(error)}`);
-    console.error('[TokenReg] Error getting push token:', error);
     return undefined;
   }
 }
@@ -291,22 +282,14 @@ async function getPushToken(): Promise<string | undefined> {
  * so it works even when SERVER_URL points to localhost during dev.
  */
 async function sendTokenToServer(token: string): Promise<boolean> {
-  console.log('[TokenReg] POST →', REGISTER_TOKEN_URL);
   try {
     const resp = await fetch(REGISTER_TOKEN_URL, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ push_token: token, sound_channel: ALARM_CHANNEL }),
     });
-    if (resp.ok) {
-      console.log('[TokenReg] Server confirmed token registration.');
-      return true;
-    }
-    const text = await resp.text();
-    console.warn('[TokenReg] Server rejected token. Status:', resp.status, text);
-    return false;
-  } catch (e: any) {
-    console.warn('[TokenReg] Network error:', e?.message);
+    return resp.ok;
+  } catch {
     return false;
   }
 }
@@ -358,16 +341,8 @@ export default function HomeScreen() {
   const [earlyQuarter,      setEarlyQuarter]      = useState('3');
   const [tdWatchEnabled,    setTdWatchEnabled]    = useState(false);
 
-  // ── Android "Draw over other apps" banner ────────────────────────
-  // Shows ONCE ever (AsyncStorage persists across app kills).
-  const [showOverlayBanner, setShowOverlayBanner] = useState(false);
-
-  // ── Alarm overlay + audio ─────────────────────────────────────────
-  const [overlayVisible, setOverlayVisible] = useState(false);
-  const [overlayTitle, setOverlayTitle]     = useState('');
-  const [overlayBody, setOverlayBody]       = useState('');
-  const soundRef        = useRef<Audio.Sound | null>(null);
-  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // ── Alarm audio ───────────────────────────────────────────────────
+  const soundRef = useRef<Audio.Sound | null>(null);
 
   // ── Load favorites from server settings ──────────────────────────
   const loadFavorites = async () => {
@@ -464,41 +439,8 @@ export default function HomeScreen() {
     }
   };
 
-  // ── Check AsyncStorage for an alarm stored by the background task ────────
-  const checkPendingAlarm = async () => {
-    try {
-      // If the user already dismissed the alarm (e.g. via notification action),
-      // clear both keys and do not show the overlay.
-      const alarmStatus = await AsyncStorage.getItem(ALARM_STATUS_KEY);
-      if (alarmStatus === 'dismissed') {
-        await AsyncStorage.multiRemove(['pendingAlarm', ALARM_STATUS_KEY]);
-        return;
-      }
-
-      const raw = await AsyncStorage.getItem('pendingAlarm');
-      if (!raw) return;
-      const { title, body, ts } = JSON.parse(raw) as { title: string; body: string; ts: number };
-      // Ignore stale alarms older than 5 minutes
-      if (Date.now() - ts > 5 * 60 * 1000) {
-        await AsyncStorage.multiRemove(['pendingAlarm', ALARM_STATUS_KEY]);
-        return;
-      }
-      await AsyncStorage.removeItem('pendingAlarm');
-      triggerAlarm(title, body);
-    } catch (e) {
-      console.warn('[PendingAlarm] Read error:', e);
-    }
-  };
-
   // ── Alarm audio helpers ───────────────────────────────────────────
-  const triggerAlarm = async (title: string, body: string) => {
-    setOverlayTitle(title);
-    setOverlayBody(body);
-    setOverlayVisible(true);
-
-    // Mark alarm as active — DISMISS notification action will flip this to 'dismissed'
-    await AsyncStorage.setItem(ALARM_STATUS_KEY, 'active').catch(() => {});
-
+  const playAlarmSound = async () => {
     try {
       await Audio.setAudioModeAsync({
         playsInSilentModeIOS:    true,
@@ -516,30 +458,9 @@ export default function HomeScreen() {
     } catch (e) {
       console.error('Alarm sound error:', e);
     }
-
-    // Poll AsyncStorage every second — if DISMISS action was tapped the status
-    // will change to 'dismissed' and we stop the alarm without needing the JS
-    // notification response listener to fire.
-    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-    pollIntervalRef.current = setInterval(async () => {
-      try {
-        const status = await AsyncStorage.getItem(ALARM_STATUS_KEY);
-        if (status === 'dismissed') {
-          console.log('[Poll] ALARM_STATUS=dismissed detected — stopping alarm.');
-          await dismissAlarm();
-        }
-      } catch {}
-    }, 1000);
   };
 
-  const dismissAlarm = async () => {
-    // Clear the poll first so it doesn't re-enter
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-      pollIntervalRef.current = null;
-    }
-    setOverlayVisible(false);
-    await AsyncStorage.setItem(ALARM_STATUS_KEY, 'dismissed').catch(() => {});
+  const stopAlarmSound = async () => {
     if (soundRef.current) {
       try { await soundRef.current.stopAsync(); await soundRef.current.unloadAsync(); } catch {}
       soundRef.current = null;
@@ -548,28 +469,10 @@ export default function HomeScreen() {
 
   // ── Startup effect ────────────────────────────────────────────────
   useEffect(() => {
-    // Show Draw Over Apps banner only on first launch
-    if (Platform.OS === 'android') {
-      AsyncStorage.getItem('hasSeenOverlayPrompt').then(seen => {
-        if (!seen) setShowOverlayBanner(true);
-      });
-    }
-
     // Get token, save to state, register with server (retry every 30 s)
     getPushToken().then(async token => {
       if (!token) return;
       setExpoPushToken(token);
-
-      // Register background notification task (safe to call if already registered)
-      try {
-        const isRegistered = await TaskManager.isTaskRegisteredAsync(BACKGROUND_NOTIFICATION_TASK).catch(() => false);
-        if (!isRegistered) {
-          await Notifications.registerTaskAsync(BACKGROUND_NOTIFICATION_TASK);
-          console.log('[BGTask] Registered background notification task.');
-        }
-      } catch (e) {
-        console.warn('[BGTask] Could not register background task:', e);
-      }
 
       const success = await sendTokenToServer(token);
       if (!success) {
@@ -586,28 +489,38 @@ export default function HomeScreen() {
     // Register alarm notification category with DISMISS action button
     registerAlarmCategory();
 
-    // Cold-start: check AsyncStorage for alarm stored by background task
-    checkPendingAlarm();
+    // FSI fix: addNotificationReceivedListener only fires while the app has focus.
+    // When FSI brings a backgrounded app to the foreground, the "received" event
+    // has already passed. AppState catches every foreground transition and checks
+    // for a displayed alarm notification — covers both cold-start and resume cases.
+    const checkAlarmOnForeground = () => {
+      Notifications.getPresentedNotificationsAsync().then(presented => {
+        const alarm = presented.find(n => n.request.content.data?.alert_type === 'alarm');
+        if (alarm && !soundRef.current) playAlarmSound();
+      });
+    };
+    checkAlarmOnForeground(); // run once on mount (cold-start / FSI launch)
+    const appStateSub = AppState.addEventListener('change', state => {
+      if (state === 'active') checkAlarmOnForeground();
+    });
 
-    // Foreground-only: notification arrives while app is in foreground
+    // Foreground: notification arrives while app is open → play looping sound
     const subReceived = Notifications.addNotificationReceivedListener(notification => {
       const data = notification.request.content.data as any;
       if (data?.alert_type === 'alarm') {
-        triggerAlarm(
-          notification.request.content.title ?? 'Alarm',
-          notification.request.content.body  ?? '',
-        );
+        playAlarmSound();
       }
     });
 
-    // NOTE: addNotificationResponseReceivedListener and getLastNotificationResponseAsync
-    // are both handled in _layout.tsx at the root level so they remain active
-    // regardless of which tab is visible or whether HomeScreen is mounted.
-
-    // App foregrounded from background — pick up any alarm stored by background task
-    const appStateSub = AppState.addEventListener('change', (nextState: AppStateStatus) => {
-      if (nextState === 'active') {
-        checkPendingAlarm();
+    // Any state: user taps DISMISS on notification → stop sound + remove from tray
+    const subResponse = Notifications.addNotificationResponseReceivedListener(async response => {
+      const data = response.notification.request.content.data as any;
+      if (data?.alert_type !== 'alarm') return;
+      if (response.actionIdentifier === 'dismiss') {
+        await stopAlarmSound();
+        await Notifications.dismissNotificationAsync(
+          response.notification.request.identifier,
+        ).catch(() => {});
       }
     });
 
@@ -616,9 +529,9 @@ export default function HomeScreen() {
 
     return () => {
       subReceived.remove();
+      subResponse.remove();
       appStateSub.remove();
       clearInterval(refreshInterval);
-      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     };
   }, []);
 
@@ -683,8 +596,7 @@ export default function HomeScreen() {
           body: JSON.stringify(dbPayload),
         })
           .then(r => r.json())
-          .then(data => console.log('[DB] Game alarm saved to PostgreSQL:', data))
-          .catch(err => console.warn('[DB] /set_alarm failed (non-critical):', err));
+          .catch(() => {});
 
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         showInfo('Alarm Set!', `Now watching ${selectedGame.name}.`);
@@ -764,8 +676,7 @@ export default function HomeScreen() {
           }),
         })
           .then(r => r.json())
-          .then(data => console.log(`[DB] Saved ${cond.condition_type} alarm:`, data))
-          .catch(err => console.warn('[DB] /set_alarm failed (non-critical):', err));
+          .catch(() => {});
       }
 
       if (successCount > 0) {
@@ -786,35 +697,6 @@ export default function HomeScreen() {
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <Text style={styles.header}>NBA Smart Alarm</Text>
-
-      {/* ── Android "Draw over other apps" permission banner ─────────── */}
-      {showOverlayBanner && (
-        <View style={styles.overlayBanner}>
-          <Ionicons name="warning-outline" size={18} color="#f0a500" style={{ marginRight: 8 }} />
-          <Text style={styles.overlayBannerText} numberOfLines={2}>
-            Enable "Display over other apps" for the alarm overlay to appear on the lock screen.
-          </Text>
-          <TouchableOpacity
-            style={styles.overlayBannerBtn}
-            onPress={() => {
-              Linking.openSettings();
-              setShowOverlayBanner(false);
-              AsyncStorage.setItem('hasSeenOverlayPrompt', 'true');
-            }}
-          >
-            <Text style={styles.overlayBannerBtnText}>Enable</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => {
-              setShowOverlayBanner(false);
-              AsyncStorage.setItem('hasSeenOverlayPrompt', 'true');
-            }}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons name="close" size={18} color="#8b949e" />
-          </TouchableOpacity>
-        </View>
-      )}
 
       {/* Game list */}
       <Text style={[styles.sectionLabel, { paddingHorizontal: 16, marginBottom: 8 }]}>
@@ -846,14 +728,6 @@ export default function HomeScreen() {
           contentContainerStyle={{ paddingBottom: 24 }}
         />
       )}
-
-      {/* ── Alarm Overlay ── */}
-      <AlarmOverlay
-        visible={overlayVisible}
-        title={overlayTitle}
-        body={overlayBody}
-        onDismiss={dismissAlarm}
-      />
 
       {/* ── Alarm Modal ── */}
       <Modal visible={!!selectedGame} animationType="slide" transparent>
@@ -945,7 +819,7 @@ export default function HomeScreen() {
                     Roster currently unavailable. Try again closer to tip-off.
                   </Text>
                 ) : (
-                  <ScrollView style={styles.playerList} showsVerticalScrollIndicator={false}>
+                  <ScrollView style={styles.playerList} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 12 }}>
                     {teams.map(team => (
                       <View key={team.id}>
                         <View style={styles.teamHeader}>
@@ -1309,20 +1183,6 @@ const styles = StyleSheet.create({
     backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center',
     borderWidth: 1, borderColor: C.border,
   },
-
-  overlayBanner: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: 'rgba(240,165,0,0.1)',
-    borderColor: '#f0a500', borderWidth: 1,
-    borderRadius: 10, marginHorizontal: 16, marginBottom: 10,
-    paddingHorizontal: 10, paddingVertical: 8,
-  },
-  overlayBannerText: { flex: 1, fontSize: 12, color: '#e6edf3', lineHeight: 16 },
-  overlayBannerBtn: {
-    backgroundColor: '#f0a500', borderRadius: 6,
-    paddingHorizontal: 10, paddingVertical: 4, marginHorizontal: 8,
-  },
-  overlayBannerBtnText: { fontSize: 12, fontWeight: '700', color: '#000' },
 
   // ── Info Modal ────────────────────────────────────────────────────
   infoOverlay: {

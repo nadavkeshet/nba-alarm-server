@@ -217,6 +217,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1, backgroundColor: C.bg,
     paddingHorizontal: 28,
+    direction: 'ltr',
   },
 
   topBar: {

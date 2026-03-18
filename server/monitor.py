@@ -605,7 +605,7 @@ def _send_push_notification(
             return
 
     is_alarm  = (alert_type == "alarm")
-    ios_sound = ("default" if sound_channel == "default" else f"{sound_channel}.wav") if is_alarm else None
+    ios_sound = "classic_alarm.wav" if is_alarm else None
 
     payload = {
         "to":               push_token,

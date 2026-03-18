@@ -1,8 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   ActivityIndicator,
   FlatList,
   Modal,
@@ -13,7 +14,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BasketballToggle } from '../../components/basketball-toggle';
 import { NumericKeypad, useNumericKeypad } from '../../components/numeric-keypad';
@@ -23,7 +24,7 @@ import { SERVER_URL } from '../../config';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface GlobalRadar      { enabled: boolean; max_diff: number; start_quarter: number; alert_type: string }
-interface FavTeam          { team_id: string; team_name: string; max_diff: number; start_quarter: number }
+interface FavTeam          { team_id: string; team_name: string; max_diff: number; start_quarter: number; alert_type: string }
 // Stored on server as { player_id: { name, total_pts, early_pts_q, early_pts, td_watch, alert_type } }
 interface FavPlayerEntry {
   name:          string;
@@ -61,7 +62,7 @@ const C = {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function QRow({ value, onChange }: { value: string; onChange: (q: string) => void }) {
+const QRow = React.memo(function QRow({ value, onChange }: { value: string; onChange: (q: string) => void }) {
   return (
     <View style={styles.quarterRow}>
       {['1', '2', '3', '4'].map(q => (
@@ -75,11 +76,12 @@ function QRow({ value, onChange }: { value: string; onChange: (q: string) => voi
       ))}
     </View>
   );
-}
+});
 
 // ─── SettingsScreen ───────────────────────────────────────────────────────────
 
 export default function SettingsScreen() {
+  const insets = useSafeAreaInsets();
   const [userToken, setUserToken]       = useState('');
   const [settings, setSettings]         = useState<AppSettings | null>(null);
   const [loading, setLoading]           = useState(true);
@@ -88,30 +90,31 @@ export default function SettingsScreen() {
   const [guideVisible, setGuideVisible] = useState(false);
   const [allTeams, setAllTeams]         = useState<CachedTeam[]>([]);
 
+  // Stable separator — defined once so FlatList doesn't re-render rows on parent re-render
+  const ListSeparator = useCallback(() => <View style={styles.separator} />, []);
+
   // Global radar local inputs
   const [radarMaxDiff, setRadarMaxDiff] = useState('5');
   const [radarStartQ, setRadarStartQ]   = useState('4');
 
   // Per-team in-place edit state for existing favorites
-  const [teamEdits, setTeamEdits] = useState<Record<string, { max_diff: string; start_quarter: string }>>({});
+  const [teamEdits, setTeamEdits] = useState<Record<string, { max_diff: string; start_quarter: string; alert_type: string }>>({});
 
   // ── Add Team Modal state ──────────────────────────────────────────────
   const [teamModalVisible, setTeamModalVisible] = useState(false);
   const [pickedTeam, setPickedTeam]             = useState<CachedTeam | null>(null);
-  const [newTeamMaxDiff, setNewTeamMaxDiff]     = useState('5');
-  const [newTeamStartQ, setNewTeamStartQ]       = useState('4');
+  const [newTeamMaxDiff, setNewTeamMaxDiff]       = useState('5');
+  const [newTeamStartQ, setNewTeamStartQ]         = useState('4');
+  const [newTeamAlertType, setNewTeamAlertType]   = useState<'alarm' | 'silent'>('silent');
 
   // ── Numeric keypad ────────────────────────────────────────────────────
   const { kpVisible, kpValue, kpLabel, kpMaxLen, openKp, closeKp, onKpChange } = useNumericKeypad();
-
-  // ── Test Alarm state ─────────────────────────────────────────────────
-  const [testCountdown, setTestCountdown] = useState<number | null>(null);
 
   // Per-player in-place edit state (all 4 conditions + enabled toggles)
   const [playerEdits, setPlayerEdits] = useState<Record<string, {
     totalPtsEnabled: boolean; total_pts: string;
     hotStartEnabled: boolean; early_pts_q: string; early_pts: string;
-    td_watch: boolean;
+    td_watch: boolean; alert_type: string;
   }>>({});
 
   // ── Add Player Modal state ────────────────────────────────────────────
@@ -125,6 +128,7 @@ export default function SettingsScreen() {
   const [newHotStartQ,        setNewHotStartQ]        = useState('1');
   const [newHotStartPts,      setNewHotStartPts]      = useState('15');
   const [newTdWatch,          setNewTdWatch]          = useState(false);
+  const [newPlayerAlertType, setNewPlayerAlertType]   = useState<'alarm' | 'silent'>('silent');
 
   // ── Load push token once ───────────────────────────────────────────────
 
@@ -134,26 +138,35 @@ export default function SettingsScreen() {
       .catch(() => {});
   }, []);
 
-  // ── Load all data ──────────────────────────────────────────────────────
+  // ── Load teams once on mount (roster is static — no need to re-fetch on focus) ─
 
-  const loadAll = useCallback(async () => {
-    setLoading(true);
+  useEffect(() => {
+    fetch(`${SERVER_URL}/all-teams-and-players`)
+      .then(r => r.json())
+      .then(t => setAllTeams(t.teams ?? []))
+      .catch(() => {});
+  }, []);
+
+  // ── Load settings + radar (re-fetched on focus to reflect server changes) ──
+
+  const settingsLoaded = useRef(false);
+
+  const loadSettings = useCallback(async () => {
+    // Only show the loading spinner on the very first load
+    if (!settingsLoaded.current) setLoading(true);
     try {
       const tokenParam = userToken ? `?user_token=${encodeURIComponent(userToken)}` : '';
-      const [sRes, rRes, tRes] = await Promise.all([
+      const [sRes, rRes] = await Promise.all([
         fetch(`${SERVER_URL}/settings${tokenParam}`),
         fetch(`${SERVER_URL}/radar-status`),
-        fetch(`${SERVER_URL}/all-teams-and-players`),
       ]);
       const s: AppSettings = await sRes.json();
       const r              = await rRes.json();
-      const t              = await tRes.json();
 
       setSettings(s);
       setRadarRunning(r.running ?? false);
       setRadarMaxDiff(String(s.GlobalGameRadar?.max_diff ?? 5));
       setRadarStartQ(String(s.GlobalGameRadar?.start_quarter ?? 4));
-      setAllTeams(t.teams ?? []);
 
       // Init per-team editable fields
       const edits: Record<string, { max_diff: string; start_quarter: string }> = {};
@@ -182,58 +195,18 @@ export default function SettingsScreen() {
     } catch (e) {
       console.error('Settings load error:', e);
     } finally {
+      settingsLoaded.current = true;
       setLoading(false);
     }
   }, [userToken]);
 
+  // Re-fetch whenever the token becomes available (token arrives async after first render,
+  // so useFocusEffect alone misses it — the screen may already be focused by then)
+  useEffect(() => { loadSettings(); }, [loadSettings]);
+
   useFocusEffect(
-    useCallback(() => { loadAll(); }, [loadAll]),
+    useCallback(() => { loadSettings(); }, [loadSettings]),
   );
-
-  // ── Test Alarm ────────────────────────────────────────────────────────
-  const scheduleTestAlarm = async () => {
-    if (testCountdown !== null) return; // already counting
-    // Countdown display: 5 → 4 → 3 → 2 → 1 → fires
-    let secs = 5;
-    setTestCountdown(secs);
-    const ticker = setInterval(() => {
-      secs -= 1;
-      if (secs <= 0) {
-        clearInterval(ticker);
-        setTestCountdown(null);
-      } else {
-        setTestCountdown(secs);
-      }
-    }, 1000);
-
-    // Schedule a real local notification on the alarm channel after 5 s.
-    // This exercises the full path: channel sound → background task →
-    // AsyncStorage → AppState listener → overlay.
-    try {
-      await Notifications.scheduleNotificationAsync({
-        content: {
-          title:              '🚨 TEST ALARM',
-          body:               'This is your NBA Alarm overlay test.',
-          sound:              'classic_alarm.wav',
-          priority:           Notifications.AndroidNotificationPriority.MAX,
-          sticky:             true,
-          // Links this notification to the 'alarm' category so Android/iOS
-          // renders the DISMISS action button directly on the notification.
-          categoryIdentifier: 'alarm',
-          data:               { alert_type: 'alarm' },
-        },
-        trigger: {
-          type:      Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-          seconds:   5,
-          channelId: 'classic_alarm',
-        },
-      });
-    } catch (e: any) {
-      clearInterval(ticker);
-      setTestCountdown(null);
-      alert(`Test schedule failed: ${e?.message ?? String(e)}`);
-    }
-  };
 
   // ── API helpers ────────────────────────────────────────────────────────
 
@@ -288,7 +261,7 @@ export default function SettingsScreen() {
       } : s);
       setTeamEdits(prev => ({
         ...prev,
-        [payload.team_id]: { max_diff: String(payload.max_diff), start_quarter: String(payload.start_quarter) },
+        [payload.team_id]: { max_diff: String(payload.max_diff), start_quarter: String(payload.start_quarter), alert_type: payload.alert_type },
       }));
     } finally { setSaving(false); }
   };
@@ -307,16 +280,18 @@ export default function SettingsScreen() {
       team_name:     pickedTeam.name,
       max_diff:      parseInt(newTeamMaxDiff, 10) || 5,
       start_quarter: parseInt(newTeamStartQ, 10) || 4,
+      alert_type:    newTeamAlertType,
     });
     closeTeamModal();
   };
 
   const updateExistingTeam = async (team: FavTeam) => {
-    const edit = teamEdits[team.team_id] ?? { max_diff: '5', start_quarter: '4' };
+    const edit = teamEdits[team.team_id] ?? { max_diff: String(team.max_diff), start_quarter: String(team.start_quarter), alert_type: team.alert_type };
     await saveTeam({
       ...team,
       max_diff:      parseInt(edit.max_diff, 10) || 5,
       start_quarter: parseInt(edit.start_quarter, 10) || 4,
+      alert_type:    edit.alert_type,
     });
   };
 
@@ -337,7 +312,7 @@ export default function SettingsScreen() {
       early_pts_q:   newHotStartEnabled  ? (parseInt(newHotStartQ,   10) || 1)  : null,
       early_pts: newHotStartEnabled  ? (parseInt(newHotStartPts, 10) || 15) : null,
       td_watch:      newTdWatch,
-      alert_type:    'silent',
+      alert_type:    newPlayerAlertType,
     };
     setSaving(true);
     try {
@@ -355,7 +330,7 @@ export default function SettingsScreen() {
             early_pts_q:   payload.early_pts_q,
             early_pts: payload.early_pts,
             td_watch:      payload.td_watch,
-            alert_type:    'silent',
+            alert_type:    newPlayerAlertType,
           },
         },
       } : s);
@@ -368,6 +343,7 @@ export default function SettingsScreen() {
           early_pts_q:     String(payload.early_pts_q  ?? 1),
           early_pts:   String(payload.early_pts ?? 15),
           td_watch:        payload.td_watch,
+          alert_type:      newPlayerAlertType,
         },
       }));
       closePlayerModal();
@@ -428,6 +404,7 @@ export default function SettingsScreen() {
     setPickedTeam(null);
     setNewTeamMaxDiff('5');
     setNewTeamStartQ('4');
+    setNewTeamAlertType('silent');
     setTeamModalVisible(true);
   };
   const closeTeamModal = () => { setTeamModalVisible(false); setPickedTeam(null); };
@@ -447,6 +424,7 @@ export default function SettingsScreen() {
     setNewHotStartQ('1');
     setNewHotStartPts('15');
     setNewTdWatch(false);
+    setNewPlayerAlertType('silent');
   };
 
   // ── Derived ───────────────────────────────────────────────────────────
@@ -497,7 +475,7 @@ export default function SettingsScreen() {
             <Text style={styles.emptyHint}>No favorite teams yet.</Text>
           ) : (
             settings!.FavoriteTeams.map(t => {
-              const edit = teamEdits[t.team_id] ?? { max_diff: String(t.max_diff), start_quarter: String(t.start_quarter) };
+              const edit = teamEdits[t.team_id] ?? { max_diff: String(t.max_diff), start_quarter: String(t.start_quarter), alert_type: t.alert_type };
               return (
                 <View key={t.team_id} style={styles.favCard}>
                   <View style={styles.favCardHeader}>
@@ -520,6 +498,21 @@ export default function SettingsScreen() {
                     value={edit.start_quarter}
                     onChange={q => setTeamEdits(prev => ({ ...prev, [t.team_id]: { ...edit, start_quarter: q } }))}
                   />
+
+                  <View style={styles.alertTypeRow}>
+                    {(['alarm', 'silent'] as const).map(type => (
+                      <TouchableOpacity
+                        key={type}
+                        style={[styles.alertTypeBtn, (edit.alert_type ?? 'silent') === type && styles.alertTypeBtnActive]}
+                        onPress={() => setTeamEdits(prev => ({ ...prev, [t.team_id]: { ...edit, alert_type: type } }))}
+                      >
+                        <Text style={styles.alertTypeIcon}>{type === 'alarm' ? '🚨' : '🔕'}</Text>
+                        <Text style={[styles.alertTypeText, (edit.alert_type ?? 'silent') === type && styles.alertTypeTextActive]}>
+                          {type === 'alarm' ? 'Alarm' : 'Silent'}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
 
                   <TouchableOpacity style={styles.updateBtn} onPress={() => updateExistingTeam(t)} disabled={saving}>
                     <Text style={styles.updateBtnText}>Update</Text>
@@ -555,6 +548,7 @@ export default function SettingsScreen() {
                 early_pts_q:     String(p.early_pts_q   ?? 1),
                 early_pts:   String(p.early_pts ?? 15),
                 td_watch:        p.td_watch ?? false,
+                alert_type:      p.alert_type ?? 'silent',
               };
               const setEdit = (patch: Partial<typeof edit>) =>
                 setPlayerEdits(prev => ({ ...prev, [pid]: { ...edit, ...patch } }));
@@ -628,9 +622,24 @@ export default function SettingsScreen() {
                     </View>
                   </View>
 
+                  <View style={styles.alertTypeRow}>
+                    {(['alarm', 'silent'] as const).map(type => (
+                      <TouchableOpacity
+                        key={type}
+                        style={[styles.alertTypeBtn, (edit.alert_type ?? 'silent') === type && styles.alertTypeBtnActive]}
+                        onPress={() => setEdit({ alert_type: type })}
+                      >
+                        <Text style={styles.alertTypeIcon}>{type === 'alarm' ? '🚨' : '🔕'}</Text>
+                        <Text style={[styles.alertTypeText, (edit.alert_type ?? 'silent') === type && styles.alertTypeTextActive]}>
+                          {type === 'alarm' ? 'Alarm' : 'Silent'}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
                   <TouchableOpacity
                     style={[styles.updateBtn, { marginTop: 4 }]}
-                    onPress={() => savePlayerSettings(pid, p.name, p.alert_type)}
+                    onPress={() => savePlayerSettings(pid, p.name, edit.alert_type ?? p.alert_type)}
                     disabled={saving}
                   >
                     <Text style={styles.updateBtnText}>Update</Text>
@@ -760,22 +769,33 @@ export default function SettingsScreen() {
           )}
         </View>
 
-        {/* ── Test Alarm ──────────────────────────────────────────── */}
-        <View style={[styles.section, { marginBottom: 32 }]}>
-          <Text style={styles.sectionTitle}>DEBUG</Text>
-          <Text style={[styles.rowSub, { marginBottom: 12 }]}>
-            Lock your screen or go to home, then tap the button. The overlay should appear when you return.
-          </Text>
-          <TouchableOpacity
-            style={[styles.confirmBtn, testCountdown !== null && { backgroundColor: C.border }]}
-            onPress={scheduleTestAlarm}
-            disabled={testCountdown !== null}
-          >
-            <Text style={styles.confirmBtnText}>
-              {testCountdown !== null ? `Firing in ${testCountdown}s…` : 'Test Alarm (5s delay)'}
-            </Text>
-          </TouchableOpacity>
-        </View>
+        {/* ── TEST ALARM (remove before release) ───────────────────── */}
+        <TouchableOpacity
+          style={[styles.guideBtn, { borderColor: 'rgba(255,0,0,0.4)', backgroundColor: 'rgba(255,0,0,0.08)', marginBottom: 8 }]}
+          onPress={async () => {
+            try {
+              await Notifications.scheduleNotificationAsync({
+                content: {
+                  title:              '🚨 Test Alarm',
+                  body:               'Screen wake + sound test — tap Dismiss to stop',
+                  sound:              'classic_alarm.wav',
+                  vibrate:            [0, 300, 200, 400],
+                  priority:           Notifications.AndroidNotificationPriority.MAX,
+                  data:               { alert_type: 'alarm' },
+                  categoryIdentifier: 'alarm',
+                },
+                trigger: {
+                  type:    Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+                  seconds: 5,
+                },
+              });
+              Alert.alert('5 seconds!', 'Lock the screen now.');
+            } catch (e) { console.warn('Test alarm error:', e); }
+          }}
+        >
+          <Ionicons name="warning-outline" size={20} color="#ff4444" />
+          <Text style={[styles.guideBtnText, { color: '#ff4444' }]}>Test Alarm (dev only)</Text>
+        </TouchableOpacity>
 
         {/* ── App Guide button ──────────────────────────────────────── */}
         <TouchableOpacity
@@ -800,7 +820,7 @@ export default function SettingsScreen() {
       ═══════════════════════════════════════════════════════════════ */}
       <Modal visible={teamModalVisible} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalSheet}>
+          <View style={[styles.modalSheet, { paddingBottom: insets.bottom }]}>
 
             {/* Header */}
             <View style={styles.modalHeader}>
@@ -823,6 +843,9 @@ export default function SettingsScreen() {
               <FlatList
                 data={allTeams}
                 keyExtractor={t => t.id}
+                initialNumToRender={15}
+                maxToRenderPerBatch={10}
+                windowSize={5}
                 renderItem={({ item: t }) => {
                   const isFav = favTeamIds.has(t.id);
                   return (
@@ -839,7 +862,8 @@ export default function SettingsScreen() {
                     </TouchableOpacity>
                   );
                 }}
-                ItemSeparatorComponent={() => <View style={styles.separator} />}
+                ItemSeparatorComponent={ListSeparator}
+                contentContainerStyle={{ paddingBottom: 24 }}
               />
             )}
 
@@ -860,6 +884,21 @@ export default function SettingsScreen() {
 
                   <Text style={styles.inputLabel}>START MONITORING FROM QUARTER</Text>
                   <QRow value={newTeamStartQ} onChange={setNewTeamStartQ} />
+
+                  <View style={styles.alertTypeRow}>
+                    {(['alarm', 'silent'] as const).map(type => (
+                      <TouchableOpacity
+                        key={type}
+                        style={[styles.alertTypeBtn, newTeamAlertType === type && styles.alertTypeBtnActive]}
+                        onPress={() => setNewTeamAlertType(type)}
+                      >
+                        <Text style={styles.alertTypeIcon}>{type === 'alarm' ? '🚨' : '🔕'}</Text>
+                        <Text style={[styles.alertTypeText, newTeamAlertType === type && styles.alertTypeTextActive]}>
+                          {type === 'alarm' ? 'Alarm' : 'Silent'}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
 
                   <View style={styles.configSummary}>
                     <Ionicons name="information-circle-outline" size={14} color={C.textMuted} />
@@ -890,7 +929,7 @@ export default function SettingsScreen() {
       ═══════════════════════════════════════════════════════════════ */}
       <Modal visible={playerModalVisible} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalSheet}>
+          <View style={[styles.modalSheet, { paddingBottom: insets.bottom }]}>
 
             {/* Header */}
             <View style={styles.modalHeader}>
@@ -923,6 +962,9 @@ export default function SettingsScreen() {
               <FlatList
                 data={allTeams}
                 keyExtractor={t => t.id}
+                initialNumToRender={15}
+                maxToRenderPerBatch={10}
+                windowSize={5}
                 renderItem={({ item: t }) => (
                   <TouchableOpacity
                     style={styles.pickerRow}
@@ -935,7 +977,8 @@ export default function SettingsScreen() {
                     </View>
                   </TouchableOpacity>
                 )}
-                ItemSeparatorComponent={() => <View style={styles.separator} />}
+                ItemSeparatorComponent={ListSeparator}
+                contentContainerStyle={{ paddingBottom: 24 }}
               />
             )}
 
@@ -944,6 +987,9 @@ export default function SettingsScreen() {
               <FlatList
                 data={pickedTeamForPlayer.players}
                 keyExtractor={p => p.id}
+                initialNumToRender={17}
+                maxToRenderPerBatch={10}
+                windowSize={3}
                 renderItem={({ item: p }) => {
                   const isFav = favPlayerIds.has(p.id);
                   return (
@@ -964,7 +1010,8 @@ export default function SettingsScreen() {
                     </TouchableOpacity>
                   );
                 }}
-                ItemSeparatorComponent={() => <View style={styles.separator} />}
+                ItemSeparatorComponent={ListSeparator}
+                contentContainerStyle={{ paddingBottom: 24 }}
               />
             )}
 
@@ -1043,6 +1090,22 @@ export default function SettingsScreen() {
                         onValueChange={setNewTdWatch}
                       />
                     </View>
+                  </View>
+
+                  {/* ── Alert Type ── */}
+                  <View style={styles.alertTypeRow}>
+                    {(['alarm', 'silent'] as const).map(type => (
+                      <TouchableOpacity
+                        key={type}
+                        style={[styles.alertTypeBtn, newPlayerAlertType === type && styles.alertTypeBtnActive]}
+                        onPress={() => setNewPlayerAlertType(type)}
+                      >
+                        <Text style={styles.alertTypeIcon}>{type === 'alarm' ? '🚨' : '🔕'}</Text>
+                        <Text style={[styles.alertTypeText, newPlayerAlertType === type && styles.alertTypeTextActive]}>
+                          {type === 'alarm' ? 'Alarm' : 'Silent'}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
                   </View>
 
                   {/* ── Summary ── */}

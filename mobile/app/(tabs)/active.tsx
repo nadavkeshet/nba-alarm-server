@@ -2,9 +2,10 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import { useFocusEffect } from 'expo-router';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
+  InteractionManager,
   Modal,
   ScrollView,
   StyleSheet,
@@ -126,40 +127,43 @@ const CONDITION_LABEL: Record<string, string> = {
 
 // ─── Pulsing Card (for LIVE alarms) ───────────────────────────────────────────
 
-function PulsingCard({ children }: { children: React.ReactNode }) {
+const PulsingCard = React.memo(function PulsingCard({ children }: { children: React.ReactNode }) {
   const pulse = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, { toValue: 1, duration: 1400, useNativeDriver: false }),
-        Animated.timing(pulse, { toValue: 0, duration: 1400, useNativeDriver: false }),
-      ]),
-    ).start();
+    // Defer animation start until after the tab-switch interaction completes
+    // so it doesn't compete with the navigation gesture on the JS thread
+    const handle = InteractionManager.runAfterInteractions(() => {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulse, { toValue: 1, duration: 1400, useNativeDriver: true }),
+          Animated.timing(pulse, { toValue: 0, duration: 1400, useNativeDriver: true }),
+        ]),
+      ).start();
+    });
+    return () => { handle.cancel(); };
   }, [pulse]);
 
-  const borderColor = pulse.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['rgba(255,107,0,0.25)', 'rgba(255,107,0,0.85)'],
-  });
-
   return (
-    <Animated.View style={[styles.alarmCard, styles.alarmCardLive, { borderColor }]}>
+    // Base card keeps a faint static border; the bright border fades in/out
+    // via an absolutely-positioned overlay — opacity is native-driver safe
+    <View style={[styles.alarmCard, styles.alarmCardLive]}>
+      <Animated.View style={[styles.pulsingBorder, { opacity: pulse }]} pointerEvents="none" />
       {children}
-    </Animated.View>
+    </View>
   );
-}
+});
 
 // ─── Status Pills ─────────────────────────────────────────────────────────────
 
-function LivePill({ label, color, bg }: { label: string; color: string; bg: string }) {
+const LivePill = React.memo(function LivePill({ label, color, bg }: { label: string; color: string; bg: string }) {
   return (
     <View style={[styles.pill, { backgroundColor: bg }]}>
       <View style={[styles.pillDot, { backgroundColor: color }]} />
       <Text style={[styles.pillText, { color }]}>{label}</Text>
     </View>
   );
-}
+});
 
 // ─── ActiveScreen ─────────────────────────────────────────────────────────────
 
@@ -169,6 +173,9 @@ export default function ActiveScreen() {
   const [error, setError]         = useState<string | null>(null);
   const [trophies, setTrophies]   = useState<TrophyHit[]>([]);
   const tokenRef                  = useRef<string | null>(null);
+  // Tracks whether we've ever completed a load — used to skip showing the
+  // skeleton on subsequent tab-focus refreshes (stale-while-revalidate)
+  const dataLoadedRef             = useRef(false);
 
   // Custom confirm modal (replaces system Alert for deletions)
   const [confirmModal, setConfirmModal] = useState<{
@@ -220,10 +227,15 @@ export default function ActiveScreen() {
 
   const load = useCallback(async () => {
     setError(null);
-    setLoading(true);
+    // Only show skeleton on the very first load — on subsequent tab-focus
+    // refreshes the existing data stays visible while the fetch runs in background
+    if (!dataLoadedRef.current) setLoading(true);
     try {
       const token = await resolveToken();
-      if (!token) { setError('Push token unavailable. Please restart the app.'); return; }
+      if (!token) {
+        if (!dataLoadedRef.current) setError('Push token unavailable. Please restart the app.');
+        return;
+      }
       const resp = await fetch(`${SERVER_URL}/active-monitors?user_token=${encodeURIComponent(token)}`);
       if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
       const raw = await resp.json();
@@ -238,8 +250,10 @@ export default function ActiveScreen() {
       };
       setData(d);
     } catch (e: any) {
-      setError(e?.message ?? 'Failed to load. Check your connection.');
+      // Only surface the error when there's nothing to show — otherwise keep stale data visible
+      if (!dataLoadedRef.current) setError(e?.message ?? 'Failed to load. Check your connection.');
     } finally {
+      dataLoadedRef.current = true;
       setLoading(false);
     }
   }, [resolveToken]);
@@ -250,6 +264,26 @@ export default function ActiveScreen() {
       loadTrophies();
     }, [load]),
   );
+
+  // ── Derived state — memoised so filters don't re-run on every render ───
+
+  const derived = useMemo(() => {
+    const allDbAlarms    = Array.isArray(data?.db_alarms) ? data!.db_alarms : [];
+    const dbGameAlarms   = allDbAlarms.filter(a => (a.condition_type ?? '').trim().toLowerCase() === 'score_diff');
+    const dbPlayerAlarms = allDbAlarms.filter(a => {
+      const ct = (a.condition_type ?? '').trim().toLowerCase();
+      return ct === 'points' || ct === 'triple_double';
+    });
+    const liveGameAlarms   = Array.isArray(data?.game_alarms)   ? data!.game_alarms   : [];
+    const livePlayerAlarms = Array.isArray(data?.player_alarms) ? data!.player_alarms : [];
+    const histCats = data?.historical_mode?.categories;
+    const activeCategories = histCats ? [
+      histCats.scoring_40_half    && '40+ pts before halftime',
+      histCats.threes_11          && '11+ three-pointers',
+      histCats.quad_double_threat && 'Quad-double threat',
+    ].filter(Boolean) as string[] : [];
+    return { dbGameAlarms, dbPlayerAlarms, liveGameAlarms, livePlayerAlarms, activeCategories };
+  }, [data]);
 
   const cancelGameAlarm = (alarm: GameAlarm) => {
     showConfirm(`Stop watching "${alarm.game_name}"?`, () => {
@@ -322,26 +356,10 @@ export default function ActiveScreen() {
 
   const radar    = data?.global_radar;
   const hist     = data?.historical_mode;
-  const histCats = hist?.categories;
 
-  const allDbAlarms    = Array.isArray(data?.db_alarms) ? data!.db_alarms : [];
-  const dbGameAlarms   = allDbAlarms.filter(a => (a.condition_type ?? '').trim().toLowerCase() === 'score_diff');
-  const dbPlayerAlarms = allDbAlarms.filter(a => {
-    const ct = (a.condition_type ?? '').trim().toLowerCase();
-    return ct === 'points' || ct === 'triple_double';
-  });
-
-  const liveGameAlarms   = Array.isArray(data?.game_alarms)   ? data!.game_alarms   : [];
-  const livePlayerAlarms = Array.isArray(data?.player_alarms) ? data!.player_alarms : [];
-
+  const { dbGameAlarms, dbPlayerAlarms, liveGameAlarms, livePlayerAlarms, activeCategories } = derived;
   const totalGameAlarms   = liveGameAlarms.length   + dbGameAlarms.length;
   const totalPlayerAlarms = livePlayerAlarms.length + dbPlayerAlarms.length;
-
-  const activeCategories = histCats ? [
-    histCats.scoring_40_half    && '40+ pts before halftime',
-    histCats.threes_11          && '11+ three-pointers',
-    histCats.quad_double_threat && 'Quad-double threat',
-  ].filter(Boolean) as string[] : [];
 
   return (
     <SafeAreaView style={styles.container}>
@@ -673,11 +691,17 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: C.borderMuted,
     padding: 12,
   },
-  // Live card (animated borderColor applied via PulsingCard)
+  // Live card — base faint border; bright border pulsed by the native-driver overlay
   alarmCardLive: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: 'rgba(255,107,0,0.04)', borderRadius: 12,
-    borderWidth: 1.5, padding: 12,
+    borderWidth: 1.5, borderColor: 'rgba(255,107,0,0.25)', padding: 12,
+  },
+  // Absolutely-positioned overlay whose opacity is animated with useNativeDriver: true
+  pulsingBorder: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 12, borderWidth: 1.5,
+    borderColor: 'rgba(255,107,0,0.85)',
   },
   alarmCardLeft: { flex: 1 },
 

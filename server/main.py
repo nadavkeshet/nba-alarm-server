@@ -84,6 +84,7 @@ class FavoritePlayerDB(_Base):
     early_pts     = Column(Integer, nullable=True)
     early_pts_q   = Column(Integer, nullable=True)
     td_watch      = Column(Boolean, default=False, nullable=False)
+    alert_type    = Column(String,  nullable=True, default='silent')
 
 
 class FavoriteTeamDB(_Base):
@@ -96,6 +97,7 @@ class FavoriteTeamDB(_Base):
     team_name     = Column(String,  nullable=True)
     score_gap     = Column(Integer, nullable=True)    # max_diff
     start_quarter = Column(Integer, nullable=True)
+    alert_type    = Column(String,  nullable=True, default='silent')
 
 
 class UserPreferenceDB(_Base):
@@ -133,6 +135,8 @@ def _init_db() -> None:
         "ALTER TABLE favorites RENAME COLUMN hot_start_pts TO early_pts",
         "ALTER TABLE favorites RENAME COLUMN hot_start_q   TO early_pts_q",
         "ALTER TABLE user_preferences ADD COLUMN hist_alert_type VARCHAR NOT NULL DEFAULT 'silent'",
+        "ALTER TABLE favorites      ADD COLUMN alert_type VARCHAR DEFAULT 'silent'",
+        "ALTER TABLE favorite_teams ADD COLUMN alert_type VARCHAR DEFAULT 'silent'",
     ]
     for sql in migrations:
         try:
@@ -166,7 +170,7 @@ def _restore_prefs_from_db(user_token: str) -> None:
                     "early_pts_q":   p.early_pts_q,
                     "early_pts": p.early_pts,
                     "td_watch":      bool(p.td_watch),
-                    "alert_type":    "silent",
+                    "alert_type":    p.alert_type or "silent",
                 }
                 for p in players
             }
@@ -176,7 +180,7 @@ def _restore_prefs_from_db(user_token: str) -> None:
                     "team_name":     t.team_name or "",
                     "max_diff":      t.score_gap or 5,
                     "start_quarter": t.start_quarter or 4,
-                    "alert_type":    "silent",
+                    "alert_type":    t.alert_type or "silent",
                 }
                 for t in teams
             ]
@@ -748,7 +752,7 @@ def get_settings(user_token: str = ""):
                     "early_pts_q":   p.early_pts_q,
                     "early_pts": p.early_pts,
                     "td_watch":      bool(p.td_watch),
-                    "alert_type":    "silent",
+                    "alert_type":    p.alert_type or "silent",
                 }
                 for p in players
             }
@@ -758,7 +762,7 @@ def get_settings(user_token: str = ""):
                     "team_name":     t.team_name or "",
                     "max_diff":      t.score_gap or 5,
                     "start_quarter": t.start_quarter or 4,
-                    "alert_type":    "silent",
+                    "alert_type":    t.alert_type or "silent",
                 }
                 for t in teams
             ]
@@ -852,11 +856,12 @@ def upsert_team(req: FavoriteTeam):
                     existing.team_name     = req.team_name
                     existing.score_gap     = req.max_diff
                     existing.start_quarter = req.start_quarter
+                    existing.alert_type    = req.alert_type
                 else:
                     session.add(FavoriteTeamDB(
                         user_token=req.user_token, team_id=req.team_id,
                         team_name=req.team_name, score_gap=req.max_diff,
-                        start_quarter=req.start_quarter,
+                        start_quarter=req.start_quarter, alert_type=req.alert_type,
                     ))
                 session.commit()
             print(f"DB: Upserted favorite team {req.team_name}", flush=True)
@@ -919,12 +924,13 @@ def upsert_player(req: FavoritePlayer):
                     existing.early_pts_q   = req.early_pts_q
                     existing.early_pts = req.early_pts
                     existing.td_watch      = req.td_watch
+                    existing.alert_type    = req.alert_type
                 else:
                     session.add(FavoritePlayerDB(
                         user_token=req.user_token, target_id=req.player_id,
                         target_name=req.name, total_pts=req.total_pts,
                         early_pts_q=req.early_pts_q, early_pts=req.early_pts,
-                        td_watch=req.td_watch,
+                        td_watch=req.td_watch, alert_type=req.alert_type,
                     ))
                 session.commit()
             print(f"DB: Upserted favorite player {req.name}", flush=True)
