@@ -107,7 +107,8 @@ class UserPreferenceDB(_Base):
     radar_gap               = Column(Integer, default=5,       nullable=False)
     radar_start_q           = Column(Integer, default=4,       nullable=False)
     historical_mode_enabled = Column(Boolean, default=False,   nullable=False)
-    alert_type              = Column(String,  default="silent", nullable=False)
+    alert_type              = Column(String,  default="silent", nullable=False)  # radar
+    hist_alert_type         = Column(String,  default="silent", nullable=False)  # historical
     hist_scoring_40_half    = Column(Boolean, default=False,   nullable=False)
     hist_threes_11          = Column(Boolean, default=False,   nullable=False)
     hist_quad_double        = Column(Boolean, default=False,   nullable=False)
@@ -129,8 +130,9 @@ def _init_db() -> None:
     migrations = [
         "ALTER TABLE alarms ADD COLUMN target_name   VARCHAR",
         "ALTER TABLE alarms ADD COLUMN start_quarter INTEGER",
-        "ALTER TABLE favorites RENAME COLUMN early_pts TO early_pts",
-        "ALTER TABLE favorites RENAME COLUMN early_pts_q   TO early_pts_q",
+        "ALTER TABLE favorites RENAME COLUMN hot_start_pts TO early_pts",
+        "ALTER TABLE favorites RENAME COLUMN hot_start_q   TO early_pts_q",
+        "ALTER TABLE user_preferences ADD COLUMN hist_alert_type VARCHAR NOT NULL DEFAULT 'silent'",
     ]
     for sql in migrations:
         try:
@@ -191,7 +193,7 @@ def _restore_prefs_from_db(user_token: str) -> None:
             }
             prefs["HistoricalMode"] = {
                 "enabled":    pref.historical_mode_enabled,
-                "alert_type": pref.alert_type,
+                "alert_type": pref.hist_alert_type,
                 "categories": {
                     "scoring_40_half":    pref.hist_scoring_40_half,
                     "threes_11":          pref.hist_threes_11,
@@ -771,7 +773,7 @@ def get_settings(user_token: str = ""):
                 }
                 hist_cfg = {
                     "enabled":    pref.historical_mode_enabled,
-                    "alert_type": pref.alert_type,
+                    "alert_type": pref.hist_alert_type,
                     "categories": {
                         "scoring_40_half":    pref.hist_scoring_40_half,
                         "threes_11":          pref.hist_threes_11,
@@ -989,7 +991,7 @@ def update_historical(req: HistoricalSettings):
                     pref.hist_scoring_40_half    = req.categories.scoring_40_half
                     pref.hist_threes_11          = req.categories.threes_11
                     pref.hist_quad_double        = req.categories.quad_double_threat
-                    pref.alert_type              = req.alert_type
+                    pref.hist_alert_type         = req.alert_type
                 else:
                     session.add(UserPreferenceDB(
                         user_token=req.user_token,
@@ -997,7 +999,7 @@ def update_historical(req: HistoricalSettings):
                         hist_scoring_40_half=req.categories.scoring_40_half,
                         hist_threes_11=req.categories.threes_11,
                         hist_quad_double=req.categories.quad_double_threat,
-                        alert_type=req.alert_type,
+                        hist_alert_type=req.alert_type,
                     ))
                 session.commit()
         except Exception as exc:

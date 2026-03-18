@@ -604,20 +604,19 @@ def _send_push_notification(
             log.warning("No push token – skipping notification.")
             return
 
-    ios_sound = "default" if sound_channel == "default" else f"{sound_channel}.wav"
+    is_alarm  = (alert_type == "alarm")
+    ios_sound = ("default" if sound_channel == "default" else f"{sound_channel}.wav") if is_alarm else None
 
     payload = {
         "to":               push_token,
         "title":            title,
         "body":             body,
-        "sound":            ios_sound,
+        "sound":            ios_sound,          # None for silent → filtered out below
         "priority":         "high",
-        "channelId":        sound_channel,
-        # Attach the 'alarm' category so the app's registered DISMISS action
-        # button appears directly on the notification on both iOS and Android.
-        "categoryId":       "alarm" if alert_type == "alarm" else None,
-        # iOS: content-available wakes the app in background so the
-        # notification-response listener can fire without user interaction
+        "channelId":        sound_channel if is_alarm else "silent",
+        # categoryId (DISMISS button) only for alarm-type notifications
+        "categoryId":       "alarm" if is_alarm else None,
+        # iOS: content-available wakes the app in background
         "mutableContent":   True,
         "data":             {"alert_type": alert_type},
     }

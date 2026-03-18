@@ -79,18 +79,24 @@ const REGISTER_TOKEN_URL = `${SERVER_URL}/register-token`;
 
 const ALARM_CHANNEL = 'classic_alarm';
 const ANDROID_CHANNELS = [
-  { id: ALARM_CHANNEL, name: 'Classic Alarm', sound: 'classic_alarm.wav' },
+  { id: 'classic_alarm', name: 'Classic Alarm',        sound: 'classic_alarm.wav', isAlarm: true  },
+  { id: 'silent',        name: 'Silent Notifications', sound: null,                isAlarm: false },
 ];
 
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-    priority: Notifications.AndroidNotificationPriority.MAX,
-  }),
+  handleNotification: async (notification) => {
+    const isAlarm = notification.request.content.data?.alert_type === 'alarm';
+    return {
+      shouldShowAlert: true,
+      shouldPlaySound: isAlarm,
+      shouldSetBadge:  false,
+      shouldShowBanner: true,
+      shouldShowList:  true,
+      priority: isAlarm
+        ? Notifications.AndroidNotificationPriority.MAX
+        : Notifications.AndroidNotificationPriority.DEFAULT,
+    };
+  },
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -238,13 +244,13 @@ async function getPushToken(): Promise<string | undefined> {
       for (const ch of ANDROID_CHANNELS) {
         await Notifications.setNotificationChannelAsync(ch.id, {
           name:                 ch.name,
-          importance:           Notifications.AndroidImportance.MAX,
+          importance:           ch.isAlarm ? Notifications.AndroidImportance.MAX     : Notifications.AndroidImportance.DEFAULT,
           sound:                ch.sound,
-          bypassDnd:            true,
+          bypassDnd:            ch.isAlarm,
           showBadge:            true,
-          enableLights:         true,
-          enableVibrate:        true,
-          vibrationPattern:     [0, 300, 200, 400],
+          enableLights:         ch.isAlarm,
+          enableVibrate:        ch.isAlarm,
+          vibrationPattern:     ch.isAlarm ? [0, 300, 200, 400] : undefined,
           lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
         });
       }
