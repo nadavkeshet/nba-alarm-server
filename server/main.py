@@ -81,8 +81,8 @@ class FavoritePlayerDB(_Base):
     target_name   = Column(String,  nullable=True)
     team_name     = Column(String,  nullable=True)
     total_pts     = Column(Integer, nullable=True)    # None = condition disabled
-    hot_start_pts = Column(Integer, nullable=True)
-    hot_start_q   = Column(Integer, nullable=True)
+    early_pts     = Column(Integer, nullable=True)
+    early_pts_q   = Column(Integer, nullable=True)
     td_watch      = Column(Boolean, default=False, nullable=False)
 
 
@@ -129,6 +129,8 @@ def _init_db() -> None:
     migrations = [
         "ALTER TABLE alarms ADD COLUMN target_name   VARCHAR",
         "ALTER TABLE alarms ADD COLUMN start_quarter INTEGER",
+        "ALTER TABLE favorites RENAME COLUMN early_pts TO early_pts",
+        "ALTER TABLE favorites RENAME COLUMN early_pts_q   TO early_pts_q",
     ]
     for sql in migrations:
         try:
@@ -159,8 +161,8 @@ def _restore_prefs_from_db(user_token: str) -> None:
                 p.target_id: {
                     "name":          p.target_name or "",
                     "total_pts":     p.total_pts,
-                    "hot_start_q":   p.hot_start_q,
-                    "hot_start_pts": p.hot_start_pts,
+                    "early_pts_q":   p.early_pts_q,
+                    "early_pts": p.early_pts,
                     "td_watch":      bool(p.td_watch),
                     "alert_type":    "silent",
                 }
@@ -356,9 +358,9 @@ def _check_fav_player(fav: FavoritePlayerDB, events: list[dict]) -> None:
                     body=f"{name} has {pts} pts!", sound_channel="classic_alarm",
                 )
 
-        if fav.hot_start_q is not None and fav.hot_start_pts is not None:
-            key = f"{today}_{eid}_{fav.target_id}_hot_q{fav.hot_start_q}"
-            if period <= fav.hot_start_q and pts >= fav.hot_start_pts and key not in _fav_fired:
+        if fav.early_pts_q is not None and fav.early_pts is not None:
+            key = f"{today}_{eid}_{fav.target_id}_early_pts_q{fav.early_pts_q}"
+            if period <= fav.early_pts_q and pts >= fav.early_pts and key not in _fav_fired:
                 _fav_fired.add(key)
                 _send_push_notification(
                     push_token=fav.user_token, title="Early Points Alert!",
@@ -741,8 +743,8 @@ def get_settings(user_token: str = ""):
                 p.target_id: {
                     "name":          p.target_name or "",
                     "total_pts":     p.total_pts,
-                    "hot_start_q":   p.hot_start_q,
-                    "hot_start_pts": p.hot_start_pts,
+                    "early_pts_q":   p.early_pts_q,
+                    "early_pts": p.early_pts,
                     "td_watch":      bool(p.td_watch),
                     "alert_type":    "silent",
                 }
@@ -895,8 +897,8 @@ class FavoritePlayer(BaseModel):
     player_id:     str
     name:          str
     total_pts:     Optional[int]  = None   # None = condition disabled
-    hot_start_q:   Optional[int]  = None
-    hot_start_pts: Optional[int]  = None
+    early_pts_q:   Optional[int]  = None
+    early_pts: Optional[int]  = None
     td_watch:      bool           = False
     alert_type:    str            = "silent"
 
@@ -912,14 +914,14 @@ def upsert_player(req: FavoritePlayer):
                 if existing:
                     existing.target_name   = req.name
                     existing.total_pts     = req.total_pts
-                    existing.hot_start_q   = req.hot_start_q
-                    existing.hot_start_pts = req.hot_start_pts
+                    existing.early_pts_q   = req.early_pts_q
+                    existing.early_pts = req.early_pts
                     existing.td_watch      = req.td_watch
                 else:
                     session.add(FavoritePlayerDB(
                         user_token=req.user_token, target_id=req.player_id,
                         target_name=req.name, total_pts=req.total_pts,
-                        hot_start_q=req.hot_start_q, hot_start_pts=req.hot_start_pts,
+                        early_pts_q=req.early_pts_q, early_pts=req.early_pts,
                         td_watch=req.td_watch,
                     ))
                 session.commit()
@@ -931,8 +933,8 @@ def upsert_player(req: FavoritePlayer):
     players[req.player_id] = {
         "name":          req.name,
         "total_pts":     req.total_pts,
-        "hot_start_q":   req.hot_start_q,
-        "hot_start_pts": req.hot_start_pts,
+        "early_pts_q":   req.early_pts_q,
+        "early_pts": req.early_pts,
         "td_watch":      req.td_watch,
         "alert_type":    req.alert_type,
     }

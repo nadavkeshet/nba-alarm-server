@@ -84,6 +84,8 @@ const SLIDES: Slide[] = [
       'Each alert fires once per game, per night — the same event won\'t wake you up twice.',
       'Early Points has a deadline: the alert only fires while the game is still in or before your chosen quarter. Once the game passes it, the condition expires silently — even if the player ends up with 40 points.',
       'Game Alarms only start watching from the quarter you pick — anything that happens before that quarter is ignored.',
+      'You can revisit this guide at any time from the bottom of the Settings tab.',
+      'Questions, requests, or suggestions? Reach us at nbasmartalarm@gmail.com',
     ],
   },
 ];

@@ -24,12 +24,12 @@ import { SERVER_URL } from '../../config';
 
 interface GlobalRadar      { enabled: boolean; max_diff: number; start_quarter: number; alert_type: string }
 interface FavTeam          { team_id: string; team_name: string; max_diff: number; start_quarter: number }
-// Stored on server as { player_id: { name, total_pts, hot_start_q, hot_start_pts, td_watch, alert_type } }
+// Stored on server as { player_id: { name, total_pts, early_pts_q, early_pts, td_watch, alert_type } }
 interface FavPlayerEntry {
   name:          string;
   total_pts:     number | null;   // null = condition disabled
-  hot_start_q:   number | null;
-  hot_start_pts: number | null;
+  early_pts_q:   number | null;
+  early_pts: number | null;
   td_watch:      boolean;
   alert_type:    string;
 }
@@ -110,7 +110,7 @@ export default function SettingsScreen() {
   // Per-player in-place edit state (all 4 conditions + enabled toggles)
   const [playerEdits, setPlayerEdits] = useState<Record<string, {
     totalPtsEnabled: boolean; total_pts: string;
-    hotStartEnabled: boolean; hot_start_q: string; hot_start_pts: string;
+    hotStartEnabled: boolean; early_pts_q: string; early_pts: string;
     td_watch: boolean;
   }>>({});
 
@@ -165,16 +165,16 @@ export default function SettingsScreen() {
       // Init per-player editable fields — derive enabled state from null checks
       const pEdits: Record<string, {
         totalPtsEnabled: boolean; total_pts: string;
-        hotStartEnabled: boolean; hot_start_q: string; hot_start_pts: string;
+        hotStartEnabled: boolean; early_pts_q: string; early_pts: string;
         td_watch: boolean;
       }> = {};
       for (const [pid, p] of Object.entries(s.FavoritePlayers ?? {})) {
         pEdits[pid] = {
           totalPtsEnabled: p.total_pts     != null,
           total_pts:       String(p.total_pts     ?? 40),
-          hotStartEnabled: p.hot_start_pts != null && p.hot_start_q != null,
-          hot_start_q:     String(p.hot_start_q   ?? 1),
-          hot_start_pts:   String(p.hot_start_pts ?? 15),
+          hotStartEnabled: p.early_pts != null && p.early_pts_q != null,
+          early_pts_q:     String(p.early_pts_q   ?? 1),
+          early_pts:   String(p.early_pts ?? 15),
           td_watch:        p.td_watch ?? false,
         };
       }
@@ -334,8 +334,8 @@ export default function SettingsScreen() {
       name:          pickedPlayer.name,
       // Send null for disabled conditions — server will store as NULL
       total_pts:     newTotalPtsEnabled  ? (parseInt(newTotalPts,    10) || 40) : null,
-      hot_start_q:   newHotStartEnabled  ? (parseInt(newHotStartQ,   10) || 1)  : null,
-      hot_start_pts: newHotStartEnabled  ? (parseInt(newHotStartPts, 10) || 15) : null,
+      early_pts_q:   newHotStartEnabled  ? (parseInt(newHotStartQ,   10) || 1)  : null,
+      early_pts: newHotStartEnabled  ? (parseInt(newHotStartPts, 10) || 15) : null,
       td_watch:      newTdWatch,
       alert_type:    'silent',
     };
@@ -352,8 +352,8 @@ export default function SettingsScreen() {
           [pickedPlayer.id]: {
             name:          pickedPlayer.name,
             total_pts:     payload.total_pts,
-            hot_start_q:   payload.hot_start_q,
-            hot_start_pts: payload.hot_start_pts,
+            early_pts_q:   payload.early_pts_q,
+            early_pts: payload.early_pts,
             td_watch:      payload.td_watch,
             alert_type:    'silent',
           },
@@ -364,9 +364,9 @@ export default function SettingsScreen() {
         [pickedPlayer.id]: {
           totalPtsEnabled: payload.total_pts    != null,
           total_pts:       String(payload.total_pts    ?? 40),
-          hotStartEnabled: payload.hot_start_pts != null,
-          hot_start_q:     String(payload.hot_start_q  ?? 1),
-          hot_start_pts:   String(payload.hot_start_pts ?? 15),
+          hotStartEnabled: payload.early_pts != null,
+          early_pts_q:     String(payload.early_pts_q  ?? 1),
+          early_pts:   String(payload.early_pts ?? 15),
           td_watch:        payload.td_watch,
         },
       }));
@@ -382,8 +382,8 @@ export default function SettingsScreen() {
       player_id,
       name,
       total_pts:     edit.totalPtsEnabled  ? (parseInt(edit.total_pts,     10) || 40) : null,
-      hot_start_q:   edit.hotStartEnabled  ? (parseInt(edit.hot_start_q,   10) || 1)  : null,
-      hot_start_pts: edit.hotStartEnabled  ? (parseInt(edit.hot_start_pts, 10) || 15) : null,
+      early_pts_q:   edit.hotStartEnabled  ? (parseInt(edit.early_pts_q,   10) || 1)  : null,
+      early_pts: edit.hotStartEnabled  ? (parseInt(edit.early_pts, 10) || 15) : null,
       td_watch:      edit.td_watch,
       alert_type,
     };
@@ -400,8 +400,8 @@ export default function SettingsScreen() {
           [player_id]: {
             name,
             total_pts:     payload.total_pts,
-            hot_start_q:   payload.hot_start_q,
-            hot_start_pts: payload.hot_start_pts,
+            early_pts_q:   payload.early_pts_q,
+            early_pts: payload.early_pts,
             td_watch:      payload.td_watch,
             alert_type,
           },
@@ -551,9 +551,9 @@ export default function SettingsScreen() {
               const edit = playerEdits[pid] ?? {
                 totalPtsEnabled: p.total_pts     != null,
                 total_pts:       String(p.total_pts     ?? 40),
-                hotStartEnabled: p.hot_start_pts != null && p.hot_start_q != null,
-                hot_start_q:     String(p.hot_start_q   ?? 1),
-                hot_start_pts:   String(p.hot_start_pts ?? 15),
+                hotStartEnabled: p.early_pts != null && p.early_pts_q != null,
+                early_pts_q:     String(p.early_pts_q   ?? 1),
+                early_pts:   String(p.early_pts ?? 15),
                 td_watch:        p.td_watch ?? false,
               };
               const setEdit = (patch: Partial<typeof edit>) =>
@@ -605,12 +605,12 @@ export default function SettingsScreen() {
                         <Text style={[styles.inputLabel, { marginTop: 10 }]}>POINTS THRESHOLD</Text>
                         <TouchableOpacity
                           style={styles.numDisplay}
-                          onPress={() => openKp(edit.hot_start_pts, v => setEdit({ hot_start_pts: v }), 'EARLY PTS', 3)}
+                          onPress={() => openKp(edit.early_pts, v => setEdit({ early_pts: v }), 'EARLY PTS', 3)}
                         >
-                          <Text style={styles.numDisplayText}>{edit.hot_start_pts || '—'}</Text>
+                          <Text style={styles.numDisplayText}>{edit.early_pts || '—'}</Text>
                         </TouchableOpacity>
                         <Text style={styles.inputLabel}>BY END OF QUARTER</Text>
-                        <QRow value={edit.hot_start_q} onChange={q => setEdit({ hot_start_q: q })} />
+                        <QRow value={edit.early_pts_q} onChange={q => setEdit({ early_pts_q: q })} />
                       </>
                     )}
                   </View>

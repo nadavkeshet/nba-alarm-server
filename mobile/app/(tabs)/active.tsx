@@ -62,8 +62,8 @@ interface FavTeam {
 interface FavPlayer {
   name:          string;
   total_pts:     number;
-  hot_start_q:   number;
-  hot_start_pts: number;
+  early_pts_q:   number;
+  early_pts: number;
   td_watch:      boolean;
   alert_type:    string;
 }
@@ -519,7 +519,7 @@ export default function ActiveScreen() {
                   <View style={{ flex: 1 }}>
                     <Text style={styles.favName}>{p.name}</Text>
                     <Text style={styles.rowSub}>
-                      {p.total_pts} pts · Early {p.hot_start_pts}+ pts by Q{p.hot_start_q}{p.td_watch ? ' · TD watch' : ''}
+                      {p.total_pts} pts · Early {p.early_pts}+ pts by Q{p.early_pts_q}{p.td_watch ? ' · TD watch' : ''}
                     </Text>
                   </View>
                 </View>

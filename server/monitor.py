@@ -192,8 +192,8 @@ def get_preferences() -> dict:
             p["player_id"]: {
                 "name":          p.get("name", "?"),
                 "total_pts":     p.get("threshold", 40),
-                "hot_start_q":   1,
-                "hot_start_pts": 15,
+                "early_pts_q":   1,
+                "early_pts": 15,
                 "td_watch":      True,
                 "alert_type":    p.get("alert_type", "silent"),
             }
@@ -207,8 +207,8 @@ def get_preferences() -> dict:
         for pid, p in prefs.get("FavoritePlayers", {}).items():
             if "threshold" in p and "total_pts" not in p:
                 p["total_pts"]     = p.pop("threshold")
-                p.setdefault("hot_start_q",   1)
-                p.setdefault("hot_start_pts", 15)
+                p.setdefault("early_pts_q",   1)
+                p.setdefault("early_pts", 15)
                 p.setdefault("td_watch",      True)
                 changed = True
         if changed:
@@ -1039,8 +1039,8 @@ def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
                         p_alert_type  = fav_cfg.get("alert_type", "silent")
                         # None = user did not enable that condition — skip it entirely
                         total_pts_thr = fav_cfg.get("total_pts")      # int or None
-                        hot_start_q   = fav_cfg.get("hot_start_q")    # int or None
-                        hot_start_pts = fav_cfg.get("hot_start_pts")  # int or None
+                        early_pts_q   = fav_cfg.get("early_pts_q")    # int or None
+                        early_pts = fav_cfg.get("early_pts")  # int or None
                         td_watch      = bool(fav_cfg.get("td_watch", False))
 
                         # Total PTS threshold (only if condition is enabled)
@@ -1060,11 +1060,11 @@ def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
                                 print(f"Checking {player_name}: {pts} pts / total_pts {total_pts_thr}. No alarm.", flush=True)
 
                         # Early Points (fires when threshold is hit at or before the deadline quarter)
-                        if hot_start_q is not None and hot_start_pts is not None:
-                            hot_start_q   = int(hot_start_q)
-                            hot_start_pts = int(hot_start_pts)
-                            if quarter <= hot_start_q and pts >= hot_start_pts:
-                                if _fire_once(f"{game_id}_{player_id}_early_pts_q{hot_start_q}"):
+                        if early_pts_q is not None and early_pts is not None:
+                            early_pts_q   = int(early_pts_q)
+                            early_pts = int(early_pts)
+                            if quarter <= early_pts_q and pts >= early_pts:
+                                if _fire_once(f"{game_id}_{player_id}_early_pts_q{early_pts_q}"):
                                     _send_push_notification(
                                         push_token=push_token,
                                         title="Early Points Alert!",
