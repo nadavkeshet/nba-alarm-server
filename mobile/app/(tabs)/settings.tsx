@@ -8,7 +8,6 @@ import {
   Modal,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -16,6 +15,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { BasketballToggle } from '../../components/basketball-toggle';
+import { NumericKeypad, useNumericKeypad } from '../../components/numeric-keypad';
+import { WelcomeGuide } from '../../components/welcome-guide';
 import { SERVER_URL } from '../../config';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -31,13 +33,11 @@ interface FavPlayerEntry {
   td_watch:      boolean;
   alert_type:    string;
 }
-interface GlobalThresholds { pts_threshold: number; triple_double_watch: boolean; pts_per_quarter: number }
 interface HistoricalCats   { scoring_40_half: boolean; threes_11: boolean; quad_double_threat: boolean }
 interface AppSettings {
   GlobalGameRadar:  GlobalRadar;
   FavoriteTeams:    FavTeam[];
   FavoritePlayers:  Record<string, FavPlayerEntry>;   // dict from server
-  GlobalThresholds: GlobalThresholds;
   HistoricalMode:   { enabled: boolean; alert_type: string; categories: HistoricalCats };
 }
 interface CachedPlayer { id: string; name: string; jersey: string; position: string }
@@ -46,16 +46,17 @@ interface CachedTeam   { id: string; name: string; abbreviation: string; logo: s
 // ─── Theme ────────────────────────────────────────────────────────────────────
 
 const C = {
-  bg:          '#0d1117',
-  card:        '#161b22',
-  border:      '#30363d',
+  bg:          '#0B1623',
+  card:        '#0d1f35',
+  border:      '#1a3451',
   blue:        '#1d428a',
   red:         '#c9082a',
   textPrimary: '#e6edf3',
-  textMuted:   '#8b949e',
+  textMuted:   '#6b8aad',
   liveGreen:   '#3fb950',
   accentBlue:  '#4d8cf5',
   gold:        '#f0a500',
+  orange:      '#FF6B00',
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -84,6 +85,7 @@ export default function SettingsScreen() {
   const [loading, setLoading]           = useState(true);
   const [radarRunning, setRadarRunning] = useState(false);
   const [saving, setSaving]             = useState(false);
+  const [guideVisible, setGuideVisible] = useState(false);
   const [allTeams, setAllTeams]         = useState<CachedTeam[]>([]);
 
   // Global radar local inputs
@@ -99,10 +101,8 @@ export default function SettingsScreen() {
   const [newTeamMaxDiff, setNewTeamMaxDiff]     = useState('5');
   const [newTeamStartQ, setNewTeamStartQ]       = useState('4');
 
-  // Global Thresholds local inputs
-  const [threshPts, setThreshPts]   = useState('40');
-  const [threshPpq, setThreshPpq]   = useState('15');
-  const [threshTd, setThreshTd]     = useState(true);
+  // ── Numeric keypad ────────────────────────────────────────────────────
+  const { kpVisible, kpValue, kpLabel, kpMaxLen, openKp, closeKp, onKpChange } = useNumericKeypad();
 
   // ── Test Alarm state ─────────────────────────────────────────────────
   const [testCountdown, setTestCountdown] = useState<number | null>(null);
@@ -153,9 +153,6 @@ export default function SettingsScreen() {
       setRadarRunning(r.running ?? false);
       setRadarMaxDiff(String(s.GlobalGameRadar?.max_diff ?? 5));
       setRadarStartQ(String(s.GlobalGameRadar?.start_quarter ?? 4));
-      setThreshPts(String(s.GlobalThresholds?.pts_threshold ?? 40));
-      setThreshPpq(String(s.GlobalThresholds?.pts_per_quarter ?? 15));
-      setThreshTd(s.GlobalThresholds?.triple_double_watch ?? true);
       setAllTeams(t.teams ?? []);
 
       // Init per-team editable fields
@@ -261,21 +258,6 @@ export default function SettingsScreen() {
     } finally { setSaving(false); }
   };
 
-  const saveThresholds = async () => {
-    setSaving(true);
-    try {
-      const payload: GlobalThresholds = {
-        pts_threshold:       parseInt(threshPts, 10) || 40,
-        triple_double_watch: threshTd,
-        pts_per_quarter:     parseInt(threshPpq, 10) || 15,
-      };
-      await fetch(`${SERVER_URL}/settings/thresholds`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      setSettings(s => s ? { ...s, GlobalThresholds: payload } : s);
-    } finally { setSaving(false); }
-  };
 
   const patchHistorical = async (patch: { enabled?: boolean; alert_type?: string; categories?: Partial<HistoricalCats> }) => {
     if (!settings) return;
@@ -526,13 +508,12 @@ export default function SettingsScreen() {
                   </View>
 
                   <Text style={styles.inputLabel}>MAX POINT DIFF</Text>
-                  <TextInput
-                    style={styles.numInput}
-                    keyboardType="numeric"
-                    value={edit.max_diff}
-                    onChangeText={v => setTeamEdits(prev => ({ ...prev, [t.team_id]: { ...edit, max_diff: v } }))}
-                    placeholderTextColor={C.textMuted}
-                  />
+                  <TouchableOpacity
+                    style={styles.numDisplay}
+                    onPress={() => openKp(edit.max_diff, v => setTeamEdits(prev => ({ ...prev, [t.team_id]: { ...edit, max_diff: v } })), 'MAX POINT DIFF', 2)}
+                  >
+                    <Text style={styles.numDisplayText}>{edit.max_diff || '—'}</Text>
+                  </TouchableOpacity>
 
                   <Text style={styles.inputLabel}>START MONITORING FROM</Text>
                   <QRow
@@ -593,47 +574,41 @@ export default function SettingsScreen() {
                       <View style={{ flex: 1 }}>
                         <Text style={styles.condCardTitle}>Total Points Alert</Text>
                       </View>
-                      <Switch
+                      <BasketballToggle
                         value={edit.totalPtsEnabled}
                         onValueChange={v => setEdit({ totalPtsEnabled: v })}
-                        trackColor={{ false: C.border, true: C.accentBlue }}
-                        thumbColor={edit.totalPtsEnabled ? C.accentBlue : C.textMuted}
                       />
                     </View>
                     {edit.totalPtsEnabled && (
-                      <TextInput
-                        style={[styles.numInput, { marginTop: 10, marginBottom: 0 }]}
-                        keyboardType="numeric"
-                        value={edit.total_pts}
-                        onChangeText={v => setEdit({ total_pts: v })}
-                        placeholderTextColor={C.textMuted}
-                      />
+                      <TouchableOpacity
+                        style={[styles.numDisplay, { marginTop: 10, marginBottom: 0 }]}
+                        onPress={() => openKp(edit.total_pts, v => setEdit({ total_pts: v }), 'POINTS TOTAL', 3)}
+                      >
+                        <Text style={styles.numDisplayText}>{edit.total_pts || '—'}</Text>
+                      </TouchableOpacity>
                     )}
                   </View>
 
-                  {/* Hot Start */}
+                  {/* Early Points */}
                   <View style={styles.condCard}>
                     <View style={styles.condCardHeader}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.condCardTitle}>Hot Start Alert</Text>
+                        <Text style={styles.condCardTitle}>Early Points Alert</Text>
                       </View>
-                      <Switch
+                      <BasketballToggle
                         value={edit.hotStartEnabled}
                         onValueChange={v => setEdit({ hotStartEnabled: v })}
-                        trackColor={{ false: C.border, true: C.accentBlue }}
-                        thumbColor={edit.hotStartEnabled ? C.accentBlue : C.textMuted}
                       />
                     </View>
                     {edit.hotStartEnabled && (
                       <>
                         <Text style={[styles.inputLabel, { marginTop: 10 }]}>POINTS THRESHOLD</Text>
-                        <TextInput
-                          style={styles.numInput}
-                          keyboardType="numeric"
-                          value={edit.hot_start_pts}
-                          onChangeText={v => setEdit({ hot_start_pts: v })}
-                          placeholderTextColor={C.textMuted}
-                        />
+                        <TouchableOpacity
+                          style={styles.numDisplay}
+                          onPress={() => openKp(edit.hot_start_pts, v => setEdit({ hot_start_pts: v }), 'EARLY PTS', 3)}
+                        >
+                          <Text style={styles.numDisplayText}>{edit.hot_start_pts || '—'}</Text>
+                        </TouchableOpacity>
                         <Text style={styles.inputLabel}>BY END OF QUARTER</Text>
                         <QRow value={edit.hot_start_q} onChange={q => setEdit({ hot_start_q: q })} />
                       </>
@@ -646,11 +621,9 @@ export default function SettingsScreen() {
                       <View style={{ flex: 1 }}>
                         <Text style={styles.condCardTitle}>Triple-Double Watch</Text>
                       </View>
-                      <Switch
+                      <BasketballToggle
                         value={edit.td_watch}
                         onValueChange={v => setEdit({ td_watch: v })}
-                        trackColor={{ false: C.border, true: C.accentBlue }}
-                        thumbColor={edit.td_watch ? C.accentBlue : C.textMuted}
                       />
                     </View>
                   </View>
@@ -669,55 +642,6 @@ export default function SettingsScreen() {
         </View>
 
         {/* ═══════════════════════════════════════════════════════════════
-            PLAYER ALERT THRESHOLDS
-        ═══════════════════════════════════════════════════════════════ */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>PLAYER ALERT THRESHOLDS</Text>
-          <Text style={styles.sectionDesc}>
-            Global rules applied to all favorite players during live games.
-          </Text>
-
-          <Text style={styles.inputLabel}>POINTS THRESHOLD (alert when player hits this total)</Text>
-          <TextInput
-            style={styles.numInput}
-            keyboardType="numeric"
-            value={threshPts}
-            onChangeText={setThreshPts}
-            placeholderTextColor={C.textMuted}
-          />
-
-          <Text style={styles.inputLabel}>HOT Q1 START (alert when player has this many pts in Q1)</Text>
-          <TextInput
-            style={styles.numInput}
-            keyboardType="numeric"
-            value={threshPpq}
-            onChangeText={setThreshPpq}
-            placeholderTextColor={C.textMuted}
-          />
-
-          <View style={[styles.switchRow, { marginTop: 12 }]}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowLabel}>Triple-Double Watch</Text>
-              <Text style={styles.rowSub}>Alert when player has 9+ in any 3 of PTS/REB/AST/STL/BLK</Text>
-            </View>
-            <Switch
-              value={threshTd}
-              onValueChange={setThreshTd}
-              trackColor={{ false: C.border, true: C.accentBlue }}
-              thumbColor={threshTd ? C.accentBlue : C.textMuted}
-            />
-          </View>
-
-          <TouchableOpacity
-            style={[styles.updateBtn, { marginTop: 14 }]}
-            onPress={saveThresholds}
-            disabled={saving}
-          >
-            <Text style={styles.updateBtnText}>{saving ? 'Saving…' : 'Save Thresholds'}</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* ═══════════════════════════════════════════════════════════════
             GLOBAL GAME RADAR
         ═══════════════════════════════════════════════════════════════ */}
         <View style={styles.section}>
@@ -728,11 +652,9 @@ export default function SettingsScreen() {
 
           <View style={styles.switchRow}>
             <Text style={styles.rowLabel}>Enable Radar</Text>
-            <Switch
+            <BasketballToggle
               value={radar?.enabled ?? false}
               onValueChange={v => patchGlobalRadar({ enabled: v })}
-              trackColor={{ false: C.border, true: C.blue }}
-              thumbColor={radar?.enabled ? C.accentBlue : C.textMuted}
             />
           </View>
 
@@ -754,13 +676,12 @@ export default function SettingsScreen() {
           {radar?.enabled && (
             <>
               <Text style={styles.inputLabel}>MAX POINT DIFF TO ALERT</Text>
-              <TextInput
-                style={styles.numInput}
-                keyboardType="numeric"
-                value={radarMaxDiff}
-                onChangeText={setRadarMaxDiff}
-                placeholderTextColor={C.textMuted}
-              />
+              <TouchableOpacity
+                style={styles.numDisplay}
+                onPress={() => openKp(radarMaxDiff, setRadarMaxDiff, 'MAX POINT DIFF', 2)}
+              >
+                <Text style={styles.numDisplayText}>{radarMaxDiff || '—'}</Text>
+              </TouchableOpacity>
               <Text style={styles.inputLabel}>START MONITORING FROM</Text>
               <QRow value={radarStartQ} onChange={setRadarStartQ} />
               <TouchableOpacity
@@ -796,11 +717,9 @@ export default function SettingsScreen() {
 
           <View style={styles.switchRow}>
             <Text style={styles.rowLabel}>Enable Historical Mode</Text>
-            <Switch
+            <BasketballToggle
               value={hist?.enabled ?? false}
               onValueChange={v => patchHistorical({ enabled: v })}
-              trackColor={{ false: C.border, true: C.blue }}
-              thumbColor={hist?.enabled ? C.accentBlue : C.textMuted}
             />
           </View>
 
@@ -831,11 +750,9 @@ export default function SettingsScreen() {
                     <Text style={styles.rowLabel}>{label}</Text>
                     <Text style={styles.rowSub}>{sub}</Text>
                   </View>
-                  <Switch
+                  <BasketballToggle
                     value={histCats?.[key] ?? false}
                     onValueChange={v => patchHistorical({ categories: { [key]: v } })}
-                    trackColor={{ false: C.border, true: C.blue }}
-                    thumbColor={histCats?.[key] ? C.accentBlue : C.textMuted}
                   />
                 </View>
               ))}
@@ -860,7 +777,23 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
 
+        {/* ── App Guide button ──────────────────────────────────────── */}
+        <TouchableOpacity
+          style={styles.guideBtn}
+          onPress={() => setGuideVisible(true)}
+        >
+          <Ionicons name="information-circle-outline" size={20} color={C.orange} />
+          <Text style={styles.guideBtnText}>App Guide</Text>
+        </TouchableOpacity>
+
       </ScrollView>
+
+      {/* ── Welcome Guide Modal ───────────────────────────────────── */}
+      <WelcomeGuide
+        visible={guideVisible}
+        onClose={() => setGuideVisible(false)}
+        closeLabel="Close"
+      />
 
       {/* ═══════════════════════════════════════════════════════════════
           ADD TEAM MODAL
@@ -918,14 +851,12 @@ export default function SettingsScreen() {
                   <Text style={styles.configSub}>Set alert criteria for this team's games.</Text>
 
                   <Text style={styles.inputLabel}>MAX POINT DIFF TO ALERT</Text>
-                  <TextInput
-                    style={styles.numInput}
-                    keyboardType="numeric"
-                    value={newTeamMaxDiff}
-                    onChangeText={setNewTeamMaxDiff}
-                    placeholderTextColor={C.textMuted}
-                    autoFocus
-                  />
+                  <TouchableOpacity
+                    style={styles.numDisplay}
+                    onPress={() => openKp(newTeamMaxDiff, setNewTeamMaxDiff, 'MAX POINT DIFF', 2)}
+                  >
+                    <Text style={styles.numDisplayText}>{newTeamMaxDiff || '—'}</Text>
+                  </TouchableOpacity>
 
                   <Text style={styles.inputLabel}>START MONITORING FROM QUARTER</Text>
                   <QRow value={newTeamStartQ} onChange={setNewTeamStartQ} />
@@ -1058,51 +989,42 @@ export default function SettingsScreen() {
                         <Text style={styles.condCardTitle}>Total Points Alert</Text>
                         <Text style={styles.condCardSub}>Alert when he reaches a scoring total</Text>
                       </View>
-                      <Switch
+                      <BasketballToggle
                         value={newTotalPtsEnabled}
                         onValueChange={setNewTotalPtsEnabled}
-                        trackColor={{ false: C.border, true: C.accentBlue }}
-                        thumbColor={newTotalPtsEnabled ? C.accentBlue : C.textMuted}
                       />
                     </View>
                     {newTotalPtsEnabled && (
-                      <TextInput
-                        style={[styles.numInput, { marginTop: 10, marginBottom: 0 }]}
-                        keyboardType="numeric"
-                        value={newTotalPts}
-                        onChangeText={setNewTotalPts}
-                        placeholder="e.g. 40"
-                        placeholderTextColor={C.textMuted}
-                        autoFocus
-                      />
+                      <TouchableOpacity
+                        style={[styles.numDisplay, { marginTop: 10, marginBottom: 0 }]}
+                        onPress={() => openKp(newTotalPts, setNewTotalPts, 'POINTS TOTAL', 3)}
+                      >
+                        <Text style={styles.numDisplayText}>{newTotalPts || '—'}</Text>
+                      </TouchableOpacity>
                     )}
                   </View>
 
-                  {/* ── Hot Start Alert ── */}
+                  {/* ── Early Points Alert ── */}
                   <View style={styles.condCard}>
                     <View style={styles.condCardHeader}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.condCardTitle}>Hot Start Alert</Text>
-                        <Text style={styles.condCardSub}>Alert if he hits a threshold early in the game</Text>
+                        <Text style={styles.condCardTitle}>Early Points Alert</Text>
+                        <Text style={styles.condCardSub}>Alert if he reaches a points threshold by a set quarter</Text>
                       </View>
-                      <Switch
+                      <BasketballToggle
                         value={newHotStartEnabled}
                         onValueChange={setNewHotStartEnabled}
-                        trackColor={{ false: C.border, true: C.accentBlue }}
-                        thumbColor={newHotStartEnabled ? C.accentBlue : C.textMuted}
                       />
                     </View>
                     {newHotStartEnabled && (
                       <>
                         <Text style={[styles.inputLabel, { marginTop: 10 }]}>POINTS THRESHOLD</Text>
-                        <TextInput
-                          style={styles.numInput}
-                          keyboardType="numeric"
-                          value={newHotStartPts}
-                          onChangeText={setNewHotStartPts}
-                          placeholder="e.g. 15"
-                          placeholderTextColor={C.textMuted}
-                        />
+                        <TouchableOpacity
+                          style={styles.numDisplay}
+                          onPress={() => openKp(newHotStartPts, setNewHotStartPts, 'EARLY PTS', 3)}
+                        >
+                          <Text style={styles.numDisplayText}>{newHotStartPts || '—'}</Text>
+                        </TouchableOpacity>
                         <Text style={styles.inputLabel}>BY END OF QUARTER</Text>
                         <QRow value={newHotStartQ} onChange={setNewHotStartQ} />
                       </>
@@ -1116,11 +1038,9 @@ export default function SettingsScreen() {
                         <Text style={styles.condCardTitle}>Triple-Double Watch</Text>
                         <Text style={styles.condCardSub}>Alert when approaching 9+ in 3 stats</Text>
                       </View>
-                      <Switch
+                      <BasketballToggle
                         value={newTdWatch}
                         onValueChange={setNewTdWatch}
-                        trackColor={{ false: C.border, true: C.accentBlue }}
-                        thumbColor={newTdWatch ? C.accentBlue : C.textMuted}
                       />
                     </View>
                   </View>
@@ -1155,6 +1075,16 @@ export default function SettingsScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* ── Numeric Keypad ────────────────────────────────────────── */}
+      <NumericKeypad
+        visible={kpVisible}
+        value={kpValue}
+        label={kpLabel}
+        maxLen={kpMaxLen}
+        onChange={onKpChange}
+        onDone={closeKp}
+      />
 
     </SafeAreaView>
   );
@@ -1218,6 +1148,14 @@ const styles = StyleSheet.create({
   inputLabel: {
     fontSize: 10, fontWeight: '800', color: C.textMuted,
     letterSpacing: 1.5, marginBottom: 6, marginTop: 10,
+  },
+  numDisplay: {
+    borderBottomWidth: 2, borderColor: C.orange,
+    paddingVertical: 4, marginBottom: 10,
+    alignItems: 'center',
+  },
+  numDisplayText: {
+    fontSize: 26, fontWeight: '800', color: C.textPrimary,
   },
   numInput: {
     borderBottomWidth: 2, borderColor: C.blue,
@@ -1322,4 +1260,16 @@ const styles = StyleSheet.create({
   alertTypeIcon: { fontSize: 14 },
   alertTypeText: { fontSize: 12, fontWeight: '700', color: C.textMuted },
   alertTypeTextActive: { color: C.red },
+
+  // ── App Guide button ───────────────────────────────────────────────
+  guideBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, marginHorizontal: 16, marginTop: 4, marginBottom: 36,
+    paddingVertical: 14, borderRadius: 14,
+    backgroundColor: 'rgba(255,107,0,0.08)',
+    borderWidth: 1, borderColor: 'rgba(255,107,0,0.25)',
+  },
+  guideBtnText: {
+    color: C.orange, fontWeight: '800', fontSize: 14, letterSpacing: 0.5,
+  },
 });

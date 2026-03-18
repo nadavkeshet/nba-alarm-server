@@ -1,9 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import { useFocusEffect } from 'expo-router';
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert,
+  Animated,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
@@ -17,6 +19,7 @@ import { SkeletonAlarmCard } from '../../components/skeleton-card';
 import { SERVER_URL } from '../../config';
 
 const EXPO_PROJECT_ID = '19104813-313d-40c1-975a-63b78d3ae7fc';
+const TROPHY_KEY = 'nba_alarm_recent_hits';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -26,7 +29,7 @@ interface GameAlarm {
   max_diff: number;
   start_quarter: number;
   alert_type: string;
-  status: string;        // "scheduled" | "live"
+  status: string;
   started_at: string;
 }
 
@@ -38,7 +41,7 @@ interface PlayerAlarm {
   condition: string;
   pts_threshold: number;
   alert_type: string;
-  status: string;        // "scheduled" | "live"
+  status: string;
   started_at: string;
 }
 
@@ -69,9 +72,9 @@ interface DbAlarm {
   alarm_id:       number;
   target_id:      string;
   target_name:    string;
-  condition_type: string;  // "points" | "score_diff" | "triple_double"
+  condition_type: string;
   threshold:      number;
-  start_quarter?: number;  // player: upper bound (fire only ≤ this Q); game: lower bound (fire only ≥ this Q)
+  start_quarter?: number;
 }
 
 interface HistoricalCats {
@@ -85,25 +88,34 @@ interface ActiveMonitors {
   player_alarms:    PlayerAlarm[];
   db_alarms:        DbAlarm[];
   global_radar:     GlobalRadar;
-  favorite_teams:   FavTeam[];                  // always an array from server
-  favorite_players: Record<string, FavPlayer>;  // dict from server
+  favorite_teams:   FavTeam[];
+  favorite_players: Record<string, FavPlayer>;
   historical_mode:  { enabled: boolean; categories: HistoricalCats };
+}
+
+interface TrophyHit {
+  title: string;
+  body: string;
+  receivedAt: string;
 }
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 
 const C = {
-  bg:          '#0d1117',
-  card:        '#161b22',
-  border:      '#30363d',
+  bg:          '#0B1623',
+  card:        '#0d1f35',
+  cardAlt:     '#111d2e',
+  border:      '#1a3451',
+  borderMuted: '#1e2a3d',
   blue:        '#1d428a',
   red:         '#c9082a',
   textPrimary: '#e6edf3',
-  textMuted:   '#8b949e',
+  textMuted:   '#6b8aad',
   liveGreen:   '#3fb950',
   accentBlue:  '#4d8cf5',
   gold:        '#f0a500',
-  orange:      '#e05c00',
+  orange:      '#FF6B00',
+  orangeDim:   'rgba(255,107,0,0.15)',
 };
 
 const CONDITION_LABEL: Record<string, string> = {
@@ -112,40 +124,39 @@ const CONDITION_LABEL: Record<string, string> = {
   triple_double: 'Triple-Double Threat',
 };
 
-// ─── Status Pill ──────────────────────────────────────────────────────────────
+// ─── Pulsing Card (for LIVE alarms) ───────────────────────────────────────────
 
-function GameStatusPill({ status }: { status: string }) {
-  const isLive = status === 'live';
+function PulsingCard({ children }: { children: React.ReactNode }) {
+  const pulse = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 1400, useNativeDriver: false }),
+        Animated.timing(pulse, { toValue: 0, duration: 1400, useNativeDriver: false }),
+      ]),
+    ).start();
+  }, [pulse]);
+
+  const borderColor = pulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['rgba(255,107,0,0.25)', 'rgba(255,107,0,0.85)'],
+  });
+
   return (
-    <View style={[
-      styles.livePill,
-      !isLive && { backgroundColor: 'rgba(77,140,245,0.12)' },
-    ]}>
-      <View style={[styles.liveDot, !isLive && { backgroundColor: C.accentBlue }]} />
-      <Text style={[styles.liveText, !isLive && { color: C.accentBlue }]}>
-        {isLive ? 'WATCHING' : 'SCHEDULED'}
-      </Text>
-    </View>
+    <Animated.View style={[styles.alarmCard, styles.alarmCardLive, { borderColor }]}>
+      {children}
+    </Animated.View>
   );
 }
 
-function PlayerStatusPill({ status }: { status: string }) {
-  const isLive = status === 'live';
+// ─── Status Pills ─────────────────────────────────────────────────────────────
+
+function LivePill({ label, color, bg }: { label: string; color: string; bg: string }) {
   return (
-    <View style={[
-      styles.livePill,
-      { backgroundColor: isLive ? 'rgba(224,92,0,0.15)' : 'rgba(77,140,245,0.12)' },
-    ]}>
-      <View style={[
-        styles.liveDot,
-        { backgroundColor: isLive ? C.orange : C.accentBlue },
-      ]} />
-      <Text style={[
-        styles.liveText,
-        { color: isLive ? C.orange : C.accentBlue },
-      ]}>
-        {isLive ? 'WATCHING' : 'SCHEDULED'}
-      </Text>
+    <View style={[styles.pill, { backgroundColor: bg }]}>
+      <View style={[styles.pillDot, { backgroundColor: color }]} />
+      <Text style={[styles.pillText, { color }]}>{label}</Text>
     </View>
   );
 }
@@ -153,20 +164,29 @@ function PlayerStatusPill({ status }: { status: string }) {
 // ─── ActiveScreen ─────────────────────────────────────────────────────────────
 
 export default function ActiveScreen() {
-  const [data, setData]       = useState<ActiveMonitors | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState<string | null>(null);
-  const tokenRef              = useRef<string | null>(null);
+  const [data, setData]           = useState<ActiveMonitors | null>(null);
+  const [loading, setLoading]     = useState(true);
+  const [error, setError]         = useState<string | null>(null);
+  const [trophies, setTrophies]   = useState<TrophyHit[]>([]);
+  const tokenRef                  = useRef<string | null>(null);
 
-  /** Resolve the push token: use cached ref, else call Notifications API. */
+  // Custom confirm modal (replaces system Alert for deletions)
+  const [confirmModal, setConfirmModal] = useState<{
+    visible: boolean;
+    message: string;
+    onConfirm: () => void;
+  }>({ visible: false, message: '', onConfirm: () => {} });
+
+  const showConfirm = (message: string, onConfirm: () => void) =>
+    setConfirmModal({ visible: true, message, onConfirm });
+  const hideConfirm = () =>
+    setConfirmModal(prev => ({ ...prev, visible: false }));
+
   const resolveToken = useCallback(async (): Promise<string | null> => {
     if (tokenRef.current) return tokenRef.current;
     try {
-      const { data: token } = await Notifications.getExpoPushTokenAsync({
-        projectId: EXPO_PROJECT_ID,
-      });
+      const { data: token } = await Notifications.getExpoPushTokenAsync({ projectId: EXPO_PROJECT_ID });
       tokenRef.current = token;
-      console.log('[Active] Resolved push token:', token.slice(0, 30) + '...');
       return token;
     } catch (e) {
       console.warn('[Active] Could not resolve push token:', e);
@@ -174,142 +194,105 @@ export default function ActiveScreen() {
     }
   }, []);
 
+  // Store received push notifications in AsyncStorage for Trophy Room
+  useEffect(() => {
+    const sub = Notifications.addNotificationReceivedListener(async notification => {
+      const title = notification.request.content.title ?? 'Alarm Fired';
+      const body  = notification.request.content.body  ?? '';
+      const hit: TrophyHit = { title, body, receivedAt: new Date().toISOString() };
+      try {
+        const raw  = await AsyncStorage.getItem(TROPHY_KEY);
+        const prev = raw ? (JSON.parse(raw) as TrophyHit[]) : [];
+        const next = [hit, ...prev].slice(0, 10);
+        await AsyncStorage.setItem(TROPHY_KEY, JSON.stringify(next));
+        setTrophies(next);
+      } catch {}
+    });
+    return () => sub.remove();
+  }, []);
+
+  const loadTrophies = async () => {
+    try {
+      const raw = await AsyncStorage.getItem(TROPHY_KEY);
+      if (raw) setTrophies(JSON.parse(raw) as TrophyHit[]);
+    } catch {}
+  };
+
   const load = useCallback(async () => {
     setError(null);
     setLoading(true);
     try {
       const token = await resolveToken();
-      if (!token) {
-        setError('Push token unavailable. Please restart the app.');
-        return;
-      }
-      console.log('[Active] Fetching monitors with token:', token.slice(0, 30) + '...');
-      const resp = await fetch(
-        `${SERVER_URL}/active-monitors?user_token=${encodeURIComponent(token)}`,
-      );
+      if (!token) { setError('Push token unavailable. Please restart the app.'); return; }
+      const resp = await fetch(`${SERVER_URL}/active-monitors?user_token=${encodeURIComponent(token)}`);
       if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
       const raw = await resp.json();
-      console.log('[Active] Raw data from server:', JSON.stringify(raw));
-      // Ensure db_alarms is always an array regardless of server shape
       const d: ActiveMonitors = {
         ...raw,
-        db_alarms:     Array.isArray(raw.db_alarms)     ? raw.db_alarms     : [],
-        game_alarms:   Array.isArray(raw.game_alarms)   ? raw.game_alarms   : [],
-        player_alarms: Array.isArray(raw.player_alarms) ? raw.player_alarms : [],
-        favorite_teams: Array.isArray(raw.favorite_teams) ? raw.favorite_teams : [],
+        db_alarms:       Array.isArray(raw.db_alarms)       ? raw.db_alarms       : [],
+        game_alarms:     Array.isArray(raw.game_alarms)     ? raw.game_alarms     : [],
+        player_alarms:   Array.isArray(raw.player_alarms)   ? raw.player_alarms   : [],
+        favorite_teams:  Array.isArray(raw.favorite_teams)  ? raw.favorite_teams  : [],
         favorite_players: raw.favorite_players && typeof raw.favorite_players === 'object'
           ? raw.favorite_players : {},
       };
-      console.log('[Active] db_alarms count:', d.db_alarms.length);
       setData(d);
     } catch (e: any) {
-      console.error('[Active] Load error:', e);
       setError(e?.message ?? 'Failed to load. Check your connection.');
     } finally {
       setLoading(false);
     }
   }, [resolveToken]);
 
-  // Refresh every time the tab is focused
   useFocusEffect(
     useCallback(() => {
       load();
+      loadTrophies();
     }, [load]),
   );
 
   const cancelGameAlarm = (alarm: GameAlarm) => {
-    Alert.alert(
-      'Cancel Alarm',
-      `Stop watching "${alarm.game_name}"?`,
-      [
-        { text: 'Keep', style: 'cancel' },
-        {
-          text: 'Cancel Alarm',
-          style: 'destructive',
-          onPress: () => {
-            const t = tokenRef.current;
-            const tokenParam = t ? `?user_token=${encodeURIComponent(t)}` : '';
-            fetch(`${SERVER_URL}/active-monitors/game/${alarm.game_id}${tokenParam}`, { method: 'DELETE' })
-              .then(() => load())
-              .catch(e => console.error('Cancel game alarm error:', e));
-          },
-        },
-      ],
-    );
+    showConfirm(`Stop watching "${alarm.game_name}"?`, () => {
+      const t = tokenRef.current;
+      const param = t ? `?user_token=${encodeURIComponent(t)}` : '';
+      fetch(`${SERVER_URL}/active-monitors/game/${alarm.game_id}${param}`, { method: 'DELETE' })
+        .then(() => load())
+        .catch(e => console.error('Cancel game alarm error:', e));
+    });
   };
 
   const cancelPlayerAlarm = (alarm: PlayerAlarm) => {
-    Alert.alert(
-      'Cancel Alarm',
-      `Stop watching ${alarm.player_name}?`,
-      [
-        { text: 'Keep', style: 'cancel' },
-        {
-          text: 'Cancel Alarm',
-          style: 'destructive',
-          onPress: () => {
-            const t = tokenRef.current;
-            const tokenParam = t ? `?user_token=${encodeURIComponent(t)}` : '';
-            fetch(`${SERVER_URL}/active-monitors/player/${alarm.player_id}${tokenParam}`, { method: 'DELETE' })
-              .then(() => load())
-              .catch(e => console.error('Cancel player alarm error:', e));
-          },
-        },
-      ],
-    );
+    showConfirm(`Stop watching ${alarm.player_name}?`, () => {
+      const t = tokenRef.current;
+      const param = t ? `?user_token=${encodeURIComponent(t)}` : '';
+      fetch(`${SERVER_URL}/active-monitors/player/${alarm.player_id}${param}`, { method: 'DELETE' })
+        .then(() => load())
+        .catch(e => console.error('Cancel player alarm error:', e));
+    });
   };
 
   const cancelDbAlarm = (alarm: DbAlarm) => {
-    const label = alarm.condition_type === 'triple_double'
-      ? `Triple-Double watch for ${alarm.target_id}`
-      : `${alarm.condition_type === 'score_diff' ? 'Game' : 'Player'} alarm (threshold: ${alarm.threshold})`;
-
-    Alert.alert(
-      'Delete Alarm',
-      `Permanently remove "${label}" from the database?`,
-      [
-        { text: 'Keep', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            const t = tokenRef.current;
-            if (!t) {
-              Alert.alert('Error', 'Push token not available. Please restart the app.');
-              return;
-            }
-            const url = `${SERVER_URL}/active-monitors/db/${alarm.alarm_id}?user_token=${encodeURIComponent(t)}`;
-            console.log('[Active] DELETE DB alarm →', url);
-            try {
-              const resp = await fetch(url, { method: 'DELETE' });
-              if (!resp.ok) {
-                const body = await resp.json().catch(() => ({}));
-                const msg = body?.detail ?? `Server error ${resp.status}`;
-                console.error('[Active] DB delete failed:', msg);
-                Alert.alert('Delete Failed', msg);
-                return;
-              }
-              const result = await resp.json();
-              console.log('[Active] DB alarm deleted ✓', result);
-              // Only update UI after confirmed server deletion
-              setData(prev => prev ? {
-                ...prev,
-                db_alarms: prev.db_alarms.filter(a => a.alarm_id !== alarm.alarm_id),
-              } : prev);
-            } catch (e: any) {
-              console.error('[Active] DB delete network error:', e);
-              Alert.alert('Delete Failed', 'Could not reach the server. Check your connection.');
-            }
-          },
-        },
-      ],
-    );
+    showConfirm('Are you sure you want to delete this alarm?', async () => {
+      const t = tokenRef.current;
+      if (!t) return;
+      const url = `${SERVER_URL}/active-monitors/db/${alarm.alarm_id}?user_token=${encodeURIComponent(t)}`;
+      try {
+        const resp = await fetch(url, { method: 'DELETE' });
+        if (!resp.ok) return;
+        setData(prev => prev ? {
+          ...prev,
+          db_alarms: prev.db_alarms.filter(a => a.alarm_id !== alarm.alarm_id),
+        } : prev);
+      } catch {
+        console.error('Delete failed — could not reach server');
+      }
+    });
   };
 
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
-        <Text style={styles.header}>Mission Control</Text>
+        <Text style={styles.header}>MISSION CONTROL</Text>
         <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
           {[0, 1, 2].map(i => (
             <View key={i} style={styles.section}>
@@ -325,7 +308,7 @@ export default function ActiveScreen() {
   if (error) {
     return (
       <SafeAreaView style={styles.container}>
-        <Text style={styles.header}>Mission Control</Text>
+        <Text style={styles.header}>MISSION CONTROL</Text>
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 }}>
           <Ionicons name="cloud-offline-outline" size={48} color={C.border} />
           <Text style={[styles.emptyHint, { marginTop: 12 }]}>{error}</Text>
@@ -341,23 +324,12 @@ export default function ActiveScreen() {
   const hist     = data?.historical_mode;
   const histCats = hist?.categories;
 
-  // ── Split DB alarms into categories (done outside JSX so errors are visible) ─
-  const allDbAlarms = Array.isArray(data?.db_alarms) ? data!.db_alarms : [];
-
-  const dbGameAlarms = allDbAlarms.filter(
-    a => (a.condition_type ?? '').trim().toLowerCase() === 'score_diff',
-  );
+  const allDbAlarms    = Array.isArray(data?.db_alarms) ? data!.db_alarms : [];
+  const dbGameAlarms   = allDbAlarms.filter(a => (a.condition_type ?? '').trim().toLowerCase() === 'score_diff');
   const dbPlayerAlarms = allDbAlarms.filter(a => {
     const ct = (a.condition_type ?? '').trim().toLowerCase();
     return ct === 'points' || ct === 'triple_double';
   });
-
-  console.log('[Active] DB alarms total:', allDbAlarms.length);
-  console.log('[Active] Game Alarms identified:', dbGameAlarms.length);
-  console.log('[Active] Player Alarms identified:', dbPlayerAlarms.length);
-  if (allDbAlarms.length > 0) {
-    console.log('[Active] condition_types in DB:', allDbAlarms.map(a => a.condition_type));
-  }
 
   const liveGameAlarms   = Array.isArray(data?.game_alarms)   ? data!.game_alarms   : [];
   const livePlayerAlarms = Array.isArray(data?.player_alarms) ? data!.player_alarms : [];
@@ -373,11 +345,11 @@ export default function ActiveScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.header}>Mission Control</Text>
+      <Text style={styles.header}>MISSION CONTROL</Text>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
 
-        {/* ── Game Alarms ──────────────────────────────────────────────── */}
+        {/* ── Game Alarms ─────────────────────────────────────────────────── */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>GAME ALARMS</Text>
@@ -392,31 +364,32 @@ export default function ActiveScreen() {
               <Text style={styles.emptyHint}>No game alarms set. Tap a game on the Home tab to create one.</Text>
             </View>
           ) : (
-            <>
+            <View style={{ gap: 8 }}>
               {liveGameAlarms.map(alarm => (
-                <View key={`live-${alarm.game_id}`} style={styles.alarmCard}>
+                <PulsingCard key={`live-${alarm.game_id}`}>
                   <View style={styles.alarmCardLeft}>
-                    <GameStatusPill status={alarm.status ?? 'scheduled'} />
+                    <LivePill
+                      label="WATCHING"
+                      color={C.orange}
+                      bg={C.orangeDim}
+                    />
                     <Text style={styles.alarmGame}>{alarm.game_name ?? 'Unknown Game'}</Text>
                     <Text style={styles.alarmSub}>
                       Alert if diff ≤ {alarm.max_diff ?? '?'} pts from Q{alarm.start_quarter ?? '?'}
                     </Text>
                     <Text style={styles.alarmSub}>
-                      {alarm.alert_type === 'alarm' ? '🚨 Alarm' : '🔕 Silent'}
+                      {alarm.alert_type === 'alarm' ? '🚨 Full Alarm' : '🔕 Silent'}
                     </Text>
                   </View>
                   <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelGameAlarm(alarm)}>
                     <Text style={styles.cancelBtnText}>Cancel</Text>
                   </TouchableOpacity>
-                </View>
+                </PulsingCard>
               ))}
               {dbGameAlarms.map(alarm => (
                 <View key={`db-${alarm.alarm_id ?? alarm.target_id}`} style={styles.alarmCard}>
                   <View style={styles.alarmCardLeft}>
-                    <View style={[styles.livePill, { backgroundColor: 'rgba(77,140,245,0.12)' }]}>
-                      <View style={[styles.liveDot, { backgroundColor: C.accentBlue }]} />
-                      <Text style={[styles.liveText, { color: C.accentBlue }]}>SAVED</Text>
-                    </View>
+                    <LivePill label="SAVED" color={C.accentBlue} bg="rgba(77,140,245,0.12)" />
                     <Text style={styles.alarmGame}>{alarm.target_name || alarm.target_id || 'Unknown Game'}</Text>
                     <Text style={styles.alarmSub}>
                       Score gap ≤ {alarm.threshold ?? '?'} pts · From Q{alarm.start_quarter ?? 4}
@@ -427,11 +400,11 @@ export default function ActiveScreen() {
                   </TouchableOpacity>
                 </View>
               ))}
-            </>
+            </View>
           )}
         </View>
 
-        {/* ── Player Alarms ────────────────────────────────────────────── */}
+        {/* ── Player Alarms ────────────────────────────────────────────────── */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>PLAYER ALARMS</Text>
@@ -446,11 +419,11 @@ export default function ActiveScreen() {
               <Text style={styles.emptyHint}>No player alarms set. Open a game and choose "Player Alarm".</Text>
             </View>
           ) : (
-            <>
+            <View style={{ gap: 8 }}>
               {livePlayerAlarms.map(alarm => (
-                <View key={`live-${alarm.player_id}`} style={styles.alarmCard}>
+                <PulsingCard key={`live-${alarm.player_id}`}>
                   <View style={styles.alarmCardLeft}>
-                    <PlayerStatusPill status={alarm.status ?? 'scheduled'} />
+                    <LivePill label="WATCHING" color={C.orange} bg={C.orangeDim} />
                     <Text style={styles.alarmGame}>{alarm.player_name ?? 'Unknown Player'}</Text>
                     <Text style={styles.alarmSub}>
                       {CONDITION_LABEL[alarm.condition] ?? alarm.condition}
@@ -458,21 +431,18 @@ export default function ActiveScreen() {
                     </Text>
                     <Text style={[styles.alarmSub, { marginTop: 1 }]}>{alarm.game_name ?? ''}</Text>
                     <Text style={styles.alarmSub}>
-                      {alarm.alert_type === 'alarm' ? '🚨 Alarm' : '🔕 Silent'}
+                      {alarm.alert_type === 'alarm' ? '🚨 Full Alarm' : '🔕 Silent'}
                     </Text>
                   </View>
                   <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelPlayerAlarm(alarm)}>
                     <Text style={styles.cancelBtnText}>Cancel</Text>
                   </TouchableOpacity>
-                </View>
+                </PulsingCard>
               ))}
               {dbPlayerAlarms.map(alarm => (
                 <View key={`db-${alarm.alarm_id ?? alarm.target_id}`} style={styles.alarmCard}>
                   <View style={styles.alarmCardLeft}>
-                    <View style={[styles.livePill, { backgroundColor: 'rgba(224,92,0,0.12)' }]}>
-                      <View style={[styles.liveDot, { backgroundColor: C.orange }]} />
-                      <Text style={[styles.liveText, { color: C.orange }]}>SAVED</Text>
-                    </View>
+                    <LivePill label="SAVED" color={C.orange} bg={C.orangeDim} />
                     <Text style={styles.alarmGame}>{alarm.target_name || alarm.target_id || 'Unknown Player'}</Text>
                     <Text style={styles.alarmSub}>
                       {(alarm.condition_type ?? '').toLowerCase() === 'triple_double'
@@ -487,11 +457,11 @@ export default function ActiveScreen() {
                   </TouchableOpacity>
                 </View>
               ))}
-            </>
+            </View>
           )}
         </View>
 
-        {/* ── Global Radar Status ──────────────────────────────────────── */}
+        {/* ── Global Radar Status ──────────────────────────────────────────── */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>GLOBAL RADAR STATUS</Text>
 
@@ -499,32 +469,24 @@ export default function ActiveScreen() {
             <View style={{ flex: 1 }}>
               <Text style={styles.rowLabel}>Background Radar</Text>
               <Text style={styles.rowSub}>
-                {radar?.running
-                  ? 'Scanning all live games'
-                  : 'Stopped — will start with next alarm'}
+                {radar?.running ? 'Scanning all live games' : 'Stopped — will start with next alarm'}
               </Text>
             </View>
-            <View style={[styles.statusDot, {
-              backgroundColor: radar?.running ? C.liveGreen : C.border,
-            }]} />
+            <View style={[styles.statusDot, { backgroundColor: radar?.running ? C.liveGreen : C.border }]} />
           </View>
 
           <View style={styles.statusRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.rowLabel}>Global Radar Alerts</Text>
               <Text style={styles.rowSub}>
-                {radar?.enabled
-                  ? `≤ ${radar.max_diff} pts diff from Q${radar.start_quarter}`
-                  : 'Disabled'}
+                {radar?.enabled ? `≤ ${radar.max_diff} pts diff from Q${radar.start_quarter}` : 'Disabled'}
               </Text>
             </View>
-            <View style={[styles.statusDot, {
-              backgroundColor: radar?.enabled ? C.accentBlue : C.border,
-            }]} />
+            <View style={[styles.statusDot, { backgroundColor: radar?.enabled ? C.accentBlue : C.border }]} />
           </View>
         </View>
 
-        {/* ── Favorites Summary ────────────────────────────────────────── */}
+        {/* ── Favorites Summary ────────────────────────────────────────────── */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>FAVORITES BEING TRACKED</Text>
@@ -547,9 +509,7 @@ export default function ActiveScreen() {
                   <Text style={styles.favIcon}>🏀</Text>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.favName}>{t.team_name}</Text>
-                    <Text style={styles.rowSub}>
-                      Alert if diff ≤ {t.max_diff} pts from Q{t.start_quarter}
-                    </Text>
+                    <Text style={styles.rowSub}>Alert if diff ≤ {t.max_diff} pts from Q{t.start_quarter}</Text>
                   </View>
                 </View>
               ))}
@@ -559,7 +519,7 @@ export default function ActiveScreen() {
                   <View style={{ flex: 1 }}>
                     <Text style={styles.favName}>{p.name}</Text>
                     <Text style={styles.rowSub}>
-                      {p.total_pts} pts · Hot start Q{p.hot_start_q} @ {p.hot_start_pts} pts{p.td_watch ? ' · TD watch' : ''}
+                      {p.total_pts} pts · Early {p.hot_start_pts}+ pts by Q{p.hot_start_q}{p.td_watch ? ' · TD watch' : ''}
                     </Text>
                   </View>
                 </View>
@@ -568,13 +528,11 @@ export default function ActiveScreen() {
           )}
         </View>
 
-        {/* ── Historical Mode ──────────────────────────────────────────── */}
+        {/* ── Historical Mode ──────────────────────────────────────────────── */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>HISTORICAL MODE</Text>
-            <View style={[styles.badge, {
-              backgroundColor: hist?.enabled ? C.gold : C.border,
-            }]}>
+            <View style={[styles.badge, { backgroundColor: hist?.enabled ? C.gold : C.border }]}>
               <Text style={[styles.badgeText, { color: hist?.enabled ? '#000' : C.textMuted }]}>
                 {hist?.enabled ? 'ON' : 'OFF'}
               </Text>
@@ -594,19 +552,86 @@ export default function ActiveScreen() {
           ) : (
             activeCategories.map(cat => (
               <View key={cat} style={styles.catItem}>
-                <View style={[styles.liveDot, { backgroundColor: C.gold, marginRight: 10 }]} />
+                <View style={[styles.pillDot, { backgroundColor: C.gold, marginRight: 10 }]} />
                 <Text style={styles.catLabel}>{cat}</Text>
               </View>
             ))
           )}
         </View>
 
-        {/* ── Refresh ──────────────────────────────────────────────────── */}
+        {/* ── Trophy Room ──────────────────────────────────────────────────── */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>🏆 TROPHY ROOM</Text>
+            <TouchableOpacity
+              onPress={async () => {
+                await AsyncStorage.removeItem(TROPHY_KEY);
+                setTrophies([]);
+              }}
+            >
+              <Text style={{ color: C.textMuted, fontSize: 11, fontWeight: '700' }}>CLEAR</Text>
+            </TouchableOpacity>
+          </View>
+
+          {trophies.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Text style={{ fontSize: 28 }}>🏆</Text>
+              <Text style={styles.emptyHint}>Alarms that fire will appear here as your Trophy Room fills up.</Text>
+            </View>
+          ) : (
+            trophies.map((hit, i) => (
+              <View key={i} style={styles.trophyItem}>
+                <View style={styles.trophyIconWrap}>
+                  <Text style={{ fontSize: 20 }}>🔔</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.trophyTitle}>{hit.title}</Text>
+                  <Text style={styles.trophyBody}>{hit.body}</Text>
+                  <Text style={styles.trophyTime}>
+                    {new Date(hit.receivedAt).toLocaleDateString(undefined, {
+                      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                    })}
+                  </Text>
+                </View>
+              </View>
+            ))
+          )}
+        </View>
+
+        {/* ── Refresh ──────────────────────────────────────────────────────── */}
         <TouchableOpacity style={styles.refreshBtn} onPress={() => load()} disabled={loading}>
+          <Ionicons name="refresh-outline" size={16} color={C.orange} style={{ marginRight: 6 }} />
           <Text style={styles.refreshBtnText}>Refresh</Text>
         </TouchableOpacity>
 
       </ScrollView>
+
+      {/* ── Custom Delete Confirmation Modal ───────────────────────── */}
+      <Modal
+        visible={confirmModal.visible}
+        transparent
+        animationType="fade"
+        onRequestClose={hideConfirm}
+      >
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmBox}>
+            <Text style={styles.confirmTitle}>Remove Alert?</Text>
+            <Text style={styles.confirmMessage}>{confirmModal.message}</Text>
+            <View style={styles.confirmButtons}>
+              <TouchableOpacity style={styles.confirmCancelBtn} onPress={hideConfirm}>
+                <Text style={styles.confirmCancelText}>Keep</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.confirmDeleteBtn}
+                onPress={() => { hideConfirm(); confirmModal.onConfirm(); }}
+              >
+                <Text style={styles.confirmDeleteText}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
     </SafeAreaView>
   );
 }
@@ -617,13 +642,14 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
 
   header: {
-    fontSize: 24, fontWeight: '800', color: C.textPrimary,
-    textAlign: 'center', paddingTop: 12, paddingBottom: 8, letterSpacing: 1.5,
+    fontSize: 18, fontWeight: '900', color: C.textPrimary,
+    textAlign: 'center', paddingTop: 12, paddingBottom: 8,
+    letterSpacing: 4,
   },
 
   section: {
-    marginHorizontal: 16, marginTop: 14,
-    backgroundColor: C.card, borderRadius: 16,
+    marginHorizontal: 14, marginTop: 14,
+    backgroundColor: C.card, borderRadius: 18,
     borderWidth: 1, borderColor: C.border, padding: 16,
   },
   sectionHeader: {
@@ -631,7 +657,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between', marginBottom: 12,
   },
   sectionTitle: {
-    fontSize: 11, fontWeight: '800', color: C.textMuted, letterSpacing: 2,
+    fontSize: 10, fontWeight: '900', color: C.textMuted, letterSpacing: 2.5,
   },
 
   badge: {
@@ -640,21 +666,28 @@ const styles = StyleSheet.create({
   },
   badgeText: { fontSize: 11, fontWeight: '800', color: '#fff' },
 
+  // Default saved card (no pulse)
   alarmCard: {
     flexDirection: 'row', alignItems: 'center',
-    paddingVertical: 12, borderTopWidth: 1, borderColor: C.border,
+    backgroundColor: C.cardAlt, borderRadius: 12,
+    borderWidth: 1, borderColor: C.borderMuted,
+    padding: 12,
+  },
+  // Live card (animated borderColor applied via PulsingCard)
+  alarmCardLive: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: 'rgba(255,107,0,0.04)', borderRadius: 12,
+    borderWidth: 1.5, padding: 12,
   },
   alarmCardLeft: { flex: 1 },
-  livePill: {
+
+  pill: {
     flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start',
-    backgroundColor: 'rgba(63,185,80,0.12)',
     borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, marginBottom: 6,
   },
-  liveDot: {
-    width: 6, height: 6, borderRadius: 3,
-    backgroundColor: C.liveGreen, marginRight: 5,
-  },
-  liveText: { fontSize: 10, fontWeight: '800', color: C.liveGreen, letterSpacing: 1 },
+  pillDot: { width: 6, height: 6, borderRadius: 3, marginRight: 5 },
+  pillText: { fontSize: 10, fontWeight: '900', letterSpacing: 1 },
+
   alarmGame: { fontSize: 14, fontWeight: '700', color: C.textPrimary },
   alarmSub:  { fontSize: 12, color: C.textMuted, marginTop: 2 },
 
@@ -690,10 +723,62 @@ const styles = StyleSheet.create({
   emptyState: { alignItems: 'center', paddingVertical: 16, gap: 8 },
   emptyHint:  { color: C.textMuted, fontSize: 13, fontStyle: 'italic', textAlign: 'center' },
 
-  refreshBtn: {
-    margin: 16, padding: 14, borderRadius: 12,
-    alignItems: 'center', backgroundColor: C.card,
-    borderWidth: 1, borderColor: C.border,
+  trophyItem: {
+    flexDirection: 'row', alignItems: 'flex-start',
+    paddingVertical: 10, borderTopWidth: 1, borderColor: C.border, gap: 12,
   },
-  refreshBtnText: { color: C.textMuted, fontWeight: '700', fontSize: 14 },
+  trophyIconWrap: {
+    width: 36, height: 36, borderRadius: 10,
+    backgroundColor: 'rgba(240,165,0,0.12)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  trophyTitle: { fontSize: 13, fontWeight: '700', color: C.textPrimary },
+  trophyBody:  { fontSize: 12, color: C.textMuted, marginTop: 1 },
+  trophyTime:  { fontSize: 10, color: C.border, marginTop: 3, fontWeight: '600' },
+
+  refreshBtn: {
+    margin: 16, padding: 14, borderRadius: 14,
+    flexDirection: 'row',
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(255,107,0,0.1)',
+    borderWidth: 1, borderColor: 'rgba(255,107,0,0.3)',
+  },
+  refreshBtnText: { color: C.orange, fontWeight: '800', fontSize: 14, letterSpacing: 1 },
+
+  // ── Confirm Modal ──────────────────────────────────────────────────
+  confirmOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.7)',
+    alignItems: 'center', justifyContent: 'center',
+    padding: 32,
+  },
+  confirmBox: {
+    width: '100%', backgroundColor: C.card,
+    borderRadius: 20, borderWidth: 1, borderColor: C.border,
+    padding: 28, alignItems: 'center',
+  },
+  confirmTitle: {
+    fontSize: 20, fontWeight: '900', color: C.textPrimary,
+    letterSpacing: 0.5, marginBottom: 10,
+  },
+  confirmMessage: {
+    fontSize: 14, color: C.textMuted, textAlign: 'center',
+    lineHeight: 20, marginBottom: 28,
+  },
+  confirmButtons: {
+    flexDirection: 'row', gap: 12, width: '100%',
+  },
+  confirmCancelBtn: {
+    flex: 1, paddingVertical: 14, borderRadius: 12,
+    backgroundColor: C.cardAlt,
+    borderWidth: 1, borderColor: C.border,
+    alignItems: 'center',
+  },
+  confirmCancelText: { color: C.textMuted, fontWeight: '700', fontSize: 15 },
+  confirmDeleteBtn: {
+    flex: 1, paddingVertical: 14, borderRadius: 12,
+    backgroundColor: 'rgba(201,8,42,0.2)',
+    borderWidth: 1, borderColor: 'rgba(201,8,42,0.5)',
+    alignItems: 'center',
+  },
+  confirmDeleteText: { color: '#ff4d6d', fontWeight: '800', fontSize: 15 },
 });

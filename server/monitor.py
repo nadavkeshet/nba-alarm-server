@@ -1059,16 +1059,16 @@ def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
                             else:
                                 print(f"Checking {player_name}: {pts} pts / total_pts {total_pts_thr}. No alarm.", flush=True)
 
-                        # Hot Start (only if both fields are enabled)
+                        # Early Points (fires when threshold is hit at or before the deadline quarter)
                         if hot_start_q is not None and hot_start_pts is not None:
                             hot_start_q   = int(hot_start_q)
                             hot_start_pts = int(hot_start_pts)
-                            if quarter == hot_start_q and pts >= hot_start_pts:
-                                if _fire_once(f"{game_id}_{player_id}_hot_start_q{hot_start_q}"):
+                            if quarter <= hot_start_q and pts >= hot_start_pts:
+                                if _fire_once(f"{game_id}_{player_id}_early_pts_q{hot_start_q}"):
                                     _send_push_notification(
                                         push_token=push_token,
-                                        title="Hot Start Alert!",
-                                        body=f"{player_name}: {pts} pts in Q{quarter} of {game_name} — on fire!",
+                                        title="Early Points Alert!",
+                                        body=f"{player_name}: {pts} pts by Q{quarter} in {game_name}!",
                                         sound_channel=sound_channel,
                                         alert_type=p_alert_type,
                                     )

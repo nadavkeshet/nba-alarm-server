@@ -19,13 +19,15 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   TouchableOpacity,
   UIManager,
   View,
 } from 'react-native';
+
+import { BasketballToggle } from '../../components/basketball-toggle';
+import { NumericKeypad, useNumericKeypad } from '../../components/numeric-keypad';
 
 import { BACKGROUND_NOTIFICATION_TASK } from '../_background-notification-task';
 
@@ -315,12 +317,24 @@ export default function HomeScreen() {
   const [favoriteTeamIds, setFavoriteTeamIds]     = useState<Set<string>>(new Set());
   const [favoritePlayerIds, setFavoritePlayerIds] = useState<Set<string>>(new Set());
 
+  // ── Info modal (replaces system alert() for confirmations & errors) ─
+  const [infoModal, setInfoModal] = useState<{ visible: boolean; title: string; message: string }>(
+    { visible: false, title: '', message: '' },
+  );
+  const showInfo = (title: string, message: string) =>
+    setInfoModal({ visible: true, title, message });
+  const hideInfo = () =>
+    setInfoModal(prev => ({ ...prev, visible: false }));
+
   // ── Modal / alarm tab state ───────────────────────────────────────
   const [selectedGame, setSelectedGame] = useState<any>(null);
   const [alarmTab, setAlarmTab]         = useState<'game' | 'player'>('game');
 
   // ── Alert type ────────────────────────────────────────────────────
   const [alertType, setAlertType] = useState<'alarm' | 'silent'>('alarm');
+
+  // ── Numeric keypad ────────────────────────────────────────────────
+  const { kpVisible, kpValue, kpLabel, kpMaxLen, openKp, closeKp, onKpChange } = useNumericKeypad();
 
   // ── Game alarm state ──────────────────────────────────────────────
   const [maxDiff, setMaxDiff]           = useState('5');
@@ -667,12 +681,12 @@ export default function HomeScreen() {
           .catch(err => console.warn('[DB] /set_alarm failed (non-critical):', err));
 
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        alert(`Game alarm set for ${selectedGame.name}!`);
+        showInfo('Alarm Set!', `Now watching ${selectedGame.name}.`);
       } else {
-        alert('Server error. Make sure the server is running.');
+        showInfo('Server Error', 'Make sure the server is running.');
       }
     } catch {
-      alert(`Could not connect to ${SERVER_URL}`);
+      showInfo('Connection Error', `Could not reach the server at ${SERVER_URL}.`);
     } finally {
       closeModal();
     }
@@ -682,7 +696,7 @@ export default function HomeScreen() {
   const startPlayerMonitoring = async () => {
     if (!selectedGame || !selectedPlayer) return;
     if (!ptsGoalEnabled && !ptsEarlyEnabled && !tdWatchEnabled) {
-      alert('Please enable at least one alarm condition.');
+      showInfo('No Condition Selected', 'Please enable at least one alarm condition.');
       return;
     }
     const freshToken = expoPushToken || (await getPushToken()) || '';
@@ -750,12 +764,12 @@ export default function HomeScreen() {
 
       if (successCount > 0) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        alert(`${successCount} alarm${successCount > 1 ? 's' : ''} set for ${selectedPlayer.name}!`);
+        showInfo('Alarm Set!', `${successCount} condition${successCount > 1 ? 's' : ''} active for ${selectedPlayer.name}.`);
       } else {
-        alert('Server error. Make sure the server is running.');
+        showInfo('Server Error', 'Make sure the server is running.');
       }
     } catch {
-      alert(`Could not connect to ${SERVER_URL}`);
+      showInfo('Connection Error', `Could not reach the server at ${SERVER_URL}.`);
     } finally {
       closeModal();
     }
@@ -839,6 +853,11 @@ export default function HomeScreen() {
       <Modal visible={!!selectedGame} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ paddingBottom: 8 }}
+          >
 
             {/* Game name */}
             <Text style={styles.modalSubtitle}>Set Alarm for</Text>
@@ -879,13 +898,12 @@ export default function HomeScreen() {
             {alarmTab === 'game' && (
               <>
                 <Text style={styles.inputLabel}>Max Point Difference</Text>
-                <TextInput
-                  style={styles.input}
-                  keyboardType="numeric"
-                  value={maxDiff}
-                  onChangeText={setMaxDiff}
-                  placeholderTextColor="#555"
-                />
+                <TouchableOpacity
+                  style={styles.numDisplay}
+                  onPress={() => openKp(maxDiff, setMaxDiff, 'MAX POINT DIFF', 2)}
+                >
+                  <Text style={styles.numDisplayText}>{maxDiff || '—'}</Text>
+                </TouchableOpacity>
 
                 <Text style={styles.inputLabel}>Start Monitoring from Quarter</Text>
                 <View style={styles.quarterRow}>
@@ -981,22 +999,18 @@ export default function HomeScreen() {
                           <Text style={styles.conditionCardTitle}>Points Goal</Text>
                           <Text style={styles.conditionCardSub}>Alert when player hits a point total</Text>
                         </View>
-                        <Switch
+                        <BasketballToggle
                           value={ptsGoalEnabled}
                           onValueChange={setPtsGoalEnabled}
-                          trackColor={{ false: C.border, true: C.blue }}
-                          thumbColor={ptsGoalEnabled ? C.blue : C.textMuted}
                         />
                       </View>
                       {ptsGoalEnabled && (
-                        <TextInput
-                          style={[styles.input, { marginTop: 10 }]}
-                          keyboardType="numeric"
-                          value={ptsGoalThreshold}
-                          onChangeText={setPtsGoalThreshold}
-                          placeholder="25"
-                          placeholderTextColor="#555"
-                        />
+                        <TouchableOpacity
+                          style={[styles.numDisplay, { marginTop: 10 }]}
+                          onPress={() => openKp(ptsGoalThreshold, setPtsGoalThreshold, 'POINTS GOAL', 3)}
+                        >
+                          <Text style={styles.numDisplayText}>{ptsGoalThreshold || '—'}</Text>
+                        </TouchableOpacity>
                       )}
                     </View>
 
@@ -1007,24 +1021,21 @@ export default function HomeScreen() {
                           <Text style={styles.conditionCardTitle}>Early Points</Text>
                           <Text style={styles.conditionCardSub}>Alert if threshold is hit before a quarter ends</Text>
                         </View>
-                        <Switch
+                        <BasketballToggle
                           value={ptsEarlyEnabled}
                           onValueChange={setPtsEarlyEnabled}
-                          trackColor={{ false: C.border, true: C.blue }}
-                          thumbColor={ptsEarlyEnabled ? C.blue : C.textMuted}
                         />
                       </View>
                       {ptsEarlyEnabled && (
                         <View style={[styles.earlyRow, { marginBottom: 0, marginTop: 10 }]}>
                           <View style={styles.earlyField}>
                             <Text style={styles.inputLabel}>Points</Text>
-                            <TextInput
-                              style={[styles.input, styles.inputSmall]}
-                              keyboardType="numeric"
-                              value={earlyPtsThreshold}
-                              onChangeText={setEarlyPtsThreshold}
-                              placeholderTextColor="#555"
-                            />
+                            <TouchableOpacity
+                              style={[styles.numDisplay, styles.numDisplaySmall]}
+                              onPress={() => openKp(earlyPtsThreshold, setEarlyPtsThreshold, 'EARLY PTS', 3)}
+                            >
+                              <Text style={styles.numDisplayText}>{earlyPtsThreshold || '—'}</Text>
+                            </TouchableOpacity>
                           </View>
                           <Text style={styles.earlyBy}>by</Text>
                           <View style={styles.earlyField}>
@@ -1054,11 +1065,9 @@ export default function HomeScreen() {
                           <Text style={styles.conditionCardTitle}>Triple-Double Watch</Text>
                           <Text style={styles.conditionCardSub}>Alert when approaching 9+ in 3 stats</Text>
                         </View>
-                        <Switch
+                        <BasketballToggle
                           value={tdWatchEnabled}
                           onValueChange={setTdWatchEnabled}
-                          trackColor={{ false: C.border, true: C.blue }}
-                          thumbColor={tdWatchEnabled ? C.blue : C.textMuted}
                         />
                       </View>
                     </View>
@@ -1075,9 +1084,35 @@ export default function HomeScreen() {
             <TouchableOpacity style={styles.cancelButton} onPress={closeModal}>
               <Text style={styles.cancelButtonText}>Cancel</Text>
             </TouchableOpacity>
+
+          </ScrollView>
           </View>
         </View>
       </Modal>
+
+      {/* ── Numeric Keypad ────────────────────────────────────────── */}
+      <NumericKeypad
+        visible={kpVisible}
+        value={kpValue}
+        label={kpLabel}
+        maxLen={kpMaxLen}
+        onChange={onKpChange}
+        onDone={closeKp}
+      />
+
+      {/* ── Info / Confirmation Modal ──────────────────────────────── */}
+      <Modal visible={infoModal.visible} transparent animationType="fade" onRequestClose={hideInfo}>
+        <View style={styles.infoOverlay}>
+          <View style={styles.infoBox}>
+            <Text style={styles.infoTitle}>{infoModal.title}</Text>
+            <Text style={styles.infoMessage}>{infoModal.message}</Text>
+            <TouchableOpacity style={styles.infoOkBtn} onPress={hideInfo}>
+              <Text style={styles.infoOkText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
     </SafeAreaView>
   );
 }
@@ -1085,15 +1120,17 @@ export default function HomeScreen() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const C = {
-  bg:          '#0d1117',
-  card:        '#161b22',
-  border:      '#30363d',
+  bg:          '#0B1623',
+  card:        '#0d1f35',
+  cardAlt:     '#111d2e',
+  border:      '#1a3451',
   blue:        '#1d428a',
   red:         '#c9082a',
   textPrimary: '#e6edf3',
-  textMuted:   '#8b949e',
+  textMuted:   '#6b8aad',
   liveGreen:   '#3fb950',
   accentBlue:  '#4d8cf5',
+  orange:      '#FF6B00',
 };
 
 const styles = StyleSheet.create({
@@ -1185,13 +1222,13 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: C.border,
   },
   alarmTab:           { flex: 1, paddingVertical: 9, alignItems: 'center' },
-  alarmTabActive:     { backgroundColor: C.blue },
+  alarmTabActive:     { backgroundColor: C.orange },
   alarmTabText:       { fontSize: 13, fontWeight: '700', color: C.textMuted },
   alarmTabTextActive: { color: '#fff' },
 
   inputLabel: { fontSize: 12, color: C.textMuted, fontWeight: '700', marginBottom: 8, letterSpacing: 1 },
   input: {
-    borderBottomWidth: 2, borderColor: C.blue,
+    borderBottomWidth: 2, borderColor: C.orange,
     marginBottom: 20, fontSize: 28,
     color: C.textPrimary, paddingVertical: 4,
   },
@@ -1203,11 +1240,11 @@ const styles = StyleSheet.create({
     backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center',
     borderWidth: 1, borderColor: C.border,
   },
-  quarterButtonActive: { backgroundColor: C.red, borderColor: C.red },
+  quarterButtonActive: { backgroundColor: C.orange, borderColor: C.orange },
   quarterText:         { fontSize: 14, fontWeight: '800', color: C.textMuted },
   quarterTextActive:   { color: '#fff' },
 
-  startButton:      { backgroundColor: C.blue, padding: 16, borderRadius: 14, alignItems: 'center', marginTop: 4 },
+  startButton:      { backgroundColor: C.orange, padding: 16, borderRadius: 14, alignItems: 'center', marginTop: 4 },
   startButtonText:  { color: '#fff', fontWeight: '800', fontSize: 15 },
   cancelButton:     { padding: 14, alignItems: 'center', marginTop: 4 },
   cancelButtonText: { color: C.textMuted, fontSize: 15 },
@@ -1249,7 +1286,7 @@ const styles = StyleSheet.create({
 
   conditionHint: { fontSize: 12, color: C.textMuted, marginTop: -8, marginBottom: 12 },
   conditionCard: {
-    backgroundColor: C.bg, borderWidth: 1, borderColor: C.border,
+    backgroundColor: C.cardAlt, borderWidth: 1, borderColor: C.border,
     borderRadius: 10, padding: 12, marginBottom: 10,
   },
   conditionCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -1280,4 +1317,43 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10, paddingVertical: 4, marginHorizontal: 8,
   },
   overlayBannerBtnText: { fontSize: 12, fontWeight: '700', color: '#000' },
+
+  // ── Info Modal ────────────────────────────────────────────────────
+  infoOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.7)',
+    alignItems: 'center', justifyContent: 'center', padding: 32,
+  },
+  infoBox: {
+    width: '100%', backgroundColor: C.card,
+    borderRadius: 20, borderWidth: 1, borderColor: C.border,
+    padding: 28, alignItems: 'center',
+  },
+  infoTitle: {
+    fontSize: 20, fontWeight: '900', color: C.textPrimary,
+    letterSpacing: 0.5, marginBottom: 10,
+  },
+  infoMessage: {
+    fontSize: 14, color: C.textMuted, textAlign: 'center',
+    lineHeight: 20, marginBottom: 28,
+  },
+  infoOkBtn: {
+    width: '100%', paddingVertical: 14, borderRadius: 12,
+    backgroundColor: 'rgba(255,107,0,0.15)',
+    borderWidth: 1, borderColor: 'rgba(255,107,0,0.4)',
+    alignItems: 'center',
+  },
+  infoOkText: { color: C.orange, fontWeight: '800', fontSize: 15 },
+
+  // ── Numeric display box (replaces TextInput for keypad) ───────────
+  numDisplay: {
+    borderBottomWidth: 2, borderColor: C.orange,
+    marginBottom: 20, paddingVertical: 6,
+    alignItems: 'center',
+  },
+  numDisplaySmall: {
+    marginBottom: 0,
+  },
+  numDisplayText: {
+    fontSize: 28, fontWeight: '800', color: C.textPrimary,
+  },
 });

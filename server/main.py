@@ -358,11 +358,11 @@ def _check_fav_player(fav: FavoritePlayerDB, events: list[dict]) -> None:
 
         if fav.hot_start_q is not None and fav.hot_start_pts is not None:
             key = f"{today}_{eid}_{fav.target_id}_hot_q{fav.hot_start_q}"
-            if period == fav.hot_start_q and pts >= fav.hot_start_pts and key not in _fav_fired:
+            if period <= fav.hot_start_q and pts >= fav.hot_start_pts and key not in _fav_fired:
                 _fav_fired.add(key)
                 _send_push_notification(
-                    push_token=fav.user_token, title="Hot Start Alert!",
-                    body=f"{name}: {pts} pts in Q{period}!", sound_channel="classic_alarm",
+                    push_token=fav.user_token, title="Early Points Alert!",
+                    body=f"{name}: {pts} pts by Q{period}!", sound_channel="classic_alarm",
                 )
 
         if fav.td_watch:
