@@ -335,8 +335,8 @@ _manual_lock = threading.Lock()
 
 
 def _player_condition_group(condition: str) -> str:
-    """pts_goal and pts_early share the 'points' slot; each group gets its own thread."""
-    return "points" if condition in ("pts_goal", "pts_early") else condition
+    """Each condition type gets its own thread slot — no two conditions ever share a key."""
+    return condition
 
 
 def _register_manual_alarm(

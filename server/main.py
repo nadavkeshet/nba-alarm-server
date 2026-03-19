@@ -391,13 +391,17 @@ async def _alarm_poller() -> None:
             # Snapshot active in-memory alarms so we can skip DB records that
             # already have a dedicated monitoring thread watching them.
             active_game_ids    = {a["game_id"] for a in get_active_alarms()}
-            # Map live player alarms to (player_id, condition_group) pairs so we
-            # only skip DB alarms that share the same condition slot as an active thread.
-            # DB uses "points" / "triple_double"; monitor uses "pts_goal" / "pts_early" / "triple_double".
-            def _db_group(cond: str) -> str:
-                return "points" if cond in ("pts_goal", "pts_early") else cond
+            # Map live player alarms to (player_id, condition_slot) pairs so we only
+            # skip DB alarms whose condition slot has an active monitoring thread.
+            # DB "points" with start_quarter=0 → slot "pts_goal"
+            # DB "points" with start_quarter>0  → slot "pts_early"
+            # DB "triple_double"                → slot "triple_double"
+            def _alarm_slot(alarm_obj) -> str:
+                if alarm_obj.condition_type == "points":
+                    return "pts_early" if (alarm_obj.start_quarter or 0) > 0 else "pts_goal"
+                return alarm_obj.condition_type
             active_player_keys = {
-                (a["player_id"], _db_group(a["condition"]))
+                (a["player_id"], a["condition"])
                 for a in get_active_player_alarms()
             }
 
@@ -408,7 +412,7 @@ async def _alarm_poller() -> None:
                     if alarm.condition_type == "score_diff" and alarm.target_id in active_game_ids:
                         continue
                     if alarm.condition_type in ("points", "triple_double") and \
-                            (alarm.target_id, alarm.condition_type) in active_player_keys:
+                            (alarm.target_id, _alarm_slot(alarm)) in active_player_keys:
                         continue
 
                     if _check_and_fire(alarm, events):
@@ -517,14 +521,24 @@ def set_alarm(req: SetAlarmRequest):
             detail="condition_type must be 'points', 'score_diff', or 'triple_double'.",
         )
     with Session(engine) as session:
-        # Remove any existing active alarm for this user + target + condition
-        # so the active screen never shows duplicates
-        session.query(Alarm).filter(
+        # Remove any existing active alarm for this user + target + condition slot.
+        # For "points", pts_goal (start_quarter=0) and pts_early (start_quarter>0)
+        # are independent — match on whether start_quarter is zero/nonzero to allow
+        # both to exist simultaneously while still overriding the same sub-type.
+        q = session.query(Alarm).filter(
             Alarm.user_token     == req.user_token,
             Alarm.target_id      == req.target_id,
             Alarm.condition_type == condition_type,
             Alarm.is_active.is_(True),
-        ).delete()
+        )
+        if condition_type == "points":
+            if req.start_quarter and req.start_quarter > 0:
+                # pts_early: only replace other pts_early rows (quarter-limited)
+                q = q.filter(Alarm.start_quarter > 0)
+            else:
+                # pts_goal: only replace other pts_goal rows (no quarter limit)
+                q = q.filter((Alarm.start_quarter == 0) | Alarm.start_quarter.is_(None))
+        q.delete()
         alarm = Alarm(
             user_token=req.user_token,
             target_id=req.target_id,
