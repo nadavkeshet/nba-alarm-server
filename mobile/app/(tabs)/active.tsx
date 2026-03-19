@@ -273,19 +273,39 @@ export default function ActiveScreen() {
   const derived = useMemo(() => {
     const allDbAlarms    = Array.isArray(data?.db_alarms) ? data!.db_alarms : [];
     const dbGameAlarms   = allDbAlarms.filter(a => (a.condition_type ?? '').trim().toLowerCase() === 'score_diff');
-    const dbPlayerAlarms = allDbAlarms.filter(a => {
+    const dbPlayerAlarmsFlat = allDbAlarms.filter(a => {
       const ct = (a.condition_type ?? '').trim().toLowerCase();
       return ct === 'points' || ct === 'triple_double';
     });
     const liveGameAlarms   = Array.isArray(data?.game_alarms)   ? data!.game_alarms   : [];
-    const livePlayerAlarms = Array.isArray(data?.player_alarms) ? data!.player_alarms : [];
+    const livePlayerAlarmsFlat = Array.isArray(data?.player_alarms) ? data!.player_alarms : [];
+
+    // Group player alarms by player so multiple conditions show as one card
+    const livePlayerAlarmGroups: PlayerAlarm[][] = [];
+    const livePlayerMap = new Map<string, PlayerAlarm[]>();
+    for (const a of livePlayerAlarmsFlat) {
+      const group = livePlayerMap.get(a.player_id) ?? [];
+      group.push(a);
+      livePlayerMap.set(a.player_id, group);
+    }
+    livePlayerMap.forEach(g => livePlayerAlarmGroups.push(g));
+
+    const dbPlayerAlarmGroups: DbAlarm[][] = [];
+    const dbPlayerMap = new Map<string, DbAlarm[]>();
+    for (const a of dbPlayerAlarmsFlat) {
+      const group = dbPlayerMap.get(a.target_id) ?? [];
+      group.push(a);
+      dbPlayerMap.set(a.target_id, group);
+    }
+    dbPlayerMap.forEach(g => dbPlayerAlarmGroups.push(g));
+
     const histCats = data?.historical_mode?.categories;
     const activeCategories = histCats ? [
       histCats.scoring_40_half    && '40+ pts before halftime',
       histCats.threes_11          && '11+ three-pointers',
       histCats.quad_double_threat && 'Quad-double threat',
     ].filter(Boolean) as string[] : [];
-    return { dbGameAlarms, dbPlayerAlarms, liveGameAlarms, livePlayerAlarms, activeCategories };
+    return { dbGameAlarms, liveGameAlarms, livePlayerAlarmGroups, dbPlayerAlarmGroups, activeCategories };
   }, [data]);
 
   const cancelGameAlarm = (alarm: GameAlarm) => {
@@ -298,11 +318,13 @@ export default function ActiveScreen() {
     });
   };
 
-  const cancelPlayerAlarm = (alarm: PlayerAlarm) => {
-    showConfirm(`Stop watching ${alarm.player_name}?`, () => {
+  const cancelPlayerAlarm = (alarms: PlayerAlarm[]) => {
+    const first = alarms[0];
+    showConfirm(`Stop watching ${first.player_name}?`, () => {
       const t = tokenRef.current;
       const param = t ? `?user_token=${encodeURIComponent(t)}` : '';
-      fetch(`${SERVER_URL}/active-monitors/player/${alarm.player_id}${param}`, { method: 'DELETE' })
+      // A single DELETE cancels all condition threads for this player on the server
+      fetch(`${SERVER_URL}/active-monitors/player/${first.player_id}${param}`, { method: 'DELETE' })
         .then(() => load())
         .catch(e => console.error('Cancel player alarm error:', e));
     });
@@ -360,9 +382,9 @@ export default function ActiveScreen() {
   const radar    = data?.global_radar;
   const hist     = data?.historical_mode;
 
-  const { dbGameAlarms, dbPlayerAlarms, liveGameAlarms, livePlayerAlarms, activeCategories } = derived;
-  const totalGameAlarms   = liveGameAlarms.length   + dbGameAlarms.length;
-  const totalPlayerAlarms = livePlayerAlarms.length + dbPlayerAlarms.length;
+  const { dbGameAlarms, liveGameAlarms, livePlayerAlarmGroups, dbPlayerAlarmGroups, activeCategories } = derived;
+  const totalGameAlarms   = liveGameAlarms.length + dbGameAlarms.length;
+  const totalPlayerAlarms = livePlayerAlarmGroups.length + dbPlayerAlarmGroups.length;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -441,39 +463,55 @@ export default function ActiveScreen() {
             </View>
           ) : (
             <View style={{ gap: 8 }}>
-              {livePlayerAlarms.map(alarm => (
-                <PulsingCard key={`live-${alarm.player_id}`}>
+              {livePlayerAlarmGroups.map(group => (
+                <PulsingCard key={`live-${group[0].player_id}`}>
                   <View style={styles.alarmCardLeft}>
                     <LivePill label="WATCHING" color={C.orange} bg={C.orangeDim} />
-                    <Text style={styles.alarmGame}>{alarm.player_name ?? 'Unknown Player'}</Text>
+                    <Text style={styles.alarmGame}>{group[0].player_name ?? 'Unknown Player'}</Text>
+                    {group.map((alarm, i) => (
+                      <Text key={i} style={styles.alarmSub}>
+                        {CONDITION_LABEL[alarm.condition] ?? alarm.condition}
+                        {alarm.condition !== 'triple_double' ? ` · ${alarm.pts_threshold ?? '?'} pts` : ''}
+                      </Text>
+                    ))}
+                    <Text style={[styles.alarmSub, { marginTop: 1 }]}>{group[0].game_name ?? ''}</Text>
                     <Text style={styles.alarmSub}>
-                      {CONDITION_LABEL[alarm.condition] ?? alarm.condition}
-                      {alarm.condition !== 'triple_double' ? ` · ${alarm.pts_threshold ?? '?'} pts` : ''}
-                    </Text>
-                    <Text style={[styles.alarmSub, { marginTop: 1 }]}>{alarm.game_name ?? ''}</Text>
-                    <Text style={styles.alarmSub}>
-                      {alarm.alert_type === 'alarm' ? '🚨 Full Alarm' : '🔕 Silent'}
+                      {group[0].alert_type === 'alarm' ? '🚨 Full Alarm' : '🔕 Silent'}
                     </Text>
                   </View>
-                  <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelPlayerAlarm(alarm)}>
+                  <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelPlayerAlarm(group)}>
                     <Text style={styles.cancelBtnText}>Cancel</Text>
                   </TouchableOpacity>
                 </PulsingCard>
               ))}
-              {dbPlayerAlarms.map(alarm => (
-                <View key={`db-${alarm.alarm_id ?? alarm.target_id}`} style={styles.alarmCard}>
+              {dbPlayerAlarmGroups.map(group => (
+                <View key={`db-${group[0].target_id}`} style={styles.alarmCard}>
                   <View style={styles.alarmCardLeft}>
                     <LivePill label="SAVED" color={C.orange} bg={C.orangeDim} />
-                    <Text style={styles.alarmGame}>{alarm.target_name || alarm.target_id || 'Unknown Player'}</Text>
-                    <Text style={styles.alarmSub}>
-                      {(alarm.condition_type ?? '').toLowerCase() === 'triple_double'
-                        ? 'Triple-Double Watch'
-                        : alarm.start_quarter && alarm.start_quarter > 0
-                          ? `${alarm.threshold ?? '?'}+ pts (Before Q${alarm.start_quarter})`
-                          : `${alarm.threshold ?? '?'}+ pts (Any Quarter)`}
-                    </Text>
+                    <Text style={styles.alarmGame}>{group[0].target_name || group[0].target_id || 'Unknown Player'}</Text>
+                    {group.map((alarm, i) => (
+                      <Text key={i} style={styles.alarmSub}>
+                        {(alarm.condition_type ?? '').toLowerCase() === 'triple_double'
+                          ? 'Triple-Double Watch'
+                          : alarm.start_quarter && alarm.start_quarter > 0
+                            ? `${alarm.threshold ?? '?'}+ pts (Before Q${alarm.start_quarter})`
+                            : `${alarm.threshold ?? '?'}+ pts (Any Quarter)`}
+                      </Text>
+                    ))}
                   </View>
-                  <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelDbAlarm(alarm)}>
+                  <TouchableOpacity style={styles.cancelBtn} onPress={() => {
+                    showConfirm(`Delete all alarms for ${group[0].target_name || 'this player'}?`, async () => {
+                      const t = tokenRef.current;
+                      if (!t) return;
+                      await Promise.all(group.map(alarm =>
+                        fetch(`${SERVER_URL}/active-monitors/db/${alarm.alarm_id}?user_token=${encodeURIComponent(t)}`, { method: 'DELETE' })
+                      ));
+                      setData(prev => prev ? {
+                        ...prev,
+                        db_alarms: prev.db_alarms.filter(a => !group.some(g => g.alarm_id === a.alarm_id)),
+                      } : prev);
+                    });
+                  }}>
                     <Text style={styles.cancelBtnText}>Delete</Text>
                   </TouchableOpacity>
                 </View>

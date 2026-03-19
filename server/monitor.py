@@ -327,11 +327,16 @@ def _fire_once(key: str) -> bool:
 # Manual alarm registry  (radar skips games being monitored manually)
 # ---------------------------------------------------------------------------
 
-_active_manual_alarms: dict[str, dict] = {}   # game_id  → alarm info
-_active_player_alarms: dict[str, dict] = {}   # player_id → alarm info
+_active_manual_alarms: dict[str, dict] = {}                      # game_id → alarm info
+_active_player_alarms: dict[tuple[str,str], dict] = {}           # (player_id, group) → alarm info
 _alarm_stop_events:    dict[str, threading.Event] = {}
-_player_stop_events:   dict[str, threading.Event] = {}
+_player_stop_events:   dict[tuple[str,str], threading.Event] = {}
 _manual_lock = threading.Lock()
+
+
+def _player_condition_group(condition: str) -> str:
+    """pts_goal and pts_early share the 'points' slot; each group gets its own thread."""
+    return "points" if condition in ("pts_goal", "pts_early") else condition
 
 
 def _register_manual_alarm(
@@ -363,12 +368,14 @@ def _register_player_alarm(
     alert_type: str = "alarm",
 ) -> threading.Event:
     stop = threading.Event()
+    group = _player_condition_group(condition)
+    key = (player_id, group)
     with _manual_lock:
-        # Cancel existing alarm for this player so the old thread exits cleanly
-        existing = _player_stop_events.get(player_id)
+        # Cancel existing alarm for same player+condition-group so the old thread exits cleanly
+        existing = _player_stop_events.get(key)
         if existing:
             existing.set()
-        _active_player_alarms[player_id] = {
+        _active_player_alarms[key] = {
             "game_id":       game_id,
             "game_name":     game_name,
             "player_id":     player_id,
@@ -379,7 +386,7 @@ def _register_player_alarm(
             "status":        "scheduled",
             "started_at":    datetime.now(timezone.utc).isoformat(),
         }
-        _player_stop_events[player_id] = stop
+        _player_stop_events[key] = stop
     return stop
 
 
@@ -389,10 +396,11 @@ def _update_alarm_status(game_id: str, status: str) -> None:
             _active_manual_alarms[game_id]["status"] = status
 
 
-def _update_player_alarm_status(player_id: str, status: str) -> None:
+def _update_player_alarm_status(player_id: str, condition: str, status: str) -> None:
+    key = (player_id, _player_condition_group(condition))
     with _manual_lock:
-        if player_id in _active_player_alarms:
-            _active_player_alarms[player_id]["status"] = status
+        if key in _active_player_alarms:
+            _active_player_alarms[key]["status"] = status
 
 
 def _unregister_manual_alarm(game_id: str) -> None:
@@ -401,10 +409,11 @@ def _unregister_manual_alarm(game_id: str) -> None:
         _alarm_stop_events.pop(game_id, None)
 
 
-def _unregister_player_alarm(player_id: str) -> None:
+def _unregister_player_alarm(player_id: str, condition: str) -> None:
+    key = (player_id, _player_condition_group(condition))
     with _manual_lock:
-        _active_player_alarms.pop(player_id, None)
-        _player_stop_events.pop(player_id, None)
+        _active_player_alarms.pop(key, None)
+        _player_stop_events.pop(key, None)
 
 
 def _has_manual_alarm(game_id: str) -> bool:
@@ -414,7 +423,7 @@ def _has_manual_alarm(game_id: str) -> bool:
 
 def _has_manual_player_alarm(player_id: str) -> bool:
     with _manual_lock:
-        return player_id in _active_player_alarms
+        return any(k[0] == player_id for k in _active_player_alarms)
 
 
 def get_active_alarms() -> list[dict]:
@@ -438,11 +447,12 @@ def cancel_game_alarm(game_id: str) -> bool:
 
 def cancel_player_alarm(player_id: str) -> bool:
     with _manual_lock:
-        event = _player_stop_events.get(player_id)
-        if event:
-            event.set()
-            return True
-    return False
+        keys = [k for k in _player_stop_events if k[0] == player_id]
+        if not keys:
+            return False
+        for k in keys:
+            _player_stop_events[k].set()
+        return True
 
 
 def clear_stale_state() -> None:
@@ -895,7 +905,7 @@ def start_player_monitoring_job(
             return
 
         # Game is now live (or imminent) – flip status so UI shows "WATCHING"
-        _update_player_alarm_status(player_id, "live")
+        _update_player_alarm_status(player_id, condition, "live")
         log.info("Active player monitoring started. Checking every %ds.", POLL_INTERVAL)
 
         while True:
@@ -978,7 +988,7 @@ def start_player_monitoring_job(
                 return
 
     finally:
-        _unregister_player_alarm(player_id)
+        _unregister_player_alarm(player_id, condition)
 
 
 # ---------------------------------------------------------------------------

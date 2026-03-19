@@ -390,8 +390,16 @@ async def _alarm_poller() -> None:
 
             # Snapshot active in-memory alarms so we can skip DB records that
             # already have a dedicated monitoring thread watching them.
-            active_game_ids   = {a["game_id"]   for a in get_active_alarms()}
-            active_player_ids = {a["player_id"] for a in get_active_player_alarms()}
+            active_game_ids    = {a["game_id"] for a in get_active_alarms()}
+            # Map live player alarms to (player_id, condition_group) pairs so we
+            # only skip DB alarms that share the same condition slot as an active thread.
+            # DB uses "points" / "triple_double"; monitor uses "pts_goal" / "pts_early" / "triple_double".
+            def _db_group(cond: str) -> str:
+                return "points" if cond in ("pts_goal", "pts_early") else cond
+            active_player_keys = {
+                (a["player_id"], _db_group(a["condition"]))
+                for a in get_active_player_alarms()
+            }
 
             for alarm in alarms:
                 try:
@@ -399,7 +407,8 @@ async def _alarm_poller() -> None:
                     # that thread will deactivate the DB record when it fires.
                     if alarm.condition_type == "score_diff" and alarm.target_id in active_game_ids:
                         continue
-                    if alarm.condition_type in ("points", "triple_double") and alarm.target_id in active_player_ids:
+                    if alarm.condition_type in ("points", "triple_double") and \
+                            (alarm.target_id, alarm.condition_type) in active_player_keys:
                         continue
 
                     if _check_and_fire(alarm, events):
