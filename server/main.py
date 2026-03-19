@@ -41,6 +41,8 @@ from monitor import (
     get_today_games,
     # Startup
     clear_stale_state,
+    # DB deactivation registration
+    register_db_deactivate,
 )
 
 
@@ -148,6 +150,32 @@ def _init_db() -> None:
             pass  # column already exists – safe to ignore
 
 
+# ── DB Alarm Deactivation (called by monitoring threads in monitor.py) ─────────
+
+def _deactivate_db_alarm(target_id: str) -> None:
+    """Set is_active=False for all active Alarm rows matching target_id."""
+    if engine is None:
+        return
+    try:
+        with Session(engine) as session:
+            rows = (
+                session.query(Alarm)
+                       .filter(Alarm.is_active.is_(True), Alarm.target_id == target_id)
+                       .all()
+            )
+            for row in rows:
+                row.is_active = False
+            session.commit()
+            if rows:
+                print(f"DB: deactivated {len(rows)} alarm(s) for target {target_id}", flush=True)
+    except Exception as exc:
+        print(f"DB: deactivation failed for {target_id}: {exc}", flush=True)
+
+
+# Register the callback so monitor.py threads can deactivate DB records after firing
+register_db_deactivate(_deactivate_db_alarm)
+
+
 # ── Startup Restore ────────────────────────────────────────────────────────────
 
 def _restore_prefs_from_db(user_token: str) -> None:
@@ -215,9 +243,6 @@ def _restore_prefs_from_db(user_token: str) -> None:
 
 
 # ── Background Async Poller ────────────────────────────────────────────────────
-
-# Fire-once guard for persistent favorites (cleared on restart; one entry per game-day)
-_fav_fired: set[str] = set()
 
 ESPN_SCOREBOARD = (
     "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
@@ -341,81 +366,6 @@ def _check_and_fire(alarm: Alarm, events: list[dict]) -> bool:
     return False
 
 
-def _check_fav_player(fav: FavoritePlayerDB, events: list[dict]) -> None:
-    """Fire notifications for a persistent favorite player when conditions are met."""
-    import datetime
-    today = datetime.date.today().isoformat()
-    for event in events:
-        if _get_event_state(event) != "in":
-            continue
-        period = _get_event_period(event)
-        pts    = _extract_player_pts(event, fav.target_id)
-        if pts is None:
-            continue
-        eid = event.get("id", "?")
-        name = fav.target_name or fav.target_id
-
-        if fav.total_pts is not None:
-            key = f"{today}_{eid}_{fav.target_id}_total"
-            if pts >= fav.total_pts and key not in _fav_fired:
-                _fav_fired.add(key)
-                _send_push_notification(
-                    push_token=fav.user_token, title="Scoring Alert!",
-                    body=f"{name} has {pts} pts!", sound_channel="classic_alarm",
-                )
-
-        if fav.early_pts_q is not None and fav.early_pts is not None:
-            key = f"{today}_{eid}_{fav.target_id}_early_pts_q{fav.early_pts_q}"
-            if period <= fav.early_pts_q and pts >= fav.early_pts and key not in _fav_fired:
-                _fav_fired.add(key)
-                _send_push_notification(
-                    push_token=fav.user_token, title="Early Points Alert!",
-                    body=f"{name}: {pts} pts by Q{period}!", sound_channel="classic_alarm",
-                )
-
-        if fav.td_watch:
-            stats = _extract_player_stats(event, fav.target_id)
-            key   = f"{today}_{eid}_{fav.target_id}_td"
-            if stats and sum(1 for v in stats.values() if v >= 8) >= 3 and key not in _fav_fired:
-                _fav_fired.add(key)
-                _send_push_notification(
-                    push_token=fav.user_token, title="Triple-Double Watch!",
-                    body=f"{name} is approaching a triple-double!", sound_channel="classic_alarm",
-                )
-
-
-def _check_fav_team(fav: FavoriteTeamDB, events: list[dict]) -> None:
-    """Fire a notification when a favorite team's game hits the score-gap threshold."""
-    import datetime
-    if fav.score_gap is None:
-        return
-    today   = datetime.date.today().isoformat()
-    start_q = fav.start_quarter or 4
-    for event in events:
-        if _get_event_state(event) != "in":
-            continue
-        if _get_event_period(event) < start_q:
-            continue
-        try:
-            comps    = event["competitions"][0]["competitors"]
-            team_ids = [c.get("team", {}).get("id", "") for c in comps]
-            if fav.team_id not in team_ids:
-                continue
-        except Exception:
-            continue
-        diff = _extract_game_diff(event)
-        if diff is None:
-            continue
-        key = f"{today}_{event.get('id', '?')}_{fav.team_id}_gap"
-        if diff <= fav.score_gap and key not in _fav_fired:
-            _fav_fired.add(key)
-            _send_push_notification(
-                push_token=fav.user_token, title="Game Alert!",
-                body=f"{fav.team_name or 'Your team'} game is close — {diff} pt gap!",
-                sound_channel="classic_alarm",
-            )
-
-
 async def _alarm_poller() -> None:
     """
     Every 60 s:
@@ -438,8 +388,20 @@ async def _alarm_poller() -> None:
                            .all()
                 )
 
+            # Snapshot active in-memory alarms so we can skip DB records that
+            # already have a dedicated monitoring thread watching them.
+            active_game_ids   = {a["game_id"]   for a in get_active_alarms()}
+            active_player_ids = {a["player_id"] for a in get_active_player_alarms()}
+
             for alarm in alarms:
                 try:
+                    # Skip if a monitoring thread is already watching this target —
+                    # that thread will deactivate the DB record when it fires.
+                    if alarm.condition_type == "score_diff" and alarm.target_id in active_game_ids:
+                        continue
+                    if alarm.condition_type in ("points", "triple_double") and alarm.target_id in active_player_ids:
+                        continue
+
                     if _check_and_fire(alarm, events):
                         _send_push_notification(
                             push_token=alarm.user_token,
@@ -460,23 +422,10 @@ async def _alarm_poller() -> None:
                 except Exception as alarm_err:
                     print(f"Poller: error processing alarm {alarm.id} – {alarm_err}", flush=True)
 
-            # ── Persistent favorite players ──────────────────────────────
-            try:
-                with Session(engine) as session:
-                    fav_players = session.query(FavoritePlayerDB).all()
-                for fav in fav_players:
-                    _check_fav_player(fav, events)
-            except Exception as exc:
-                print(f"Poller: fav_players error – {exc}", flush=True)
-
-            # ── Persistent favorite teams ────────────────────────────────
-            try:
-                with Session(engine) as session:
-                    fav_teams = session.query(FavoriteTeamDB).all()
-                for fav in fav_teams:
-                    _check_fav_team(fav, events)
-            except Exception as exc:
-                print(f"Poller: fav_teams error – {exc}", flush=True)
+            # NOTE: Favorite players and teams are monitored exclusively by the
+            # background radar (monitor.py _run_radar_tick) which has its own
+            # per-day fire-once deduplication.  Checking them here too caused
+            # double notifications (separate dedup sets).  Do not re-add.
 
         except Exception as exc:
             print(f"Poller: cycle error – {exc}", flush=True)
@@ -559,11 +508,19 @@ def set_alarm(req: SetAlarmRequest):
             detail="condition_type must be 'points', 'score_diff', or 'triple_double'.",
         )
     with Session(engine) as session:
+        # Remove any existing active alarm for this user + target + condition
+        # so the active screen never shows duplicates
+        session.query(Alarm).filter(
+            Alarm.user_token     == req.user_token,
+            Alarm.target_id      == req.target_id,
+            Alarm.condition_type == condition_type,
+            Alarm.is_active.is_(True),
+        ).delete()
         alarm = Alarm(
             user_token=req.user_token,
             target_id=req.target_id,
             target_name=req.target_name or req.target_id,
-            condition_type=condition_type,   # always stored lowercase + trimmed
+            condition_type=condition_type,
             threshold=req.threshold,
             start_quarter=req.start_quarter,
             is_active=True,

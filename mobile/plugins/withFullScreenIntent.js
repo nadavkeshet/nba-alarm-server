@@ -1,8 +1,7 @@
 /**
  * Expo Config Plugin – Call-Style Full Screen Intent for NBA Alarm
  *
- * Patches ExpoNotificationBuilder.kt in expo-notifications to inject three
- * native builder calls that are not exposed through the JS API:
+ * Patches ExpoNotificationBuilder.kt in expo-notifications to inject:
  *
  *   builder.setCategory(Notification.CATEGORY_CALL)
  *     → Tells OnePlus/Samsung/MIUI OEMs this notification is a live call.
@@ -16,16 +15,22 @@
  *     → Explicit max priority on the notification object (redundant on
  *       Android 8+ where channel importance wins, but reinforces on older).
  *
- * Migration: if the v1 patch is already applied, this plugin strips it and
- * re-applies v2 so a clean npm install is not required before each build.
+ *   DISMISS action fallback
+ *     → For classic_alarm notifications where Expo's push service did not
+ *       forward categoryId into the FCM data payload, directly adds a DISMISS
+ *       action button using Expo's own buildButtonAction / response-intent
+ *       mechanism so the JS addNotificationResponseReceivedListener fires.
+ *
+ * Migration: v1 → v2 → v3 patches are detected and upgraded automatically.
  */
 
 const { withDangerousMod } = require('@expo/config-plugins');
 const fs   = require('fs');
 const path = require('path');
 
-const V1_MARKER   = '// [NBA_ALARM_FSI_PATCH_v1]';
-const PATCH_MARKER = '// [NBA_ALARM_FSI_PATCH_v2]';
+const V1_MARKER    = '// [NBA_ALARM_FSI_PATCH_v1]';
+const V2_MARKER    = '// [NBA_ALARM_FSI_PATCH_v2]';
+const PATCH_MARKER = '// [NBA_ALARM_FSI_PATCH_v3]';
 
 const BUILDER_PATH = [
   'expo-notifications',
@@ -58,18 +63,24 @@ module.exports = function withFullScreenIntent(config) {
 
       let src = fs.readFileSync(builderPath, 'utf8');
 
-      // ── Already on v2 ──────────────────────────────────────────────────────
+      // ── Already on v3 ──────────────────────────────────────────────────────
       if (src.includes(PATCH_MARKER)) {
-        console.log('[withFullScreenIntent] v2 already applied – skipping.');
+        console.log('[withFullScreenIntent] v3 already applied – skipping.');
         return config;
+      }
+
+      // ── Migrate from v2: strip old patch, restore TARGET_LINE ──────────────
+      if (src.includes(V2_MARKER)) {
+        console.log('[withFullScreenIntent] v2 patch found – migrating to v3…');
+        src = src.replace(
+          /    \/\/ \[NBA_ALARM_FSI_PATCH_v2\][\s\S]*?return builder\.build\(\)/,
+          TARGET_LINE,
+        );
       }
 
       // ── Migrate from v1: strip old patch, restore TARGET_LINE ──────────────
       if (src.includes(V1_MARKER)) {
-        console.log('[withFullScreenIntent] v1 patch found – migrating to v2…');
-        // The v1 block starts at the marker and ends with `    return builder.build()`
-        // Replace the whole v1 block with just the plain TARGET_LINE so the v2
-        // replacement below has a clean base to work with.
+        console.log('[withFullScreenIntent] v1 patch found – migrating to v3…');
         src = src.replace(
           /    \/\/ \[NBA_ALARM_FSI_PATCH_v1\][\s\S]*?return builder\.build\(\)/,
           TARGET_LINE,
@@ -83,23 +94,46 @@ module.exports = function withFullScreenIntent(config) {
         return config;
       }
 
-      // ── v2 Kotlin block ────────────────────────────────────────────────────
+      // ── v3 Kotlin block ────────────────────────────────────────────────────
       //
       // Injected immediately before `return builder.build()`.
       //
-      // CATEGORY_CALL  : The key that makes OnePlus (and most OEMs) wake the
-      //                  screen. WhatsApp and Instagram both use this category.
-      //                  Without it, FSI fires but the screen may stay off on
-      //                  aggressive power-saving OEMs.
-      //
-      // PRIORITY_MAX   : Explicit notification-level priority. Redundant on
-      //                  Android 8+ (channel importance governs) but kept for
-      //                  completeness and older device compat.
-      //
-      // setFullScreenIntent(true): Launches MainActivity as a full-screen
-      //                  activity when the notification arrives.
+      // New in v3: DISMISS action fallback.
+      //   Expo's push service is supposed to forward `categoryId` into the
+      //   FCM data map so ExpoNotificationBuilder can call addActionsToBuilder.
+      //   In practice, some SDK/server combinations leave categoryId null for
+      //   remote pushes, so the DISMISS button never appears even though the
+      //   sound and channel work fine (channelId is handled separately).
+      //   The fallback: when the trigger channel is "classic_alarm" AND
+      //   notificationContent.categoryId is null (standard path didn't fire),
+      //   we directly construct a NotificationAction("dismiss","DISMISS",false)
+      //   and call the existing buildButtonAction() helper to create the proper
+      //   Expo response-intent.  Tapping DISMISS then fires the JS
+      //   addNotificationResponseReceivedListener with actionIdentifier="dismiss".
       //
       const fsiBlock = `    ${PATCH_MARKER}
+    // ── DISMISS action fallback ─────────────────────────────────────────────
+    // If Expo's push service did not forward categoryId into the FCM data
+    // payload, notificationContent.categoryId is null and addActionsToBuilder
+    // was never called above (line 113). Detect alarm notifications by their
+    // channelId and add DISMISS directly via Expo's own buildButtonAction so
+    // the JS response listener fires normally when the user taps DISMISS.
+    try {
+      val fsiTriggerChannelId = (notification.notificationRequest.trigger
+        as? expo.modules.notifications.notifications.model.triggers.FirebaseNotificationTrigger
+      )?.channelId
+      if (fsiTriggerChannelId == "classic_alarm" && notificationContent.categoryId == null) {
+        builder.addAction(
+          buildButtonAction(
+            expo.modules.notifications.notifications.model.NotificationAction(
+              "dismiss", "DISMISS", false
+            )
+          )
+        )
+      }
+    } catch (fsiDismissEx: Exception) {
+      android.util.Log.w("expo-notifications", "NBA DISMISS fallback: \${fsiDismissEx.message}")
+    }
     // ── Call-style Full Screen Intent ──────────────────────────────────────
     // Mimics WhatsApp/Instagram call behaviour: screen wakes, lock screen
     // is bypassed, and the app is brought to the foreground immediately.
@@ -127,7 +161,7 @@ module.exports = function withFullScreenIntent(config) {
         builder.setFullScreenIntent(fsiPendingIntent, true)
       }
     } catch (fsiEx: Exception) {
-      android.util.Log.w("expo-notifications", "FSI v2 patch error: \${fsiEx.message}")
+      android.util.Log.w("expo-notifications", "FSI v3 patch error: \${fsiEx.message}")
     }
     return builder.build()`;
       // ────────────────────────────────────────────────────────────────────────
@@ -135,7 +169,7 @@ module.exports = function withFullScreenIntent(config) {
       src = src.replace(TARGET_LINE, fsiBlock);
       fs.writeFileSync(builderPath, src);
 
-      console.log('[withFullScreenIntent] ✓ v2 patch applied (CATEGORY_CALL + FSI + PRIORITY_MAX).');
+      console.log('[withFullScreenIntent] ✓ v3 patch applied (DISMISS fallback + CATEGORY_CALL + FSI + PRIORITY_MAX).');
       return config;
     },
   ]);

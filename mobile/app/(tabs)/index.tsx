@@ -1,8 +1,8 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Device from 'expo-device';
 import * as Haptics from 'expo-haptics';
-import * as Notifications from 'expo-notifications';
 import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
+import messaging from '@react-native-firebase/messaging';
+import notifee, { AndroidImportance, AndroidCategory, AndroidVisibility } from '@notifee/react-native';
+import { registerStopHandler } from '../../alarmSoundHandler';
 import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -17,7 +17,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   UIManager,
   View,
@@ -26,22 +25,7 @@ import {
 import { BasketballToggle } from '../../components/basketball-toggle';
 import { NumericKeypad, useNumericKeypad } from '../../components/numeric-keypad';
 
-// ─── Notification category ─────────────────────────────────────────────────
-// Registers the 'alarm' category with a DISMISS action button that appears
-// directly inside every alarm notification. Called once on startup.
-async function registerAlarmCategory(): Promise<void> {
-  try {
-    await Notifications.setNotificationCategoryAsync('alarm', [
-      {
-        identifier: 'dismiss',
-        buttonTitle: 'DISMISS',
-        options: { isDestructive: true, opensAppToForeground: false },
-      },
-    ]);
-  } catch (e) {
-    console.warn('[Category] Could not register alarm category:', e);
-  }
-}
+
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { SkeletonGameCard } from '../../components/skeleton-card';
@@ -52,35 +36,11 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-// ─── Hardcoded project ID (bypasses any app.json lookup issues) ───────────────
-const EXPO_PROJECT_ID = '19104813-313d-40c1-975a-63b78d3ae7fc';
 const REGISTER_TOKEN_URL = `${SERVER_URL}/register-token`;
-
-// ─── Types ────────────────────────────────────────────────────────────────────
 
 // ─── Notification setup ───────────────────────────────────────────────────────
 
 const ALARM_CHANNEL = 'classic_alarm';
-const ANDROID_CHANNELS = [
-  { id: 'classic_alarm', name: 'Classic Alarm',        sound: 'classic_alarm.wav', isAlarm: true  },
-  { id: 'silent',        name: 'Silent Notifications', sound: null,                isAlarm: false },
-];
-
-Notifications.setNotificationHandler({
-  handleNotification: async (notification) => {
-    const isAlarm = notification.request.content.data?.alert_type === 'alarm';
-    return {
-      shouldShowAlert: true,
-      shouldPlaySound: isAlarm,
-      shouldSetBadge:  false,
-      shouldShowBanner: true,
-      shouldShowList:  true,
-      priority: isAlarm
-        ? Notifications.AndroidNotificationPriority.MAX
-        : Notifications.AndroidNotificationPriority.DEFAULT,
-    };
-  },
-});
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -112,12 +72,10 @@ function GameCard({
   item,
   onPress,
   favoriteTeamIds,
-  onToggleFav,
 }: {
   item: any;
   onPress: () => void;
   favoriteTeamIds: Set<string>;
-  onToggleFav: (teamId: string, teamName: string) => void;
 }) {
   const { home, away } = getTeams(item);
   const state: string  = item?.status?.type?.state ?? 'pre';
@@ -177,16 +135,7 @@ function GameCard({
             : <View style={[styles.teamLogo, styles.logoPlaceholder]} />}
           <Text style={styles.teamAbbr}>{away?.team?.abbreviation ?? '?'}</Text>
           {showScore && <Text style={styles.scoreText}>{away?.score ?? '—'}</Text>}
-          {awayId ? (
-            <TouchableOpacity
-              onPress={() => onToggleFav(awayId, away?.team?.displayName ?? away?.team?.abbreviation ?? awayId)}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Text style={[styles.starBtn, awayStarred && styles.starBtnActive]}>
-                {awayStarred ? '★' : '☆'}
-              </Text>
-            </TouchableOpacity>
-          ) : null}
+          {awayStarred ? <Text style={styles.starBtnActive}>★</Text> : null}
         </View>
 
         <View style={styles.vsDivider}>
@@ -199,16 +148,7 @@ function GameCard({
             : <View style={[styles.teamLogo, styles.logoPlaceholder]} />}
           <Text style={styles.teamAbbr}>{home?.team?.abbreviation ?? '?'}</Text>
           {showScore && <Text style={styles.scoreText}>{home?.score ?? '—'}</Text>}
-          {homeId ? (
-            <TouchableOpacity
-              onPress={() => onToggleFav(homeId, home?.team?.displayName ?? home?.team?.abbreviation ?? homeId)}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Text style={[styles.starBtn, homeStarred && styles.starBtnActive]}>
-                {homeStarred ? '★' : '☆'}
-              </Text>
-            </TouchableOpacity>
-          ) : null}
+          {homeStarred ? <Text style={styles.starBtnActive}>★</Text> : null}
         </View>
       </View>
     </TouchableOpacity>
@@ -218,60 +158,37 @@ function GameCard({
 // ─── Shared token helpers (used by HomeScreen) ────────────────────────────────
 
 /**
- * Get the Expo push token. Hardcodes the projectId so it always works
- * regardless of how Constants.expoConfig resolves in the build.
+ * Set up Notifee channels and get the FCM push token.
+ * Creates/recreates the alarm channel on every call so Android picks up
+ * any channel config changes (Android caches channel settings otherwise).
  */
-async function getPushToken(): Promise<string | undefined> {
+async function setupNotifee(): Promise<string | undefined> {
   try {
     if (Platform.OS === 'android') {
-      for (const ch of ANDROID_CHANNELS) {
-        // Delete first — Android ignores channel updates after first creation,
-        // so we must recreate to ensure audioAttributes (alarm stream) are applied
-        await Notifications.deleteNotificationChannelAsync(ch.id).catch(() => {});
-        await Notifications.setNotificationChannelAsync(ch.id, {
-          name:                 ch.name,
-          importance:           ch.isAlarm ? Notifications.AndroidImportance.MAX : Notifications.AndroidImportance.DEFAULT,
-          sound:                ch.sound,
-          bypassDnd:            ch.isAlarm,
-          showBadge:            true,
-          enableLights:         ch.isAlarm,
-          enableVibrate:        ch.isAlarm,
-          vibrationPattern:     ch.isAlarm ? [0, 300, 200, 400] : undefined,
-          lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-          // Route through STREAM_ALARM so the sound plays even in Silent / DND.
-          // FLAG_AUDIBILITY_ENFORCED (enforceAudibility) is the key flag that
-          // bypasses the silent switch at the OS level.
-          audioAttributes: ch.isAlarm ? {
-            contentType: Notifications.AndroidAudioContentType.SONIFICATION,
-            usage:        Notifications.AndroidAudioUsage.ALARM,
-            flags:        { enforceAudibility: true, requestHardwareAudioVideoSynchronization: false },
-          } : undefined,
-        });
-      }
+      // Delete + recreate so channel config changes are always applied
+      await notifee.deleteChannel(ALARM_CHANNEL).catch(() => {});
+      await notifee.createChannel({
+        id:         ALARM_CHANNEL,
+        name:       'Classic Alarm',
+        sound:      'classic_alarm',
+        importance: AndroidImportance.HIGH,
+        bypassDnd:  true,
+        visibility: AndroidVisibility.PUBLIC,
+        vibration:  true,
+        vibrationPattern: [100, 300, 200, 400],
+      });
     }
 
-    if (!Device.isDevice) {
-      alert('Push notifications require a physical device.');
+    const permission = await notifee.requestPermission();
+    if (permission.authorizationStatus < 1) {
+      console.warn('[Notifee] Notification permission denied');
       return undefined;
     }
 
-    const { status: existingStatus } = await Notifications.getPermissionsAsync();
-    let finalStatus = existingStatus;
-    if (existingStatus !== 'granted') {
-      const { status } = await Notifications.requestPermissionsAsync();
-      finalStatus = status;
-    }
-    if (finalStatus !== 'granted') {
-      alert('Notification permission denied. Please enable it in Settings to receive alarms.');
-      return undefined;
-    }
-
-    // Hardcoded projectId – never relies on app.json at runtime
-    const projectId = EXPO_PROJECT_ID;
-    const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+    const token = await messaging().getToken();
     return token;
   } catch (error: any) {
-    alert(`Token Error: ${error?.message ?? String(error)}`);
+    console.error('[Notifee] Setup error:', error?.message ?? error);
     return undefined;
   }
 }
@@ -357,54 +274,6 @@ export default function HomeScreen() {
     }
   };
 
-  // ── Toggle favorite team ──────────────────────────────────────────
-  const toggleTeamFavorite = async (teamId: string, teamName: string) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const isCurrentlyFav = favoriteTeamIds.has(teamId);
-    setFavoriteTeamIds(prev => {
-      const next = new Set(prev);
-      isCurrentlyFav ? next.delete(teamId) : next.add(teamId);
-      return next;
-    });
-    try {
-      if (isCurrentlyFav) {
-        await fetch(`${SERVER_URL}/settings/teams/${teamId}`, { method: 'DELETE' });
-      } else {
-        await fetch(`${SERVER_URL}/settings/teams`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ team_id: teamId, team_name: teamName }),
-        });
-      }
-    } catch (e) {
-      console.error('toggleTeamFavorite error:', e);
-    }
-  };
-
-  // ── Toggle favorite player ────────────────────────────────────────
-  const togglePlayerFavorite = async (playerId: string, playerName: string) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const isCurrentlyFav = favoritePlayerIds.has(playerId);
-    setFavoritePlayerIds(prev => {
-      const next = new Set(prev);
-      isCurrentlyFav ? next.delete(playerId) : next.add(playerId);
-      return next;
-    });
-    try {
-      if (isCurrentlyFav) {
-        await fetch(`${SERVER_URL}/settings/players/${playerId}`, { method: 'DELETE' });
-      } else {
-        await fetch(`${SERVER_URL}/settings/players`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ player_id: playerId, name: playerName }),
-        });
-      }
-    } catch (e) {
-      console.error('togglePlayerFavorite error:', e);
-    }
-  };
-
   // ── Fetch games ──────────────────────────────────────────────────
   const fetchGames = async (silent = false) => {
     if (!silent) setLoading(true);
@@ -469,11 +338,10 @@ export default function HomeScreen() {
 
   // ── Startup effect ────────────────────────────────────────────────
   useEffect(() => {
-    // Get token, save to state, register with server (retry every 30 s)
-    getPushToken().then(async token => {
+    // Set up Notifee channels + get FCM token, then register with server
+    setupNotifee().then(async (token: string | undefined) => {
       if (!token) return;
       setExpoPushToken(token);
-
       const success = await sendTokenToServer(token);
       if (!success) {
         const retryInterval = setInterval(async () => {
@@ -486,50 +354,48 @@ export default function HomeScreen() {
     fetchGames();
     loadFavorites();
 
-    // Register alarm notification category with DISMISS action button
-    registerAlarmCategory();
-
-    // FSI fix: addNotificationReceivedListener only fires while the app has focus.
-    // When FSI brings a backgrounded app to the foreground, the "received" event
-    // has already passed. AppState catches every foreground transition and checks
-    // for a displayed alarm notification — covers both cold-start and resume cases.
+    // FSI fix: when FSI brings the app to foreground the onMessage event has
+    // already passed. AppState catches every foreground transition and checks
+    // for a displayed alarm notification — covers cold-start and resume.
     const checkAlarmOnForeground = () => {
-      Notifications.getPresentedNotificationsAsync().then(presented => {
-        const alarm = presented.find(n => n.request.content.data?.alert_type === 'alarm');
+      notifee.getDisplayedNotifications().then(displayed => {
+        const alarm = displayed.find(n => n.notification?.data?.alert_type === 'alarm');
         if (alarm && !soundRef.current) playAlarmSound();
       });
     };
-    checkAlarmOnForeground(); // run once on mount (cold-start / FSI launch)
+    checkAlarmOnForeground();
     const appStateSub = AppState.addEventListener('change', state => {
       if (state === 'active') checkAlarmOnForeground();
     });
 
-    // Foreground: notification arrives while app is open → play looping sound
-    const subReceived = Notifications.addNotificationReceivedListener(notification => {
-      const data = notification.request.content.data as any;
-      if (data?.alert_type === 'alarm') {
-        playAlarmSound();
-      }
+    // Foreground: FCM data message arrives while app is open → display via Notifee + play sound
+    const unsubMessage = messaging().onMessage(async remoteMessage => {
+      const data = remoteMessage.data ?? {};
+      if (data.alert_type !== 'alarm') return;
+      await notifee.displayNotification({
+        title: String(data.title ?? 'NBA Alarm'),
+        body:  String(data.body  ?? ''),
+        android: {
+          channelId:        String(data.channel_id ?? ALARM_CHANNEL),
+          sound:            'classic_alarm',
+          importance:       AndroidImportance.HIGH,
+          category:         AndroidCategory.ALARM,
+          visibility:       AndroidVisibility.PUBLIC,
+          actions:          [{ title: 'DISMISS', pressAction: { id: 'dismiss' } }],
+          fullScreenAction: { id: 'default' },
+        },
+      });
+      playAlarmSound();
     });
 
-    // Any state: user taps DISMISS on notification → stop sound + remove from tray
-    const subResponse = Notifications.addNotificationResponseReceivedListener(async response => {
-      const data = response.notification.request.content.data as any;
-      if (data?.alert_type !== 'alarm') return;
-      if (response.actionIdentifier === 'dismiss') {
-        await stopAlarmSound();
-        await Notifications.dismissNotificationAsync(
-          response.notification.request.identifier,
-        ).catch(() => {});
-      }
-    });
+    // Register stop handler so _layout.tsx can stop the alarm sound on DISMISS
+    registerStopHandler(stopAlarmSound);
 
     // 60-second live-score auto-refresh
     const refreshInterval = setInterval(() => fetchGames(true), 60_000);
 
     return () => {
-      subReceived.remove();
-      subResponse.remove();
+      unsubMessage();
       appStateSub.remove();
       clearInterval(refreshInterval);
     };
@@ -560,13 +426,28 @@ export default function HomeScreen() {
   // ── Start game alarm ─────────────────────────────────────────────
   const startGameMonitoring = async () => {
     if (!selectedGame) return;
-    // Re-register token before sending alarm (ensures server has latest token)
-    const freshToken = expoPushToken || (await getPushToken()) || '';
+    // Re-fetch token before sending alarm (ensures server has latest token)
+    const freshToken = expoPushToken || (await messaging().getToken().catch(() => '')) || '';
     if (freshToken && freshToken !== expoPushToken) {
       setExpoPushToken(freshToken);
       sendTokenToServer(freshToken);
     }
     try {
+      // Persist to DB FIRST so the record exists if the monitoring thread
+      // fires immediately (condition already met → deactivation race).
+      fetch(`${SERVER_URL}/set_alarm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_token:     freshToken,
+          target_id:      selectedGame.id,
+          target_name:    selectedGame.name,
+          condition_type: 'score_diff',
+          threshold:      parseInt(maxDiff, 10),
+          start_quarter:  parseInt(startQuarter, 10),
+        }),
+      }).catch(() => {});
+
       const response = await fetch(`${SERVER_URL}/start-alarm`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -581,22 +462,6 @@ export default function HomeScreen() {
         }),
       });
       if (response.ok) {
-        // Persist to PostgreSQL via /set_alarm
-        const dbPayload = {
-          user_token:     freshToken,
-          target_id:      selectedGame.id,
-          target_name:    selectedGame.name,
-          condition_type: 'score_diff',
-          threshold:      parseInt(maxDiff, 10),
-          start_quarter:  parseInt(startQuarter, 10),
-        };
-        fetch(`${SERVER_URL}/set_alarm`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(dbPayload),
-        })
-          .then(r => r.json())
-          .catch(() => {});
 
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         showInfo('Alarm Set!', `Now watching ${selectedGame.name}.`);
@@ -617,7 +482,7 @@ export default function HomeScreen() {
       showInfo('No Condition Selected', 'Please enable at least one alarm condition.');
       return;
     }
-    const freshToken = expoPushToken || (await getPushToken()) || '';
+    const freshToken = expoPushToken || (await messaging().getToken().catch(() => '')) || '';
     if (freshToken && freshToken !== expoPushToken) {
       setExpoPushToken(freshToken);
       sendTokenToServer(freshToken);
@@ -644,6 +509,21 @@ export default function HomeScreen() {
     try {
       let successCount = 0;
       for (const cond of conditions) {
+        // Persist to DB FIRST so the record exists if the monitoring thread
+        // fires immediately (condition already met → deactivation race).
+        fetch(`${SERVER_URL}/set_alarm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_token:     freshToken,
+            target_id:      selectedPlayer.id,
+            target_name:    selectedPlayer.name,
+            condition_type: cond.condition_type,
+            threshold:      cond.threshold,
+            start_quarter:  cond.start_quarter,
+          }),
+        }).catch(() => {});
+
         const response = await fetch(`${SERVER_URL}/start-player-alarm`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -662,21 +542,6 @@ export default function HomeScreen() {
         });
         if (!response.ok) continue;
         successCount++;
-        // Persist each condition as its own DB row
-        fetch(`${SERVER_URL}/set_alarm`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            user_token:     freshToken,
-            target_id:      selectedPlayer.id,
-            target_name:    selectedPlayer.name,
-            condition_type: cond.condition_type,
-            threshold:      cond.threshold,
-            start_quarter:  cond.start_quarter,
-          }),
-        })
-          .then(r => r.json())
-          .catch(() => {});
       }
 
       if (successCount > 0) {
@@ -722,7 +587,6 @@ export default function HomeScreen() {
               item={item}
               onPress={() => setSelectedGame(item)}
               favoriteTeamIds={favoriteTeamIds}
-              onToggleFav={toggleTeamFavorite}
             />
           )}
           contentContainerStyle={{ paddingBottom: 24 }}
@@ -843,6 +707,7 @@ export default function HomeScreen() {
                               <Text style={[styles.playerName, isSelected && styles.playerNameSelected]}>
                                 {player.name}
                               </Text>
+                              {favoritePlayerIds.has(player.id) ? <Text style={styles.starBtnActive}>★</Text> : null}
                               <Text style={styles.playerPos}>{player.position}</Text>
                             </TouchableOpacity>
                           );
@@ -858,15 +723,9 @@ export default function HomeScreen() {
                       <Text style={styles.selectedPlayerLabel}>
                         {selectedPlayer.name}
                       </Text>
-                      <TouchableOpacity
-                        onPress={() => togglePlayerFavorite(selectedPlayer.id, selectedPlayer.name)}
-                        style={styles.playerStarBtn}
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      >
-                        <Text style={[styles.starBtn, favoritePlayerIds.has(selectedPlayer.id) && styles.starBtnActive]}>
-                          {favoritePlayerIds.has(selectedPlayer.id) ? '★' : '☆'}
-                        </Text>
-                      </TouchableOpacity>
+                      {favoritePlayerIds.has(selectedPlayer.id) ? (
+                        <Text style={styles.starBtnActive}>★</Text>
+                      ) : null}
                     </View>
 
                     <Text style={styles.inputLabel}>Alarm Conditions</Text>

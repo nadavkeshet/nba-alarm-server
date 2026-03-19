@@ -5,3 +5,4 @@ pydantic==2.9.2
 python-dateutil==2.9.0
 sqlalchemy
 psycopg2-binary
+firebase-admin==6.5.0

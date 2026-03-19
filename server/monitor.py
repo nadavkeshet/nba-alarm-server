@@ -21,6 +21,27 @@ import requests
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import firebase_admin
+from firebase_admin import credentials, messaging as fb_messaging
+
+# ── Firebase Admin SDK init (runs once at module import) ──────────────────────
+def _init_firebase() -> bool:
+    sa_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "")
+    if not sa_json:
+        logging.warning("FIREBASE_SERVICE_ACCOUNT_JSON not set – FCM push disabled.")
+        return False
+    try:
+        sa_dict = json.loads(sa_json)
+        cred = credentials.Certificate(sa_dict)
+        firebase_admin.initialize_app(cred)
+        logging.info("Firebase Admin SDK initialised.")
+        return True
+    except Exception as exc:
+        logging.error("Firebase init failed: %s", exc)
+        return False
+
+_firebase_ready: bool = _init_firebase()
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(message)s",
@@ -267,6 +288,26 @@ def get_saved_push_token() -> tuple[str, str]:
 _FIRED_ALERTS: set[str] = set()
 _FIRED_LOCK   = threading.Lock()
 
+# ---------------------------------------------------------------------------
+# DB deactivation callback  (set by main.py at startup to avoid circular import)
+# ---------------------------------------------------------------------------
+
+_DB_DEACTIVATE_FN = None
+
+
+def register_db_deactivate(fn) -> None:
+    """Register a callable(target_id: str) that marks DB alarms inactive after firing."""
+    global _DB_DEACTIVATE_FN
+    _DB_DEACTIVATE_FN = fn
+
+
+def _deactivate_db_alarm_for(target_id: str) -> None:
+    if _DB_DEACTIVATE_FN is not None:
+        try:
+            _DB_DEACTIVATE_FN(target_id)
+        except Exception as exc:
+            log.warning("DB alarm deactivation failed for %s: %s", target_id, exc)
+
 
 def _fire_once(key: str) -> bool:
     """
@@ -299,13 +340,17 @@ def _register_manual_alarm(
 ) -> threading.Event:
     stop = threading.Event()
     with _manual_lock:
+        # Cancel existing alarm for this game so the old thread exits cleanly
+        existing = _alarm_stop_events.get(game_id)
+        if existing:
+            existing.set()
         _active_manual_alarms[game_id] = {
             "game_id":       game_id,
             "game_name":     game_name,
             "max_diff":      max_diff,
             "start_quarter": start_quarter,
             "alert_type":    alert_type,
-            "status":        "scheduled",   # "scheduled" → "live" once polling starts
+            "status":        "scheduled",
             "started_at":    datetime.now(timezone.utc).isoformat(),
         }
         _alarm_stop_events[game_id] = stop
@@ -319,6 +364,10 @@ def _register_player_alarm(
 ) -> threading.Event:
     stop = threading.Event()
     with _manual_lock:
+        # Cancel existing alarm for this player so the old thread exits cleanly
+        existing = _player_stop_events.get(player_id)
+        if existing:
+            existing.set()
         _active_player_alarms[player_id] = {
             "game_id":       game_id,
             "game_name":     game_name,
@@ -327,7 +376,7 @@ def _register_player_alarm(
             "condition":     condition,
             "pts_threshold": pts_threshold,
             "alert_type":    alert_type,
-            "status":        "scheduled",   # "scheduled" → "live" once polling starts
+            "status":        "scheduled",
             "started_at":    datetime.now(timezone.utc).isoformat(),
         }
         _player_stop_events[player_id] = stop
@@ -361,6 +410,11 @@ def _unregister_player_alarm(player_id: str) -> None:
 def _has_manual_alarm(game_id: str) -> bool:
     with _manual_lock:
         return game_id in _active_manual_alarms
+
+
+def _has_manual_player_alarm(player_id: str) -> bool:
+    with _manual_lock:
+        return player_id in _active_player_alarms
 
 
 def get_active_alarms() -> list[dict]:
@@ -593,46 +647,47 @@ def _send_push_notification(
     sound_channel: str = "classic_alarm",
     alert_type: str = "alarm",
 ) -> None:
-    # If caller passed an empty token, fall back to whatever is persisted on disk
+    # Fall back to persisted token when caller passes empty string
     if not push_token:
         saved_token, saved_channel = get_saved_push_token()
         if saved_token:
-            print(f"DEBUG: push_token was empty – falling back to saved token ({saved_token[:20]}...)", flush=True)
+            print(f"DEBUG: push_token empty – using saved ({saved_token[:20]}...)", flush=True)
             push_token    = saved_token
             sound_channel = saved_channel
         else:
             log.warning("No push token – skipping notification.")
             return
 
-    is_alarm  = (alert_type == "alarm")
-    ios_sound = "classic_alarm.wav" if is_alarm else None
+    if not _firebase_ready:
+        log.warning("Firebase not initialised – skipping notification.")
+        return
 
-    payload = {
-        "to":               push_token,
-        "title":            title,
-        "body":             body,
-        "sound":            ios_sound,          # None for silent → filtered out below
-        "priority":         "high",
-        "channelId":        sound_channel if is_alarm else "silent",
-        # categoryId (DISMISS button) only for alarm-type notifications
-        "categoryId":       "alarm" if is_alarm else None,
-        # iOS: content-available wakes the app in background
-        "mutableContent":   True,
-        "data":             {"alert_type": alert_type},
+    is_alarm   = (alert_type == "alarm")
+    channel_id = sound_channel if is_alarm else "silent"
+
+    # Data-only FCM message — no `notification` field so Android ALWAYS calls
+    # setBackgroundMessageHandler regardless of app state (foreground/background/killed).
+    # The Notifee background handler builds and displays the notification from this data.
+    data = {
+        "title":      title,
+        "body":       body,
+        "channel_id": channel_id,
+        "alert_type": alert_type,
+        "sound":      "classic_alarm" if is_alarm else "",
     }
-    # Remove None values — Expo push API ignores unknown keys but a null
-    # categoryId would clear any category, which we don't want.
-    payload = {k: v for k, v in payload.items() if v is not None}
+
     try:
-        resp = requests.post(
-            "https://exp.host/--/api/v2/push/send",
-            json=payload,
-            headers={"Content-Type": "application/json"},
-            timeout=10,
+        message = fb_messaging.Message(
+            data=data,
+            android=fb_messaging.AndroidConfig(
+                priority="high",
+            ),
+            token=push_token,
         )
-        log.info("Push sent → %s", resp.json())
+        response = fb_messaging.send(message)
+        log.info("FCM push sent → %s", response)
     except Exception as exc:
-        log.error("Push notification failed: %s", exc)
+        log.error("FCM push failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -738,6 +793,7 @@ def start_monitoring_job(
                     sound_channel=sound_channel,
                     alert_type=alert_type,
                 )
+                _deactivate_db_alarm_for(game_id)
                 return
 
             log.info(
@@ -912,6 +968,7 @@ def start_player_monitoring_job(
                     sound_channel=sound_channel,
                     alert_type=alert_type,
                 )
+                _deactivate_db_alarm_for(player_id)
                 return
 
             log.info("No trigger yet. Next check in %ds.", POLL_INTERVAL)
@@ -1033,6 +1090,10 @@ def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
                     threes = int(raw.get("3PM",  0) or 0)
 
                     # ── Favorite Player Alerts (fully per-player settings) ──
+                    # Skip if a manual player alarm is already handling this player
+                    if player_id in fav_players and _has_manual_player_alarm(player_id):
+                        continue
+
                     if player_id in fav_players:
                         fav_cfg       = fav_players[player_id]
                         p_alert_type  = fav_cfg.get("alert_type", "silent")

@@ -36,15 +36,7 @@
     "plugins": [
       "expo-router",
       "./plugins/withTurnScreenOn",
-      "./plugins/withFullScreenIntent",
-      [
-        "expo-notifications",
-        {
-          "sounds": [
-            "./assets/sounds/classic_alarm.wav"
-          ]
-        }
-      ],
+      "./plugins/withSoundFiles",
       [
         "expo-splash-screen",
         {

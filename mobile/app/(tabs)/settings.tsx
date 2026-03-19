@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import * as Notifications from 'expo-notifications';
+import notifee, { AndroidImportance, AndroidCategory, AndroidVisibility } from '@notifee/react-native';
+import messaging from '@react-native-firebase/messaging';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
@@ -10,7 +11,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -87,6 +87,7 @@ export default function SettingsScreen() {
   const [loading, setLoading]           = useState(true);
   const [radarRunning, setRadarRunning] = useState(false);
   const [saving, setSaving]             = useState(false);
+  const [savedId, setSavedId]           = useState<string | null>(null);
   const [guideVisible, setGuideVisible] = useState(false);
   const [allTeams, setAllTeams]         = useState<CachedTeam[]>([]);
 
@@ -133,8 +134,8 @@ export default function SettingsScreen() {
   // ── Load push token once ───────────────────────────────────────────────
 
   useEffect(() => {
-    Notifications.getExpoPushTokenAsync({ projectId: '19104813-313d-40c1-975a-63b78d3ae7fc' })
-      .then(t => setUserToken(t.data))
+    messaging().getToken()
+      .then(t => setUserToken(t))
       .catch(() => {});
   }, []);
 
@@ -169,9 +170,9 @@ export default function SettingsScreen() {
       setRadarStartQ(String(s.GlobalGameRadar?.start_quarter ?? 4));
 
       // Init per-team editable fields
-      const edits: Record<string, { max_diff: string; start_quarter: string }> = {};
+      const edits: Record<string, { max_diff: string; start_quarter: string; alert_type: string }> = {};
       for (const ft of s.FavoriteTeams ?? []) {
-        edits[ft.team_id] = { max_diff: String(ft.max_diff), start_quarter: String(ft.start_quarter) };
+        edits[ft.team_id] = { max_diff: String(ft.max_diff), start_quarter: String(ft.start_quarter), alert_type: ft.alert_type ?? 'silent' };
       }
       setTeamEdits(edits);
 
@@ -179,7 +180,7 @@ export default function SettingsScreen() {
       const pEdits: Record<string, {
         totalPtsEnabled: boolean; total_pts: string;
         hotStartEnabled: boolean; early_pts_q: string; early_pts: string;
-        td_watch: boolean;
+        td_watch: boolean; alert_type: string;
       }> = {};
       for (const [pid, p] of Object.entries(s.FavoritePlayers ?? {})) {
         pEdits[pid] = {
@@ -189,6 +190,7 @@ export default function SettingsScreen() {
           early_pts_q:     String(p.early_pts_q   ?? 1),
           early_pts:   String(p.early_pts ?? 15),
           td_watch:        p.td_watch ?? false,
+          alert_type:      p.alert_type ?? 'silent',
         };
       }
       setPlayerEdits(pEdits);
@@ -207,6 +209,11 @@ export default function SettingsScreen() {
   useFocusEffect(
     useCallback(() => { loadSettings(); }, [loadSettings]),
   );
+
+  const flashSaved = useCallback((id: string) => {
+    setSavedId(id);
+    setTimeout(() => setSavedId(prev => prev === id ? null : prev), 1500);
+  }, []);
 
   // ── API helpers ────────────────────────────────────────────────────────
 
@@ -228,6 +235,7 @@ export default function SettingsScreen() {
         });
         setRadarRunning(true);
       }
+      flashSaved('radar');
     } finally { setSaving(false); }
   };
 
@@ -293,6 +301,7 @@ export default function SettingsScreen() {
       start_quarter: parseInt(edit.start_quarter, 10) || 4,
       alert_type:    edit.alert_type,
     });
+    flashSaved(team.team_id);
   };
 
   // ── Player CRUD ───────────────────────────────────────────────────────
@@ -383,6 +392,7 @@ export default function SettingsScreen() {
           },
         },
       } : s);
+      flashSaved(player_id);
     } finally { setSaving(false); }
   };
 
@@ -515,7 +525,9 @@ export default function SettingsScreen() {
                   </View>
 
                   <TouchableOpacity style={styles.updateBtn} onPress={() => updateExistingTeam(t)} disabled={saving}>
-                    <Text style={styles.updateBtnText}>Update</Text>
+                    <Text style={[styles.updateBtnText, savedId === t.team_id && styles.savedBtnText]}>
+                      {savedId === t.team_id ? 'Saved ✓' : 'Update'}
+                    </Text>
                   </TouchableOpacity>
                 </View>
               );
@@ -529,7 +541,7 @@ export default function SettingsScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>FAVORITE PLAYERS</Text>
           <Text style={styles.sectionDesc}>
-            Add players to watch automatically during live games using the thresholds below. You can also tap ★ on the Home screen.
+            Add players to watch automatically during live games using the thresholds below.
           </Text>
 
           <TouchableOpacity style={styles.addRowBtn} onPress={openPlayerModal}>
@@ -642,7 +654,9 @@ export default function SettingsScreen() {
                     onPress={() => savePlayerSettings(pid, p.name, edit.alert_type ?? p.alert_type)}
                     disabled={saving}
                   >
-                    <Text style={styles.updateBtnText}>Update</Text>
+                    <Text style={[styles.updateBtnText, savedId === pid && styles.savedBtnText]}>
+                      {savedId === pid ? 'Saved ✓' : 'Update'}
+                    </Text>
                   </TouchableOpacity>
                 </View>
               );
@@ -701,7 +715,9 @@ export default function SettingsScreen() {
                 })}
                 disabled={saving}
               >
-                <Text style={styles.updateBtnText}>{saving ? 'Saving…' : 'Save Radar Settings'}</Text>
+                <Text style={[styles.updateBtnText, savedId === 'radar' && styles.savedBtnText]}>
+                  {saving ? 'Saving…' : savedId === 'radar' ? 'Saved ✓' : 'Save Radar Settings'}
+                </Text>
               </TouchableOpacity>
             </>
           )}
@@ -774,22 +790,22 @@ export default function SettingsScreen() {
           style={[styles.guideBtn, { borderColor: 'rgba(255,0,0,0.4)', backgroundColor: 'rgba(255,0,0,0.08)', marginBottom: 8 }]}
           onPress={async () => {
             try {
-              await Notifications.scheduleNotificationAsync({
-                content: {
-                  title:              '🚨 Test Alarm',
-                  body:               'Screen wake + sound test — tap Dismiss to stop',
-                  sound:              'classic_alarm.wav',
-                  vibrate:            [0, 300, 200, 400],
-                  priority:           Notifications.AndroidNotificationPriority.MAX,
-                  data:               { alert_type: 'alarm' },
-                  categoryIdentifier: 'alarm',
-                },
-                trigger: {
-                  type:    Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-                  seconds: 5,
+              await notifee.displayNotification({
+                title: '🚨 Test Alarm',
+                body:  'Screen wake + sound test — tap Dismiss to stop',
+                data:  { alert_type: 'alarm' },
+                android: {
+                  channelId:        'classic_alarm',
+                  sound:            'classic_alarm',
+                  importance:       AndroidImportance.HIGH,
+                  category:         AndroidCategory.ALARM,
+                  visibility:       AndroidVisibility.PUBLIC,
+                  actions:          [{ title: 'DISMISS', pressAction: { id: 'dismiss' } }],
+                  fullScreenAction: { id: 'default' },
+                  vibrationPattern: [100, 300, 200, 400],
                 },
               });
-              Alert.alert('5 seconds!', 'Lock the screen now.');
+              Alert.alert('Fired!', 'Test alarm sent.');
             } catch (e) { console.warn('Test alarm error:', e); }
           }}
         >
@@ -1244,6 +1260,7 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: C.blue,
   },
   updateBtnText: { color: C.accentBlue, fontWeight: '800', fontSize: 13 },
+  savedBtnText:  { color: C.liveGreen },
   removeBtn: {
     paddingHorizontal: 10, paddingVertical: 4,
     backgroundColor: 'rgba(201,8,42,0.15)', borderRadius: 8,

@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Notifications from 'expo-notifications';
+import messaging from '@react-native-firebase/messaging';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -19,7 +19,6 @@ import { SkeletonAlarmCard } from '../../components/skeleton-card';
 
 import { SERVER_URL } from '../../config';
 
-const EXPO_PROJECT_ID = '19104813-313d-40c1-975a-63b78d3ae7fc';
 const TROPHY_KEY = 'nba_alarm_recent_hits';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -192,7 +191,7 @@ export default function ActiveScreen() {
   const resolveToken = useCallback(async (): Promise<string | null> => {
     if (tokenRef.current) return tokenRef.current;
     try {
-      const { data: token } = await Notifications.getExpoPushTokenAsync({ projectId: EXPO_PROJECT_ID });
+      const token = await messaging().getToken();
       tokenRef.current = token;
       return token;
     } catch (e) {
@@ -201,12 +200,16 @@ export default function ActiveScreen() {
     }
   }, []);
 
-  // Store received push notifications in AsyncStorage for Trophy Room
+  // Store received FCM alarm notifications in AsyncStorage for Trophy Room
   useEffect(() => {
-    const sub = Notifications.addNotificationReceivedListener(async notification => {
-      const title = notification.request.content.title ?? 'Alarm Fired';
-      const body  = notification.request.content.body  ?? '';
-      const hit: TrophyHit = { title, body, receivedAt: new Date().toISOString() };
+    const unsub = messaging().onMessage(async remoteMessage => {
+      const data = remoteMessage.data ?? {};
+      if (data.alert_type !== 'alarm') return;
+      const hit: TrophyHit = {
+        title:      String(data.title ?? 'Alarm Fired'),
+        body:       String(data.body  ?? ''),
+        receivedAt: new Date().toISOString(),
+      };
       try {
         const raw  = await AsyncStorage.getItem(TROPHY_KEY);
         const prev = raw ? (JSON.parse(raw) as TrophyHit[]) : [];
@@ -215,7 +218,7 @@ export default function ActiveScreen() {
         setTrophies(next);
       } catch {}
     });
-    return () => sub.remove();
+    return () => unsub();
   }, []);
 
   const loadTrophies = async () => {
