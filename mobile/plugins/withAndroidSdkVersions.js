@@ -1,45 +1,16 @@
 /**
- * Expo Config Plugin – Pin Android SDK versions
+ * Expo Config Plugin – Pin Gradle wrapper version
  *
- * Expo 54 / RN 0.81 internally targets compileSdk 36, but EAS build images
- * and most third-party libraries (Notifee, Firebase) are tested against SDK 35.
- * This plugin overrides the root project ext block so every submodule picks
- * up SDK 35 rather than the RN-default 36.
- *
- * Also pins Gradle wrapper to 8.10.2 for stability — regenerated from this
- * plugin on every EAS prebuild.
+ * RN 0.81 / AGP 8.11 requires Gradle 8.13 minimum.
+ * This plugin ensures the gradle-wrapper.properties always uses 8.13
+ * on EAS cloud builds (where the file is regenerated from scratch).
  */
 
-const { withProjectBuildGradle, withDangerousMod } = require('@expo/config-plugins');
+const { withDangerousMod } = require('@expo/config-plugins');
 const fs   = require('fs');
 const path = require('path');
 
-const EXT_BLOCK = `
-// ── SDK version pins (withAndroidSdkVersions plugin) ──────────────────────
-ext {
-    compileSdkVersion = 35
-    targetSdkVersion  = 35
-    minSdkVersion     = 24
-    buildToolsVersion = "35.0.0"
-    ndkVersion        = "27.1.12297006"
-}
-// ──────────────────────────────────────────────────────────────────────────
-`;
-
-function withSdkExtBlock(config) {
-  return withProjectBuildGradle(config, (cfg) => {
-    if (cfg.modResults.contents.includes('withAndroidSdkVersions plugin')) {
-      return cfg; // already patched
-    }
-    // Insert the ext block at the very top (before any plugins run so they
-    // see our values via rootProject.ext)
-    cfg.modResults.contents = EXT_BLOCK + cfg.modResults.contents;
-    console.log('[withAndroidSdkVersions] ✓ SDK 35 ext block added to root build.gradle');
-    return cfg;
-  });
-}
-
-function withGradleWrapper(config) {
+module.exports = function withAndroidSdkVersions(config) {
   return withDangerousMod(config, [
     'android',
     (cfg) => {
@@ -54,14 +25,8 @@ function withGradleWrapper(config) {
         'distributionUrl=https\\://services.gradle.org/distributions/gradle-8.13-bin.zip',
       );
       fs.writeFileSync(wrapperPath, content);
-      console.log('[withAndroidSdkVersions] ✓ Gradle wrapper pinned to 8.10.2');
+      console.log('[withAndroidSdkVersions] ✓ Gradle wrapper pinned to 8.13');
       return cfg;
     },
   ]);
-}
-
-module.exports = function withAndroidSdkVersions(config) {
-  config = withSdkExtBlock(config);
-  config = withGradleWrapper(config);
-  return config;
 };
