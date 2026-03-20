@@ -1,5 +1,4 @@
 import * as Haptics from 'expo-haptics';
-import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
 import messaging from '@react-native-firebase/messaging';
 import notifee, { AndroidImportance, AndroidCategory, AndroidVisibility } from '@notifee/react-native';
 import { registerStopHandler } from '../../alarmSoundHandler';
@@ -262,8 +261,6 @@ export default function HomeScreen() {
   const [earlyQuarter,      setEarlyQuarter]      = useState('3');
   const [tdWatchEnabled,    setTdWatchEnabled]    = useState(false);
 
-  // ── Alarm audio ───────────────────────────────────────────────────
-  const soundRef = useRef<Audio.Sound | null>(null);
 
   // ── Load favorites from server settings ──────────────────────────
   const loadFavorites = async () => {
@@ -312,32 +309,13 @@ export default function HomeScreen() {
     }
   };
 
-  // ── Alarm audio helpers ───────────────────────────────────────────
-  const playAlarmSound = async () => {
-    try {
-      await Audio.setAudioModeAsync({
-        playsInSilentModeIOS:    true,
-        staysActiveInBackground: true,
-        shouldDuckAndroid:       false,
-        interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
-        interruptionModeIOS:     InterruptionModeIOS.DoNotMix,
-      });
-      const sound = new Audio.Sound();
-      await sound.loadAsync(require('../../assets/sounds/classic_alarm.wav'));
-      await sound.setIsLoopingAsync(true);
-      await sound.setVolumeAsync(1.0);
-      await sound.playAsync();
-      soundRef.current = sound;
-    } catch (e) {
-      console.error('Alarm sound error:', e);
-    }
+  // ── Alarm audio helpers (native MediaPlayer via AlarmChannelModule) ──
+  const playAlarmSound = () => {
+    NativeModules.AlarmChannel?.startAlarmSound();
   };
 
-  const stopAlarmSound = async () => {
-    if (soundRef.current) {
-      try { await soundRef.current.stopAsync(); await soundRef.current.unloadAsync(); } catch {}
-      soundRef.current = null;
-    }
+  const stopAlarmSound = () => {
+    NativeModules.AlarmChannel?.stopAlarmSound();
   };
 
   // ── Startup effect ────────────────────────────────────────────────
@@ -364,7 +342,7 @@ export default function HomeScreen() {
     const checkAlarmOnForeground = () => {
       notifee.getDisplayedNotifications().then(displayed => {
         const alarm = displayed.find(n => n.notification?.data?.alert_type === 'alarm');
-        if (alarm && !soundRef.current) playAlarmSound();
+        if (alarm) playAlarmSound();
       });
     };
     checkAlarmOnForeground();

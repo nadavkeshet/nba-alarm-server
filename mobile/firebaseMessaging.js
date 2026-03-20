@@ -15,6 +15,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import messaging from '@react-native-firebase/messaging';
 import notifee, { AndroidImportance, AndroidCategory, AndroidVisibility, EventType } from '@notifee/react-native';
+import { NativeModules } from 'react-native';
 
 const TROPHY_KEY = 'nba_alarm_recent_hits';
 
@@ -61,6 +62,7 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
 // Handles action button taps (DISMISS) when the app is in background or killed.
 notifee.onBackgroundEvent(async ({ type, detail }) => {
   if (type === EventType.ACTION_PRESS && detail.pressAction?.id === 'dismiss') {
+    NativeModules.AlarmChannel?.stopAlarmSound();
     await notifee.cancelAllNotifications();
   }
 });

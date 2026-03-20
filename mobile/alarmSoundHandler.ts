@@ -8,9 +8,9 @@
  * _layout.tsx calls triggerStop() when DISMISS is pressed.
  */
 
-let _stopHandler: (() => Promise<void>) | null = null;
+let _stopHandler: (() => void | Promise<void>) | null = null;
 
-export const registerStopHandler = (fn: () => Promise<void>): void => {
+export const registerStopHandler = (fn: () => void | Promise<void>): void => {
   _stopHandler = fn;
 };
 
