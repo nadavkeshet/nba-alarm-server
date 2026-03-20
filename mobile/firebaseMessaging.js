@@ -41,6 +41,7 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
   await notifee.displayNotification({
     title: data.title ?? 'NBA Alarm',
     body:  data.body  ?? '',
+    data:  { alert_type: 'alarm' },   // required for checkAlarmOnForeground in index.tsx
     android: {
       channelId:        data.channel_id ?? 'classic_alarm',
       sound:            'classic_alarm',
