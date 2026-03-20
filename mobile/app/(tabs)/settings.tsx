@@ -789,26 +789,28 @@ export default function SettingsScreen() {
         {/* ── TEST ALARM (remove before release) ───────────────────── */}
         <TouchableOpacity
           style={[styles.guideBtn, { borderColor: 'rgba(255,0,0,0.4)', backgroundColor: 'rgba(255,0,0,0.08)', marginBottom: 8 }]}
-          onPress={async () => {
-            try {
-              await notifee.displayNotification({
-                title: '🚨 Test Alarm',
-                body:  'Screen wake + sound test — tap Dismiss to stop',
-                data:  { alert_type: 'alarm' },
-                android: {
-                  channelId:        'classic_alarm',
-                  sound:            'classic_alarm',
-                  importance:       AndroidImportance.HIGH,
-                  category:         AndroidCategory.ALARM,
-                  visibility:       AndroidVisibility.PUBLIC,
-                  actions:          [{ title: 'DISMISS', pressAction: { id: 'dismiss' } }],
-                  fullScreenAction: { id: 'default' },
-                  vibrationPattern: [100, 300, 200, 400],
-                },
-              });
-              NativeModules.AlarmChannel?.startAlarmSound();
-              Alert.alert('Fired!', 'Test alarm sent.');
-            } catch (e) { console.warn('Test alarm error:', e); }
+          onPress={() => {
+            Alert.alert('Test Alarm', 'Firing in 5 seconds — exit the app now.');
+            setTimeout(async () => {
+              try {
+                await notifee.displayNotification({
+                  title: '🚨 Test Alarm',
+                  body:  'Screen wake + sound test — tap Dismiss to stop',
+                  data:  { alert_type: 'alarm' },
+                  android: {
+                    channelId:        'classic_alarm',
+                    sound:            'classic_alarm',
+                    importance:       AndroidImportance.HIGH,
+                    category:         AndroidCategory.ALARM,
+                    visibility:       AndroidVisibility.PUBLIC,
+                    actions:          [{ title: 'DISMISS', pressAction: { id: 'dismiss' } }],
+                    fullScreenAction: { id: 'default' },
+                    vibrationPattern: [100, 300, 200, 400],
+                  },
+                });
+                NativeModules.AlarmChannel?.startAlarmSound();
+              } catch (e) { console.warn('Test alarm error:', e); }
+            }, 5000);
           }}
         >
           <Ionicons name="warning-outline" size={20} color="#ff4444" />
