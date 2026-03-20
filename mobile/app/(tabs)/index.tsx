@@ -319,6 +319,8 @@ export default function HomeScreen() {
   };
 
   // ── Startup effect ────────────────────────────────────────────────
+  const retryIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   useEffect(() => {
     // Set up Notifee channels + get FCM token, then register with server
     setupNotifee().then(async (token: string | undefined) => {
@@ -326,9 +328,12 @@ export default function HomeScreen() {
       setExpoPushToken(token);
       const success = await sendTokenToServer(token);
       if (!success) {
-        const retryInterval = setInterval(async () => {
+        retryIntervalRef.current = setInterval(async () => {
           const ok = await sendTokenToServer(token);
-          if (ok) clearInterval(retryInterval);
+          if (ok) {
+            clearInterval(retryIntervalRef.current!);
+            retryIntervalRef.current = null;
+          }
         }, 30_000);
       }
     });
@@ -395,6 +400,7 @@ export default function HomeScreen() {
       unsubMessage();
       appStateSub.remove();
       clearInterval(refreshInterval);
+      if (retryIntervalRef.current) clearInterval(retryIntervalRef.current);
     };
   }, []);
 

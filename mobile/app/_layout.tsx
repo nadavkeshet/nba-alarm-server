@@ -93,12 +93,12 @@ export default function RootLayout() {
       {confetti && (
         <View style={StyleSheet.absoluteFill} pointerEvents="none">
           <ConfettiCannon
-            count={200}
+            count={90}
             origin={{ x: -10, y: 0 }}
             autoStart
             fadeOut
-            fallSpeed={2500}
-            explosionSpeed={350}
+            fallSpeed={3200}
+            explosionSpeed={280}
           />
         </View>
       )}

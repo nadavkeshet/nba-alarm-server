@@ -1,10 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { useFocusEffect } from '@react-navigation/native';
-import notifee, { AndroidImportance, AndroidCategory, AndroidVisibility, TriggerType } from '@notifee/react-native';
 import messaging from '@react-native-firebase/messaging';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert,
   ActivityIndicator,
   FlatList,
   Modal,
@@ -89,6 +88,9 @@ export default function SettingsScreen() {
   const [saving, setSaving]             = useState(false);
   const [savedId, setSavedId]           = useState<string | null>(null);
   const [guideVisible, setGuideVisible] = useState(false);
+  const [infoModal, setInfoModal] = useState<{ visible: boolean; title: string; message: string }>({ visible: false, title: '', message: '' });
+  const showInfo = (title: string, message: string) => setInfoModal({ visible: true, title, message });
+  const hideInfo = () => setInfoModal(prev => ({ ...prev, visible: false }));
   const [allTeams, setAllTeams]         = useState<CachedTeam[]>([]);
 
   // Stable separator — defined once so FlatList doesn't re-render rows on parent re-render
@@ -235,6 +237,7 @@ export default function SettingsScreen() {
         });
         setRadarRunning(true);
       }
+      Haptics.selectionAsync();
       flashSaved('radar');
     } finally { setSaving(false); }
   };
@@ -251,6 +254,7 @@ export default function SettingsScreen() {
         body: JSON.stringify({ ...next, user_token: userToken }),
       });
       setSettings(s => s ? { ...s, HistoricalMode: next } : s);
+      Haptics.selectionAsync();
     } finally { setSaving(false); }
   };
 
@@ -275,6 +279,7 @@ export default function SettingsScreen() {
   };
 
   const removeTeam = async (team_id: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const q = userToken ? `?user_token=${encodeURIComponent(userToken)}` : '';
     await fetch(`${SERVER_URL}/settings/teams/${team_id}${q}`, { method: 'DELETE' });
     setSettings(s => s ? { ...s, FavoriteTeams: s.FavoriteTeams.filter(t => t.team_id !== team_id) } : s);
@@ -283,6 +288,7 @@ export default function SettingsScreen() {
 
   const confirmAddTeam = async () => {
     if (!pickedTeam) return;
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     await saveTeam({
       team_id:       pickedTeam.id,
       team_name:     pickedTeam.name,
@@ -294,6 +300,7 @@ export default function SettingsScreen() {
   };
 
   const updateExistingTeam = async (team: FavTeam) => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     const edit = teamEdits[team.team_id] ?? { max_diff: String(team.max_diff), start_quarter: String(team.start_quarter), alert_type: team.alert_type };
     await saveTeam({
       ...team,
@@ -309,9 +316,11 @@ export default function SettingsScreen() {
   const confirmAddPlayer = async () => {
     if (!pickedPlayer) return;
     if (!newTotalPtsEnabled && !newHotStartEnabled && !newTdWatch) {
-      alert('Please enable at least one condition before adding.');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      showInfo('No Condition Selected', 'Please enable at least one alarm condition before adding the player.');
       return;
     }
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     const payload = {
       user_token:    userToken,
       player_id:     pickedPlayer.id,
@@ -360,6 +369,7 @@ export default function SettingsScreen() {
   };
 
   const savePlayerSettings = async (player_id: string, name: string, alert_type: string) => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     const edit = playerEdits[player_id];
     if (!edit) return;
     const payload = {
@@ -397,6 +407,7 @@ export default function SettingsScreen() {
   };
 
   const removePlayer = async (player_id: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const q = userToken ? `?user_token=${encodeURIComponent(userToken)}` : '';
     await fetch(`${SERVER_URL}/settings/players/${player_id}${q}`, { method: 'DELETE' });
     setSettings(s => {
@@ -785,37 +796,6 @@ export default function SettingsScreen() {
           )}
         </View>
 
-        {/* ── TEST ALARM (remove before release) ───────────────────── */}
-        <TouchableOpacity
-          style={[styles.guideBtn, { borderColor: 'rgba(255,0,0,0.4)', backgroundColor: 'rgba(255,0,0,0.08)', marginBottom: 8 }]}
-          onPress={async () => {
-            try {
-              await notifee.createTriggerNotification(
-                {
-                  title: '🚨 Test Alarm',
-                  body:  'Screen wake + sound test — tap Dismiss to stop',
-                  data:  { alert_type: 'alarm' },
-                  android: {
-                    channelId:        'classic_alarm',
-                    sound:            'classic_alarm',
-                    importance:       AndroidImportance.HIGH,
-                    category:         AndroidCategory.ALARM,
-                    visibility:       AndroidVisibility.PUBLIC,
-                    pressAction:      { id: 'default' },
-                    actions:          [{ title: 'DISMISS', pressAction: { id: 'dismiss' } }],
-                    vibrationPattern: [100, 300, 200, 400],
-                  },
-                },
-                { type: TriggerType.TIMESTAMP, timestamp: Date.now() + 5000 },
-              );
-              Alert.alert('Test Alarm', 'Firing in 5 seconds — exit the app now.');
-            } catch (e) { console.warn('Test alarm error:', e); }
-          }}
-        >
-          <Ionicons name="warning-outline" size={20} color="#ff4444" />
-          <Text style={[styles.guideBtnText, { color: '#ff4444' }]}>Test Alarm (dev only)</Text>
-        </TouchableOpacity>
-
         {/* ── App Guide button ──────────────────────────────────────── */}
         <TouchableOpacity
           style={styles.guideBtn}
@@ -1168,6 +1148,18 @@ export default function SettingsScreen() {
         onDone={closeKp}
       />
 
+      <Modal visible={infoModal.visible} transparent animationType="fade" onRequestClose={hideInfo}>
+        <View style={styles.infoOverlay}>
+          <View style={styles.infoBox}>
+            <Text style={styles.infoTitle}>{infoModal.title}</Text>
+            <Text style={styles.infoMessage}>{infoModal.message}</Text>
+            <TouchableOpacity style={styles.infoOkBtn} onPress={hideInfo}>
+              <Text style={styles.infoOkText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
     </SafeAreaView>
   );
 }
@@ -1355,4 +1347,29 @@ const styles = StyleSheet.create({
   guideBtnText: {
     color: C.orange, fontWeight: '800', fontSize: 14, letterSpacing: 0.5,
   },
+
+  infoOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.7)',
+    alignItems: 'center', justifyContent: 'center', padding: 32,
+  },
+  infoBox: {
+    width: '100%', backgroundColor: C.card,
+    borderRadius: 20, borderWidth: 1, borderColor: C.border,
+    padding: 28, alignItems: 'center',
+  },
+  infoTitle: {
+    fontSize: 20, fontWeight: '900', color: C.textPrimary,
+    letterSpacing: 0.5, marginBottom: 10,
+  },
+  infoMessage: {
+    fontSize: 14, color: C.textMuted, textAlign: 'center',
+    lineHeight: 20, marginBottom: 28,
+  },
+  infoOkBtn: {
+    width: '100%', paddingVertical: 14, borderRadius: 12,
+    backgroundColor: 'rgba(255,107,0,0.15)',
+    borderWidth: 1, borderColor: 'rgba(255,107,0,0.4)',
+    alignItems: 'center',
+  },
+  infoOkText: { color: C.orange, fontWeight: '800', fontSize: 15 },
 });
