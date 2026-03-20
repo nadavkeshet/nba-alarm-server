@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import notifee, { AndroidImportance, AndroidCategory, AndroidVisibility } from '@notifee/react-native';
+import notifee, { AndroidImportance, AndroidCategory, AndroidVisibility, TriggerType } from '@notifee/react-native';
 import messaging from '@react-native-firebase/messaging';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -8,7 +8,6 @@ import {
   ActivityIndicator,
   FlatList,
   Modal,
-  NativeModules,
   ScrollView,
   StyleSheet,
   Text,
@@ -789,11 +788,10 @@ export default function SettingsScreen() {
         {/* ── TEST ALARM (remove before release) ───────────────────── */}
         <TouchableOpacity
           style={[styles.guideBtn, { borderColor: 'rgba(255,0,0,0.4)', backgroundColor: 'rgba(255,0,0,0.08)', marginBottom: 8 }]}
-          onPress={() => {
-            Alert.alert('Test Alarm', 'Firing in 5 seconds — exit the app now.');
-            setTimeout(async () => {
-              try {
-                await notifee.displayNotification({
+          onPress={async () => {
+            try {
+              await notifee.createTriggerNotification(
+                {
                   title: '🚨 Test Alarm',
                   body:  'Screen wake + sound test — tap Dismiss to stop',
                   data:  { alert_type: 'alarm' },
@@ -807,10 +805,11 @@ export default function SettingsScreen() {
                     fullScreenAction: { id: 'default' },
                     vibrationPattern: [100, 300, 200, 400],
                   },
-                });
-                NativeModules.AlarmChannel?.startAlarmSound();
-              } catch (e) { console.warn('Test alarm error:', e); }
-            }, 5000);
+                },
+                { type: TriggerType.TIMESTAMP, timestamp: Date.now() + 5000 },
+              );
+              Alert.alert('Test Alarm', 'Firing in 5 seconds — exit the app now.');
+            } catch (e) { console.warn('Test alarm error:', e); }
           }}
         >
           <Ionicons name="warning-outline" size={20} color="#ff4444" />
