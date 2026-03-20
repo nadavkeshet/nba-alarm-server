@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   FlatList,
   Modal,
+  NativeModules,
   ScrollView,
   StyleSheet,
   Text,
@@ -805,6 +806,7 @@ export default function SettingsScreen() {
                   vibrationPattern: [100, 300, 200, 400],
                 },
               });
+              NativeModules.AlarmChannel?.startAlarmSound();
               Alert.alert('Fired!', 'Test alarm sent.');
             } catch (e) { console.warn('Test alarm error:', e); }
           }}
