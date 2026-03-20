@@ -14,6 +14,7 @@ import 'react-native-reanimated';
 
 import { triggerStop } from '../alarmSoundHandler';
 import { useColorScheme } from '../hooks/use-color-scheme';
+import { PermissionsOnboarding } from '../components/permissions-onboarding';
 
 // Force LTR layout regardless of device locale (app content is always LTR)
 I18nManager.allowRTL(false);
@@ -23,15 +24,31 @@ export const unstable_settings = {
   anchor: '(tabs)',
 };
 
+const ONBOARDING_KEY = 'nba_onboarding_done';
+
 export default function RootLayout() {
   const colorScheme     = useColorScheme();
   const [confetti, setConfetti] = useState(false);
   const confettiTimer   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   const fireConfetti = () => {
     if (confettiTimer.current) clearTimeout(confettiTimer.current);
     setConfetti(true);
     confettiTimer.current = setTimeout(() => setConfetti(false), 3500);
+  };
+
+  // Show onboarding once on first launch (Android only)
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    AsyncStorage.getItem(ONBOARDING_KEY).then(val => {
+      if (!val) setShowOnboarding(true);
+    });
+  }, []);
+
+  const handleOnboardingDone = async () => {
+    await AsyncStorage.setItem(ONBOARDING_KEY, '1');
+    setShowOnboarding(false);
   };
 
   useEffect(() => {
@@ -83,6 +100,7 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+      <PermissionsOnboarding visible={showOnboarding} onDone={handleOnboardingDone} />
       <Stack>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
