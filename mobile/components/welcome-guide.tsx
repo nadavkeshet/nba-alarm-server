@@ -76,6 +76,30 @@ const SLIDES: Slide[] = [
     where:   'Settings → Historical Mode',
   },
   {
+    icon:    'notifications-circle' as const,
+    color:   '#4d8cf5',
+    bg:      'rgba(77,140,245,0.12)',
+    title:   'How Notifications Work',
+    bullets: [
+      '🔔  Alarm mode — a looping sound plays even if your phone is on silent or vibrate. The screen wakes up and shows the notification on your lock screen. Tap the notification to open the app and stop the music, or hit DISMISS to silence it without opening the app.',
+      '🔕  Silent mode — a regular notification appears with the game or player details, no sound. Tap it to open the app.',
+      '📵  Do Not Disturb? No problem — Alarm mode routes audio through the system alarm channel, which bypasses DND and the ringer switch.',
+      '⚠️  IMPORTANT: The sound uses your Alarm volume — not media or ringtone volume. If you hear nothing, go to your phone\'s sound settings and turn up the Alarm volume.',
+      '⚠️  IMPORTANT: Android may stop background apps to save battery, which can block notifications. To prevent this, go to Settings → Apps → Nba Smart Alarm → Battery → set to Unrestricted. On Samsung, also make sure the app is not listed under Sleeping Apps.',
+    ],
+  },
+  {
+    icon:    'copy' as const,
+    color:   '#4d8cf5',
+    bg:      'rgba(77,140,245,0.12)',
+    title:   'No Double Alerts',
+    bullets: [
+      'Set a Game Alarm on a match where your Favorite Team is playing? No problem — the app detects the overlap and lets your manual alarm run. The Favorite Team monitor steps aside for that game.',
+      'Same goes for players: if you set a Player Alarm on someone who is also in your Favorite Players list, the manual alarm takes over and the favorite watch pauses for that game.',
+      'In short — manual alarms always take priority. You\'ll never get two alerts for the same event.',
+    ],
+  },
+  {
     icon:    'information-circle' as const,
     color:   C.muted,
     bg:      'rgba(107,138,173,0.12)',

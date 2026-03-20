@@ -792,6 +792,7 @@ def start_monitoring_job(
 
             if quarter == 9:
                 log.info("Game FINAL. Alarm not triggered. Stopping.")
+                _deactivate_db_alarm_for(game_id)
                 return
 
             if quarter >= start_quarter and diff <= max_diff:
@@ -922,6 +923,7 @@ def start_player_monitoring_job(
 
             if quarter == 9:
                 log.info("Game FINAL. Player alarm not triggered. Stopping.")
+                _deactivate_db_alarm_for(player_id)
                 return
 
             if condition == "pts_early" and quarter >= quarter_deadline:

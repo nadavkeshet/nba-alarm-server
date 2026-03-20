@@ -8,6 +8,7 @@ import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
@@ -33,6 +34,7 @@ class AlarmChannelModule(reactContext: ReactApplicationContext) :
 
     companion object {
         @Volatile private var player: MediaPlayer? = null
+        @Volatile private var wakeLock: PowerManager.WakeLock? = null
 
         @Synchronized
         fun stopPlayer() {
@@ -41,6 +43,10 @@ class AlarmChannelModule(reactContext: ReactApplicationContext) :
                 try { release() }             catch (_: Exception) {}
             }
             player = null
+            wakeLock?.apply {
+                try { if (isHeld) release() } catch (_: Exception) {}
+            }
+            wakeLock = null
         }
     }
 
@@ -82,6 +88,17 @@ class AlarmChannelModule(reactContext: ReactApplicationContext) :
     fun startAlarmSound() {
         stopPlayer() // release any previous instance first
         val ctx = reactApplicationContext
+
+        // Wake the screen (shows lock screen with notification, without opening the app)
+        try {
+            val pm = ctx.getSystemService(Context.POWER_SERVICE) as PowerManager
+            @Suppress("DEPRECATION")
+            wakeLock = pm.newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                "NBAAlarmApp:AlarmWakeLock"
+            ).also { it.acquire(60_000L) } // auto-release after 60 s
+        } catch (_: Exception) {}
+
         val soundUri = Uri.parse(
             "android.resource://${ctx.packageName}/raw/classic_alarm"
         )

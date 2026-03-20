@@ -6,8 +6,9 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native
 import notifee, { EventType } from '@notifee/react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useEffect, useRef, useState } from 'react';
-import { I18nManager, NativeModules, StyleSheet, View } from 'react-native';
+import { AppState, I18nManager, NativeModules, StyleSheet, View } from 'react-native';
 import ConfettiCannon from 'react-native-confetti-cannon';
 import 'react-native-reanimated';
 
@@ -43,8 +44,10 @@ export default function RootLayout() {
 
     // Foreground + background state notification events (single handler — Notifee allows only one)
     const unsub = notifee.onForegroundEvent(async ({ type, detail }) => {
-      // User tapped the notification body → celebrate
+      // User tapped the notification body → celebrate + stop alarm
       if (type === EventType.PRESS && detail.notification?.data?.alert_type === 'alarm') {
+        triggerStop();
+        await notifee.cancelAllNotifications();
         fireConfetti();
         return;
       }
@@ -60,8 +63,20 @@ export default function RootLayout() {
       }
     });
 
+    // Background tap: onBackgroundEvent sets a flag → fire confetti when app opens
+    const appStateSub = AppState.addEventListener('change', async state => {
+      if (state === 'active') {
+        const pending = await AsyncStorage.getItem('nba_confetti_pending');
+        if (pending) {
+          await AsyncStorage.removeItem('nba_confetti_pending');
+          fireConfetti();
+        }
+      }
+    });
+
     return () => {
       unsub();
+      appStateSub.remove();
       if (confettiTimer.current) clearTimeout(confettiTimer.current);
     };
   }, []);

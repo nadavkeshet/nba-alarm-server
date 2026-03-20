@@ -26,44 +26,60 @@ const TROPHY_KEY = 'nba_alarm_recent_hits';
 messaging().setBackgroundMessageHandler(async remoteMessage => {
   const data = remoteMessage.data ?? {};
 
-  if (data.alert_type !== 'alarm') {
-    // Silent push (radar/favorites in silent mode) — no visible notification
-    return;
+  if (data.alert_type === 'alarm') {
+    // Save to Trophy Room
+    try {
+      const hit = { title: data.title ?? 'NBA Alarm', body: data.body ?? '', receivedAt: new Date().toISOString() };
+      const raw  = await AsyncStorage.getItem(TROPHY_KEY);
+      const prev = raw ? JSON.parse(raw) : [];
+      await AsyncStorage.setItem(TROPHY_KEY, JSON.stringify([hit, ...prev].slice(0, 10)));
+    } catch {}
+
+    await notifee.displayNotification({
+      title: data.title ?? 'NBA Alarm',
+      body:  data.body  ?? '',
+      data:  { alert_type: 'alarm' },
+      android: {
+        channelId:   data.channel_id ?? 'classic_alarm',
+        sound:       'classic_alarm',
+        importance:  AndroidImportance.HIGH,
+        category:    AndroidCategory.ALARM,
+        visibility:  AndroidVisibility.PUBLIC,
+        pressAction: { id: 'default' },
+        actions:     [{ title: 'DISMISS', pressAction: { id: 'dismiss' } }],
+      },
+    });
+  } else {
+    // Silent mode — regular notification, no sound, no DISMISS button
+    await notifee.createChannel({ id: 'silent', name: 'Silent Updates', importance: AndroidImportance.DEFAULT });
+    await notifee.displayNotification({
+      title: data.title ?? 'NBA Update',
+      body:  data.body  ?? '',
+      data:  { alert_type: 'silent' },
+      android: {
+        channelId:   'silent',
+        importance:  AndroidImportance.DEFAULT,
+        pressAction: { id: 'default' },
+      },
+    });
   }
-
-  // Save to Trophy Room (background/killed state — foreground is handled in active.tsx)
-  try {
-    const hit = { title: data.title ?? 'NBA Alarm', body: data.body ?? '', receivedAt: new Date().toISOString() };
-    const raw  = await AsyncStorage.getItem(TROPHY_KEY);
-    const prev = raw ? JSON.parse(raw) : [];
-    await AsyncStorage.setItem(TROPHY_KEY, JSON.stringify([hit, ...prev].slice(0, 10)));
-  } catch {}
-
-  await notifee.displayNotification({
-    title: data.title ?? 'NBA Alarm',
-    body:  data.body  ?? '',
-    data:  { alert_type: 'alarm' },   // required for checkAlarmOnForeground in index.tsx
-    android: {
-      channelId:        data.channel_id ?? 'classic_alarm',
-      sound:            'classic_alarm',
-      importance:       AndroidImportance.HIGH,
-      category:         AndroidCategory.ALARM,
-      visibility:       AndroidVisibility.PUBLIC,
-      // DISMISS button — inline, no SharedPreferences lookup required
-      actions: [{ title: 'DISMISS', pressAction: { id: 'dismiss' } }],
-      // Full Screen Intent — wakes screen on notification arrival.
-      // withTurnScreenOn plugin ensures turnScreenOn + showWhenLocked on MainActivity.
-      fullScreenAction: { id: 'default' },
-    },
-  });
 });
 
+const CONFETTI_KEY = 'nba_confetti_pending';
+
 // ── Background Notifee event handler ─────────────────────────────────────────
-// Handles action button taps (DISMISS) when the app is in background or killed.
+// Handles notification events when the app is in background or killed.
 notifee.onBackgroundEvent(async ({ type, detail }) => {
-  // Trigger notification delivered while app is in background → start alarm sound
+  // Notification delivered while app is in background → start alarm sound
   if (type === EventType.DELIVERED && detail.notification?.data?.alert_type === 'alarm') {
     NativeModules.AlarmChannel?.startAlarmSound();
+    return;
+  }
+  // User tapped notification body → stop sound, set confetti flag, cancel notification
+  if (type === EventType.PRESS && detail.notification?.data?.alert_type === 'alarm') {
+    NativeModules.AlarmChannel?.stopAlarmSound();
+    await AsyncStorage.setItem(CONFETTI_KEY, '1');
+    await notifee.cancelAllNotifications();
     return;
   }
   // User tapped DISMISS → stop sound + cancel notification

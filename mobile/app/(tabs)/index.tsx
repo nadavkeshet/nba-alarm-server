@@ -350,24 +350,39 @@ export default function HomeScreen() {
       if (state === 'active') checkAlarmOnForeground();
     });
 
-    // Foreground: FCM data message arrives while app is open → display via Notifee + play sound
+    // Foreground: FCM data message arrives while app is open → display via Notifee
     const unsubMessage = messaging().onMessage(async remoteMessage => {
       const data = remoteMessage.data ?? {};
-      if (data.alert_type !== 'alarm') return;
-      await notifee.displayNotification({
-        title: String(data.title ?? 'NBA Alarm'),
-        body:  String(data.body  ?? ''),
-        android: {
-          channelId:        String(data.channel_id ?? ALARM_CHANNEL),
-          sound:            'classic_alarm',
-          importance:       AndroidImportance.HIGH,
-          category:         AndroidCategory.ALARM,
-          visibility:       AndroidVisibility.PUBLIC,
-          actions:          [{ title: 'DISMISS', pressAction: { id: 'dismiss' } }],
-          fullScreenAction: { id: 'default' },
-        },
-      });
-      playAlarmSound();
+      if (data.alert_type === 'alarm') {
+        await notifee.displayNotification({
+          title: String(data.title ?? 'NBA Alarm'),
+          body:  String(data.body  ?? ''),
+          data:  { alert_type: 'alarm' },
+          android: {
+            channelId:   String(data.channel_id ?? ALARM_CHANNEL),
+            sound:       'classic_alarm',
+            importance:  AndroidImportance.HIGH,
+            category:    AndroidCategory.ALARM,
+            visibility:  AndroidVisibility.PUBLIC,
+            pressAction: { id: 'default' },
+            actions:     [{ title: 'DISMISS', pressAction: { id: 'dismiss' } }],
+          },
+        });
+        playAlarmSound();
+      } else {
+        // Silent mode — regular notification, no sound
+        await notifee.createChannel({ id: 'silent', name: 'Silent Updates', importance: AndroidImportance.DEFAULT });
+        await notifee.displayNotification({
+          title: String(data.title ?? 'NBA Update'),
+          body:  String(data.body  ?? ''),
+          data:  { alert_type: 'silent' },
+          android: {
+            channelId:   'silent',
+            importance:  AndroidImportance.DEFAULT,
+            pressAction: { id: 'default' },
+          },
+        });
+      }
     });
 
     // Register stop handler so _layout.tsx can stop the alarm sound on DISMISS
