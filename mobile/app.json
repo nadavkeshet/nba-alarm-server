@@ -37,6 +37,7 @@
       "expo-router",
       "./plugins/withTurnScreenOn",
       "./plugins/withSoundFiles",
+      "./plugins/withAlarmAudioAttributes",
       [
         "expo-splash-screen",
         {

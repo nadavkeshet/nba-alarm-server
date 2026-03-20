@@ -3,6 +3,7 @@ import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
 import messaging from '@react-native-firebase/messaging';
 import notifee, { AndroidImportance, AndroidCategory, AndroidVisibility } from '@notifee/react-native';
 import { registerStopHandler } from '../../alarmSoundHandler';
+import { NativeModules } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -165,7 +166,8 @@ function GameCard({
 async function setupNotifee(): Promise<string | undefined> {
   try {
     if (Platform.OS === 'android') {
-      // Delete + recreate so channel config changes are always applied
+      // Notifee creates the base channel, then the native module overwrites it
+      // with AudioAttributes.USAGE_ALARM so the sound plays even in vibrate mode.
       await notifee.deleteChannel(ALARM_CHANNEL).catch(() => {});
       await notifee.createChannel({
         id:         ALARM_CHANNEL,
@@ -177,6 +179,8 @@ async function setupNotifee(): Promise<string | undefined> {
         vibration:  true,
         vibrationPattern: [100, 300, 200, 400],
       });
+      // Patch channel to use STREAM_ALARM — bypasses vibrate/ringer-off mode
+      NativeModules.AlarmChannel?.patchChannel(ALARM_CHANNEL, 'classic_alarm');
     }
 
     const permission = await notifee.requestPermission();
