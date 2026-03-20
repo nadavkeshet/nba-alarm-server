@@ -35,6 +35,7 @@
     },
     "plugins": [
       "expo-router",
+      "./plugins/withAndroidSdkVersions",
       "./plugins/withTurnScreenOn",
       "./plugins/withSoundFiles",
       "./plugins/withAlarmAudioAttributes",
