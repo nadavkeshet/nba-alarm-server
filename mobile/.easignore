@@ -1,1 +1,3 @@
-android/.gradle
+android/
+node_modules/
+.gradle/
