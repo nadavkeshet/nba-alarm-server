@@ -52,5 +52,8 @@
     "patch-package": "^8.0.1",
     "typescript": "~5.9.2"
   },
-  "private": true
+  "private": true,
+  "overrides": {
+    "react-native-worklets": "0.5.1"
+  }
 }
