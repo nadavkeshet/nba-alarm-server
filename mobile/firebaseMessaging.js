@@ -61,6 +61,12 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
 // ── Background Notifee event handler ─────────────────────────────────────────
 // Handles action button taps (DISMISS) when the app is in background or killed.
 notifee.onBackgroundEvent(async ({ type, detail }) => {
+  // Trigger notification delivered while app is in background → start alarm sound
+  if (type === EventType.DELIVERED && detail.notification?.data?.alert_type === 'alarm') {
+    NativeModules.AlarmChannel?.startAlarmSound();
+    return;
+  }
+  // User tapped DISMISS → stop sound + cancel notification
   if (type === EventType.ACTION_PRESS && detail.pressAction?.id === 'dismiss') {
     NativeModules.AlarmChannel?.stopAlarmSound();
     await notifee.cancelAllNotifications();

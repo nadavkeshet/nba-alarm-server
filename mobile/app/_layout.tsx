@@ -7,7 +7,7 @@ import notifee, { EventType } from '@notifee/react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useRef, useState } from 'react';
-import { I18nManager, StyleSheet, View } from 'react-native';
+import { I18nManager, NativeModules, StyleSheet, View } from 'react-native';
 import ConfettiCannon from 'react-native-confetti-cannon';
 import 'react-native-reanimated';
 
@@ -46,6 +46,11 @@ export default function RootLayout() {
       // User tapped the notification body → celebrate
       if (type === EventType.PRESS && detail.notification?.data?.alert_type === 'alarm') {
         fireConfetti();
+        return;
+      }
+      // Trigger notification delivered while app is in foreground → start alarm sound
+      if (type === EventType.DELIVERED && detail.notification?.data?.alert_type === 'alarm') {
+        NativeModules.AlarmChannel?.startAlarmSound();
         return;
       }
       // User tapped DISMISS → stop sound + cancel notification
