@@ -3,6 +3,7 @@ import React, { useRef, useState } from 'react';
 import {
   Animated,
   Modal,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -72,7 +73,7 @@ const SLIDES: Slide[] = [
     color:   C.gold,
     bg:      'rgba(240,165,0,0.12)',
     title:   'Historical Mode',
-    body:    'Get alerted for once-in-a-generation stat lines: 40+ points before halftime, 11+ three-pointers made in a game, or a Quad-Double threat quietly developing.',
+    body:    'Get alerted for once-in-a-generation stat lines: 40+ points before halftime, 12+ three-pointers made in a game (with 3+ minutes remaining), or a Quad-Double threat quietly developing.',
     where:   'Settings → Historical Mode',
   },
   {
@@ -160,6 +161,7 @@ export function WelcomeGuide({ visible, onClose, closeLabel = 'Get Started' }: P
 
         {/* ── Slide content ──────────────────────────────────────────── */}
         <Animated.View style={[styles.slideWrap, { opacity: fade }]}>
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.slideScroll}>
 
           {/* Icon */}
           <View style={[styles.iconCircle, { backgroundColor: slide.bg }]}>
@@ -190,6 +192,7 @@ export function WelcomeGuide({ visible, onClose, closeLabel = 'Get Started' }: P
             </View>
           )}
 
+          </ScrollView>
         </Animated.View>
 
         {/* ── Dot indicators ─────────────────────────────────────────── */}
@@ -255,8 +258,12 @@ const styles = StyleSheet.create({
 
   // ── Slide ──────────────────────────────────────────────────────────
   slideWrap: {
-    flex: 1, alignItems: 'center', justifyContent: 'center',
+    flex: 1,
     paddingBottom: 24,
+  },
+  slideScroll: {
+    alignItems: 'center', justifyContent: 'center',
+    flexGrow: 1, paddingBottom: 8,
   },
 
   iconCircle: {

@@ -491,6 +491,21 @@ def _fetch_nba_game(game_id: str) -> dict | None:
     return None
 
 
+def _clock_minutes_remaining(event: dict) -> float:
+    """
+    Returns minutes remaining in the current period from ESPN's displayClock.
+    Returns 99.0 if the value cannot be parsed (safe default = assume time remains).
+    """
+    try:
+        clock = event["competitions"][0]["status"].get("displayClock", "")
+        if not clock:
+            return 99.0
+        parts = clock.split(":")
+        return int(parts[0]) + int(parts[1]) / 60
+    except (KeyError, IndexError, ValueError):
+        return 99.0
+
+
 def _parse_nba_state(event: dict) -> tuple[int, int, str]:
     """
     Returns (quarter, point_diff, detail).
@@ -1172,16 +1187,18 @@ def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
                                 alert_type=hist_alert_type,
                             )
 
-                    # Historic 3PM game: 11+
-                    if hist_cats.get("threes_11") and threes >= 11:
-                        if _fire_once(f"{game_id}_{player_id}_threes_11"):
-                            _send_push_notification(
-                                push_token=push_token,
-                                title="Historic 3-Point Game!",
-                                body=f"{player_name}: {threes} threes in {game_name}!",
-                                sound_channel=sound_channel,
-                                alert_type=hist_alert_type,
-                            )
+                    # Historic 3PM game: 12+ with more than 3 minutes remaining
+                    if hist_cats.get("threes_11") and threes >= 12:
+                        clock_mins = _clock_minutes_remaining(event)
+                        if not (quarter >= 4 and clock_mins <= 3):
+                            if _fire_once(f"{game_id}_{player_id}_threes_11"):
+                                _send_push_notification(
+                                    push_token=push_token,
+                                    title="Historic 3-Point Game!",
+                                    body=f"{player_name}: {threes} threes in {game_name}!",
+                                    sound_channel=sound_channel,
+                                    alert_type=hist_alert_type,
+                                )
 
                     # Quad-double threat: 8+ in any 4 of 5 categories
                     if hist_cats.get("quad_double_threat"):

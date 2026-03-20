@@ -302,7 +302,7 @@ export default function ActiveScreen() {
     const histCats = data?.historical_mode?.categories;
     const activeCategories = histCats ? [
       histCats.scoring_40_half    && '40+ pts before halftime',
-      histCats.threes_11          && '11+ three-pointers',
+      histCats.threes_11          && '12+ three-pointers',
       histCats.quad_double_threat && 'Quad-double threat',
     ].filter(Boolean) as string[] : [];
     return { dbGameAlarms, liveGameAlarms, livePlayerAlarmGroups, dbPlayerAlarmGroups, activeCategories };

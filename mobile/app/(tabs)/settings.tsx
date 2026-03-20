@@ -767,7 +767,7 @@ export default function SettingsScreen() {
             <>
               {([
                 { key: 'scoring_40_half'    as const, label: 'Historic Scoring Pace',  sub: '40+ pts by halftime (end of Q2)' },
-                { key: 'threes_11'          as const, label: '3-Point Record Pace',     sub: '11+ threes in a single game' },
+                { key: 'threes_11'          as const, label: '3-Point Record Pace',     sub: '12+ threes in a single game (with 3+ min remaining)' },
                 { key: 'quad_double_threat' as const, label: 'Quad-Double Threat',      sub: '8+ in any 4 of PTS/REB/AST/STL/BLK' },
               ] as const).map(({ key, label, sub }) => (
                 <View key={key} style={styles.categoryRow}>
