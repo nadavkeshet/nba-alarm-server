@@ -60,11 +60,7 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
 // ── Background Notifee event handler ─────────────────────────────────────────
 // Handles action button taps (DISMISS) when the app is in background or killed.
 notifee.onBackgroundEvent(async ({ type, detail }) => {
-  if (
-    type === EventType.ACTION_PRESS &&
-    detail.pressAction?.id === 'dismiss' &&
-    detail.notification?.id
-  ) {
-    await notifee.cancelNotification(detail.notification.id);
+  if (type === EventType.ACTION_PRESS && detail.pressAction?.id === 'dismiss') {
+    await notifee.cancelAllNotifications();
   }
 });

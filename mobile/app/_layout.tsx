@@ -49,13 +49,9 @@ export default function RootLayout() {
         return;
       }
       // User tapped DISMISS → stop sound + cancel notification
-      if (
-        type === EventType.ACTION_PRESS &&
-        detail.pressAction?.id === 'dismiss' &&
-        detail.notification?.id
-      ) {
+      if (type === EventType.ACTION_PRESS && detail.pressAction?.id === 'dismiss') {
         triggerStop();
-        await notifee.cancelNotification(detail.notification.id);
+        await notifee.cancelAllNotifications();
       }
     });
 
