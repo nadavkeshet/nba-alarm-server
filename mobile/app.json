@@ -53,15 +53,15 @@
       ]
     ],
     "extra": {
+      "router": {},
       "eas": {
-        "projectId": "9a20206e-3c2b-4b3e-8e4f-1c9813f4c605"
-      },
-      "router": {}
+        "projectId": "bac39d54-8d6f-41e4-9afb-591085bb5dc1"
+      }
     },
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
     },
-    "owner": "nbasmartalarm"
+    "owner": "nbasmartalarm1"
   }
 }
