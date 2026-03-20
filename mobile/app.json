@@ -10,7 +10,8 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.nadav.nbaalarmapp"
+      "bundleIdentifier": "com.nadav.nbaalarmapp",
+      "buildNumber": "1"
     },
     "android": {
       "googleServicesFile": "./google-services.json",
@@ -26,6 +27,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "package": "com.nadav.nbaalarmapp",
+      "versionCode": 1,
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },

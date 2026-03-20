@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Linking,
   Modal,
   ScrollView,
   StyleSheet,
@@ -805,6 +806,14 @@ export default function SettingsScreen() {
           <Text style={styles.guideBtnText}>App Guide</Text>
         </TouchableOpacity>
 
+        {/* ── Privacy Policy ────────────────────────────────────────── */}
+        <TouchableOpacity
+          style={styles.privacyBtn}
+          onPress={() => Linking.openURL('https://example.com/privacy')}
+        >
+          <Text style={styles.privacyBtnText}>Privacy Policy</Text>
+        </TouchableOpacity>
+
       </ScrollView>
 
       {/* ── Welcome Guide Modal ───────────────────────────────────── */}
@@ -1346,6 +1355,14 @@ const styles = StyleSheet.create({
   },
   guideBtnText: {
     color: C.orange, fontWeight: '800', fontSize: 14, letterSpacing: 0.5,
+  },
+
+  privacyBtn: {
+    alignItems: 'center', marginHorizontal: 16, marginTop: 8, marginBottom: 8,
+    paddingVertical: 10,
+  },
+  privacyBtnText: {
+    color: C.textMuted, fontSize: 12, textDecorationLine: 'underline',
   },
 
   infoOverlay: {
