@@ -1255,7 +1255,7 @@ def _prune_fired_alerts() -> None:
     today = datetime.now(timezone.utc).strftime("%Y%m%d")
     with _FIRED_LOCK:
         stale = {k for k in _FIRED_ALERTS if not k.startswith(today)}
-        _FIRED_ALERTS -= stale
+        _FIRED_ALERTS.difference_update(stale)
 
 
 def _run_radar_tick(users: list[dict]) -> bool:
