@@ -27,14 +27,8 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
   const data = remoteMessage.data ?? {};
 
   if (data.alert_type === 'alarm') {
-    // Save to Trophy Room
-    try {
-      const hit = { title: data.title ?? 'NBA Alarm', body: data.body ?? '', receivedAt: new Date().toISOString() };
-      const raw  = await AsyncStorage.getItem(TROPHY_KEY);
-      const prev = raw ? JSON.parse(raw) : [];
-      await AsyncStorage.setItem(TROPHY_KEY, JSON.stringify([hit, ...prev].slice(0, 10)));
-    } catch {}
-
+    // Display notification FIRST — Android gives Headless JS a narrow time window
+    // in killed state. AsyncStorage must not block the notification from appearing.
     await notifee.displayNotification({
       title: data.title ?? 'NBA Alarm',
       body:  data.body  ?? '',
@@ -49,6 +43,14 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
         actions:     [{ title: 'DISMISS', pressAction: { id: 'dismiss' } }],
       },
     });
+
+    // Save to Trophy Room after notification is already displayed
+    try {
+      const hit = { title: data.title ?? 'NBA Alarm', body: data.body ?? '', receivedAt: new Date().toISOString() };
+      const raw  = await AsyncStorage.getItem(TROPHY_KEY);
+      const prev = raw ? JSON.parse(raw) : [];
+      await AsyncStorage.setItem(TROPHY_KEY, JSON.stringify([hit, ...prev].slice(0, 10)));
+    } catch {}
   } else {
     // Silent mode — regular notification, no sound, no DISMISS button
     await notifee.createChannel({ id: 'silent', name: 'Silent Updates', importance: AndroidImportance.DEFAULT });
