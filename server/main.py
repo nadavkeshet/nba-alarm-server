@@ -48,6 +48,8 @@ from monitor import (
     register_db_deactivate,
     # Multi-user radar registration
     register_db_get_all_users,
+    # Invalid token cleanup
+    register_db_invalidate_token,
 )
 
 
@@ -57,7 +59,12 @@ _raw_db_url = os.environ.get("DATABASE_URL", "")
 # Railway provides postgres:// but SQLAlchemy 1.4+ requires postgresql://
 DATABASE_URL = _raw_db_url.replace("postgres://", "postgresql://", 1) if _raw_db_url else ""
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True) if DATABASE_URL else None
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_size=10,       # base connections kept open
+    max_overflow=20,    # extra connections allowed under burst load (total: 30)
+) if DATABASE_URL else None
 
 
 class _Base(DeclarativeBase):
@@ -142,6 +149,8 @@ def _init_db() -> None:
         "ALTER TABLE user_preferences ADD COLUMN hist_alert_type VARCHAR NOT NULL DEFAULT 'silent'",
         "ALTER TABLE favorites      ADD COLUMN alert_type VARCHAR DEFAULT 'silent'",
         "ALTER TABLE favorite_teams ADD COLUMN alert_type VARCHAR DEFAULT 'silent'",
+        # Partial index so is_active=True scans are fast even with thousands of rows
+        "CREATE INDEX idx_alarms_active ON alarms (is_active) WHERE is_active = TRUE",
     ]
     for sql in migrations:
         try:
@@ -174,6 +183,28 @@ def _deactivate_db_alarm(target_id: str) -> None:
 
 # Register the callback so monitor.py threads can deactivate DB records after firing
 register_db_deactivate(_deactivate_db_alarm)
+
+
+def _invalidate_push_token(push_token: str) -> None:
+    """
+    Called when Firebase returns UnregisteredError for a token.
+    Removes the token from all 3 DB tables so it is never retried.
+    """
+    if engine is None or not push_token:
+        return
+    try:
+        with Session(engine) as session:
+            session.query(FavoritePlayerDB).filter_by(user_token=push_token).delete()
+            session.query(FavoriteTeamDB).filter_by(user_token=push_token).delete()
+            session.query(UserPreferenceDB).filter_by(user_token=push_token).delete()
+            session.query(Alarm).filter_by(user_token=push_token).delete()
+            session.commit()
+        log.info("DB: removed all records for invalid token %s", push_token[-8:])
+    except Exception as exc:
+        log.error("DB: _invalidate_push_token failed – %s", exc)
+
+
+register_db_invalidate_token(_invalidate_push_token)
 
 
 # ── Startup Restore ────────────────────────────────────────────────────────────
@@ -247,67 +278,78 @@ def _get_all_users_for_radar() -> list[dict]:
     """
     Return [{token, channel, prefs}] for every user that has any favorites
     or passive monitoring configured.  Called by the radar on every tick.
+
+    Uses 3 bulk queries + Python grouping — never opens more than 1 DB session.
     """
     if engine is None:
         return []
     try:
         with Session(engine) as session:
-            team_tokens   = {r.user_token for r in session.query(FavoriteTeamDB.user_token).distinct()}
-            player_tokens = {r.user_token for r in session.query(FavoritePlayerDB.user_token).distinct()}
-            pref_tokens   = {r.user_token for r in session.query(UserPreferenceDB.user_token).distinct()}
-            all_tokens    = team_tokens | player_tokens | pref_tokens
+            all_players: list[FavoritePlayerDB]  = session.query(FavoritePlayerDB).all()
+            all_teams:   list[FavoriteTeamDB]    = session.query(FavoriteTeamDB).all()
+            all_prefs:   list[UserPreferenceDB]  = session.query(UserPreferenceDB).all()
+
+        # Group by token in Python — no extra DB round-trips
+        players_by_token: dict[str, list] = {}
+        for p in all_players:
+            players_by_token.setdefault(p.user_token, []).append(p)
+
+        teams_by_token: dict[str, list] = {}
+        for t in all_teams:
+            teams_by_token.setdefault(t.user_token, []).append(t)
+
+        prefs_by_token: dict[str, UserPreferenceDB] = {p.user_token: p for p in all_prefs}
+
+        all_tokens = set(players_by_token) | set(teams_by_token) | set(prefs_by_token)
 
         users: list[dict] = []
         for token in all_tokens:
-            with Session(engine) as session:
-                players = session.query(FavoritePlayerDB).filter_by(user_token=token).all()
-                teams   = session.query(FavoriteTeamDB).filter_by(user_token=token).all()
-                pref    = session.get(UserPreferenceDB, token)
+            players = players_by_token.get(token, [])
+            teams   = teams_by_token.get(token, [])
+            pref    = prefs_by_token.get(token)
 
-                fav_players = {
-                    p.target_id: {
-                        "name":        p.target_name or "",
-                        "total_pts":   p.total_pts,
-                        "early_pts_q": p.early_pts_q,
-                        "early_pts":   p.early_pts,
-                        "td_watch":    bool(p.td_watch),
-                        "alert_type":  p.alert_type or "silent",
-                    }
-                    for p in players
+            fav_players = {
+                p.target_id: {
+                    "name":        p.target_name or "",
+                    "total_pts":   p.total_pts,
+                    "early_pts_q": p.early_pts_q,
+                    "early_pts":   p.early_pts,
+                    "td_watch":    bool(p.td_watch),
+                    "alert_type":  p.alert_type or "silent",
                 }
-                fav_teams = [
-                    {
-                        "team_id":       t.team_id,
-                        "team_name":     t.team_name or "",
-                        "max_diff":      t.score_gap or 5,
-                        "start_quarter": t.start_quarter or 4,
-                        "alert_type":    t.alert_type or "silent",
-                    }
-                    for t in teams
-                ]
-                radar_cfg = {
-                    "enabled":       pref.radar_enabled       if pref else False,
-                    "max_diff":      pref.radar_gap           if pref else 5,
-                    "start_quarter": pref.radar_start_q       if pref else 4,
-                    "alert_type":    pref.alert_type          if pref else "silent",
+                for p in players
+            }
+            fav_teams = [
+                {
+                    "team_id":       t.team_id,
+                    "team_name":     t.team_name or "",
+                    "max_diff":      t.score_gap or 5,
+                    "start_quarter": t.start_quarter or 4,
+                    "alert_type":    t.alert_type or "silent",
                 }
-                hist_cfg = {
-                    "enabled":    pref.historical_mode_enabled if pref else False,
-                    "alert_type": pref.hist_alert_type         if pref else "silent",
-                    "categories": {
-                        "scoring_40_half":    pref.hist_scoring_40_half if pref else False,
-                        "threes_11":          pref.hist_threes_11       if pref else False,
-                        "quad_double_threat": pref.hist_quad_double     if pref else False,
-                    },
-                }
+                for t in teams
+            ]
+            radar_cfg = {
+                "enabled":       pref.radar_enabled       if pref else False,
+                "max_diff":      pref.radar_gap           if pref else 5,
+                "start_quarter": pref.radar_start_q       if pref else 4,
+                "alert_type":    pref.alert_type          if pref else "silent",
+            }
+            hist_cfg = {
+                "enabled":    pref.historical_mode_enabled if pref else False,
+                "alert_type": pref.hist_alert_type         if pref else "silent",
+                "categories": {
+                    "scoring_40_half":    pref.hist_scoring_40_half if pref else False,
+                    "threes_11":          pref.hist_threes_11       if pref else False,
+                    "quad_double_threat": pref.hist_quad_double     if pref else False,
+                },
+            }
 
+            # Sound channel: use persisted value if this is the known push token
             channel = "classic_alarm"
-            try:
-                from monitor import get_saved_push_token as _gst  # noqa: avoid circular at module level
-                if token == _gst()[0]:
-                    channel = _gst()[1]
-            except Exception:
-                pass
+            saved_token, saved_channel = get_saved_push_token()
+            if token == saved_token:
+                channel = saved_channel
 
             users.append({
                 "token":   token,
@@ -509,6 +551,12 @@ async def _alarm_poller() -> None:
 
                     result = _check_and_fire(alarm, events)
                     if result is True:
+                        log.info(
+                            "POLLER ALARM fire   | alarm_id=%d | %s | %s",
+                            alarm.id,
+                            alarm.target_name or alarm.target_id,
+                            alarm.user_token[-8:],
+                        )
                         _send_push_notification(
                             push_token=alarm.user_token,
                             title="NBA Alarm",

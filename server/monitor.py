@@ -299,6 +299,19 @@ def register_db_deactivate(fn) -> None:
     _DB_DEACTIVATE_FN = fn
 
 
+# ---------------------------------------------------------------------------
+# Invalid-token callback  (set by main.py — removes stale FCM tokens from DB)
+# ---------------------------------------------------------------------------
+
+_DB_INVALIDATE_TOKEN_FN = None
+
+
+def register_db_invalidate_token(fn) -> None:
+    """Register a callable(push_token: str) that removes an invalid FCM token from DB."""
+    global _DB_INVALIDATE_TOKEN_FN
+    _DB_INVALIDATE_TOKEN_FN = fn
+
+
 def _deactivate_db_alarm_for(target_id: str) -> None:
     if _DB_DEACTIVATE_FN is not None:
         try:
@@ -706,6 +719,15 @@ def _send_push_notification(
         )
         response = fb_messaging.send(message)
         log.info("FCM push sent → %s", response)
+    except fb_messaging.UnregisteredError:
+        # Token is no longer valid (app uninstalled / re-installed without re-registering).
+        # Remove it from the DB so we never attempt it again.
+        log.warning("FCM: token unregistered – removing %s", _tid(push_token))
+        if _DB_INVALIDATE_TOKEN_FN is not None:
+            try:
+                _DB_INVALIDATE_TOKEN_FN(push_token)
+            except Exception as cb_exc:
+                log.warning("FCM: token invalidation callback failed: %s", cb_exc)
     except Exception as exc:
         log.error("FCM push failed: %s", exc)
 
@@ -1053,7 +1075,7 @@ def _run_radar_tick_for_user(
                 if quarter >= start_q and diff <= max_d:
                     label = "Favorite Team Alert!" if "team_name" in criteria else "NBA Radar – Close Game!"
                     if _fire_once(f"{game_id}_game", token):
-                        log.info("RADAR ALARM  fire   | %s | Q%d diff=%d | %s", game_name, quarter, diff, label)
+                        log.info("RADAR ALARM  fire   | %s | Q%d diff=%d | %s | %s", game_name, quarter, diff, label, _tid(push_token))
                         _send_push_notification(
                             push_token=push_token,
                             title=label,
@@ -1107,7 +1129,7 @@ def _run_radar_tick_for_user(
 
                         if total_pts_thr is not None and pts >= int(total_pts_thr):
                             if _fire_once(f"{game_id}_{player_id}_total_pts", token):
-                                log.info("RADAR ALARM  fire   | %s | %d pts in %s", player_name, pts, game_name)
+                                log.info("RADAR ALARM  fire   | %s | %d pts in %s | %s", player_name, pts, game_name, _tid(push_token))
                                 _send_push_notification(
                                     push_token=push_token,
                                     title="Scoring Alert!",
@@ -1169,19 +1191,31 @@ def _run_radar_tick_for_user(
                                 )
 
 
-def _run_radar_tick(users: list[dict]) -> None:
+def _prune_fired_alerts() -> None:
+    """Remove dedup keys from previous UTC days to prevent unbounded memory growth."""
+    today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    with _FIRED_LOCK:
+        stale = {k for k in _FIRED_ALERTS if not k.startswith(today)}
+        _FIRED_ALERTS -= stale
+
+
+def _run_radar_tick(users: list[dict]) -> bool:
     """
     Full radar scan for all users.
     ESPN scoreboard is fetched ONCE; game summaries are fetched lazily and
     cached so multiple users watching the same game share one HTTP request.
+    Returns True on success, False if the ESPN fetch failed (used by the
+    caller to track consecutive failures).
     """
+    _prune_fired_alerts()
+
     try:
         resp = requests.get(ESPN_NBA_URL, timeout=10)
         resp.raise_for_status()
         events = resp.json().get("events", [])
     except Exception as exc:
         log.warning("RADAR: scoreboard fetch failed: %s", exc)
-        return
+        return False
 
     summaries: dict = {}   # shared lazy cache: game_id → summary JSON
 
@@ -1196,6 +1230,8 @@ def _run_radar_tick(users: list[dict]) -> None:
             )
         except Exception as exc:
             log.error("RADAR: error processing user %s: %s", _tid(user.get("token", "")), exc)
+
+    return True
 
 
 def _has_passive_monitoring(users: list[dict]) -> bool:
@@ -1227,13 +1263,24 @@ def start_radar_job() -> None:
         _radar_running = True
 
     log.info("RADAR: started.")
+    espn_failures = 0
     try:
         while True:
             users = _DB_GET_ALL_USERS_FN() if _DB_GET_ALL_USERS_FN else []
             if not _has_passive_monitoring(users):
                 log.info("RADAR: no active preferences for any user – stopping.")
                 return
-            _run_radar_tick(users)
+            success = _run_radar_tick(users)
+            if success:
+                espn_failures = 0
+            else:
+                espn_failures += 1
+                if espn_failures >= 3:
+                    log.error(
+                        "RADAR_ESPN_DOWN: ESPN API has failed %d consecutive ticks – "
+                        "alerts may be missed until it recovers.",
+                        espn_failures,
+                    )
             time.sleep(POLL_INTERVAL)
     except Exception as exc:
         log.error("RADAR: unexpected error: %s", exc)
