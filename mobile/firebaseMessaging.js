@@ -27,22 +27,48 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
   const data = remoteMessage.data ?? {};
 
   if (data.alert_type === 'alarm') {
-    // Display notification FIRST — Android gives Headless JS a narrow time window
-    // in killed state. AsyncStorage must not block the notification from appearing.
-    await notifee.displayNotification({
-      title: data.title ?? 'NBA Alarm',
-      body:  data.body  ?? '',
-      data:  { alert_type: 'alarm' },
-      android: {
-        channelId:   data.channel_id ?? 'classic_alarm',
-        sound:       'classic_alarm',
-        importance:  AndroidImportance.HIGH,
-        category:    AndroidCategory.ALARM,
-        visibility:  AndroidVisibility.PUBLIC,
-        pressAction: { id: 'default' },
-        actions:     [{ title: 'DISMISS', pressAction: { id: 'dismiss' } }],
-      },
-    });
+    // Ensure the alarm channel exists — defensive guard for edge cases where
+    // the channel was not yet created (e.g., very first install, race condition).
+    // createChannel is idempotent: Android ignores updates to existing channels.
+    try {
+      await notifee.createChannel({
+        id:         'classic_alarm',
+        name:       'Classic Alarm',
+        sound:      'classic_alarm',
+        importance: AndroidImportance.HIGH,
+        bypassDnd:  true,
+        visibility: AndroidVisibility.PUBLIC,
+        vibration:  true,
+      });
+    } catch {}
+
+    // Display notification FIRST — Android gives Headless JS a narrow time
+    // window in killed state. Nothing must block this call.
+    try {
+      await notifee.displayNotification({
+        title: data.title ?? 'NBA Alarm',
+        body:  data.body  ?? '',
+        data:  { alert_type: 'alarm' },
+        android: {
+          channelId:        data.channel_id ?? 'classic_alarm',
+          sound:            'classic_alarm',
+          importance:       AndroidImportance.HIGH,
+          category:         AndroidCategory.ALARM,
+          visibility:       AndroidVisibility.PUBLIC,
+          pressAction:      { id: 'default' },
+          // fullScreenAction wakes the screen and shows over the lock screen
+          // when the phone is locked — critical for the night-time use case.
+          // NOTE: withFullScreenIntent.js patches ExpoNotificationBuilder.kt
+          // (expo-notifications) which is NOT used here. Notifee needs this
+          // fullScreenAction field to call setFullScreenIntent() on its own builder.
+          fullScreenAction: { id: 'default' },
+          actions:          [{ title: 'DISMISS', pressAction: { id: 'dismiss' } }],
+        },
+      });
+    } catch (e) {
+      // Log but don't rethrow — a crash here silently swallows the notification.
+      console.error('[FCM background] displayNotification failed:', e);
+    }
 
     // Save to Trophy Room after notification is already displayed
     try {
@@ -53,17 +79,21 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
     } catch {}
   } else {
     // Silent mode — regular notification, no sound, no DISMISS button
-    await notifee.createChannel({ id: 'silent', name: 'Silent Updates', importance: AndroidImportance.DEFAULT });
-    await notifee.displayNotification({
-      title: data.title ?? 'NBA Update',
-      body:  data.body  ?? '',
-      data:  { alert_type: 'silent' },
-      android: {
-        channelId:   'silent',
-        importance:  AndroidImportance.DEFAULT,
-        pressAction: { id: 'default' },
-      },
-    });
+    try {
+      await notifee.createChannel({ id: 'silent', name: 'Silent Updates', importance: AndroidImportance.DEFAULT });
+      await notifee.displayNotification({
+        title: data.title ?? 'NBA Update',
+        body:  data.body  ?? '',
+        data:  { alert_type: 'silent' },
+        android: {
+          channelId:   'silent',
+          importance:  AndroidImportance.DEFAULT,
+          pressAction: { id: 'default' },
+        },
+      });
+    } catch (e) {
+      console.error('[FCM background] silent displayNotification failed:', e);
+    }
   }
 });
 
@@ -72,21 +102,22 @@ const CONFETTI_KEY = 'nba_confetti_pending';
 // ── Background Notifee event handler ─────────────────────────────────────────
 // Handles notification events when the app is in background or killed.
 notifee.onBackgroundEvent(async ({ type, detail }) => {
-  // Notification delivered while app is in background → start alarm sound
+  // Notification delivered while app is in background/killed → start alarm sound.
+  // NativeModules may not be fully available in killed state — always guard with try-catch.
   if (type === EventType.DELIVERED && detail.notification?.data?.alert_type === 'alarm') {
-    NativeModules.AlarmChannel?.startAlarmSound();
+    try { NativeModules.AlarmChannel?.startAlarmSound(); } catch {}
     return;
   }
   // User tapped notification body → stop sound, set confetti flag, cancel notification
   if (type === EventType.PRESS && detail.notification?.data?.alert_type === 'alarm') {
-    NativeModules.AlarmChannel?.stopAlarmSound();
-    await AsyncStorage.setItem(CONFETTI_KEY, '1');
-    await notifee.cancelAllNotifications();
+    try { NativeModules.AlarmChannel?.stopAlarmSound(); } catch {}
+    try { await AsyncStorage.setItem(CONFETTI_KEY, '1'); } catch {}
+    try { await notifee.cancelAllNotifications(); } catch {}
     return;
   }
   // User tapped DISMISS → stop sound + cancel notification
   if (type === EventType.ACTION_PRESS && detail.pressAction?.id === 'dismiss') {
-    NativeModules.AlarmChannel?.stopAlarmSound();
-    await notifee.cancelAllNotifications();
+    try { NativeModules.AlarmChannel?.stopAlarmSound(); } catch {}
+    try { await notifee.cancelAllNotifications(); } catch {}
   }
 });

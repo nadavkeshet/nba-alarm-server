@@ -364,13 +364,14 @@ export default function HomeScreen() {
           body:  String(data.body  ?? ''),
           data:  { alert_type: 'alarm' },
           android: {
-            channelId:   String(data.channel_id ?? ALARM_CHANNEL),
-            sound:       'classic_alarm',
-            importance:  AndroidImportance.HIGH,
-            category:    AndroidCategory.ALARM,
-            visibility:  AndroidVisibility.PUBLIC,
-            pressAction: { id: 'default' },
-            actions:     [{ title: 'DISMISS', pressAction: { id: 'dismiss' } }],
+            channelId:        String(data.channel_id ?? ALARM_CHANNEL),
+            sound:            'classic_alarm',
+            importance:       AndroidImportance.HIGH,
+            category:         AndroidCategory.ALARM,
+            visibility:       AndroidVisibility.PUBLIC,
+            pressAction:      { id: 'default' },
+            fullScreenAction: { id: 'default' },
+            actions:          [{ title: 'DISMISS', pressAction: { id: 'dismiss' } }],
           },
         });
         playAlarmSound();
