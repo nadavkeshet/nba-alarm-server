@@ -1324,9 +1324,6 @@ def active_monitors(user_token: str = ""):
     }
 
     try:
-        prefs     = get_preferences()
-        radar_cfg = prefs.get("GlobalGameRadar", {})
-
         # Filter in-memory alarms by token when one is provided
         game_alarms   = get_active_alarms()
         player_alarms = get_active_player_alarms()
@@ -1334,17 +1331,34 @@ def active_monitors(user_token: str = ""):
             game_alarms   = [a for a in game_alarms   if a.get("push_token") == user_token]
             player_alarms = [a for a in player_alarms if a.get("push_token") == user_token]
 
-        # DB alarms filtered by token
-        db_alarms: list[dict] = []
+        # All user-specific data read from DB, keyed by token.
+        # Never read from the shared JSON prefs file — that file is a single-user
+        # cache and would leak one user's favorites to every other user.
+        db_alarms:      list[dict] = []
+        fav_teams:      list[dict] = []
+        fav_players:    dict       = {}
+        radar_cfg:      dict       = {"enabled": False, "max_diff": 5, "start_quarter": 4}
+        hist_cfg:       dict       = {
+            "enabled": False,
+            "categories": {
+                "scoring_40_half": False, "threes_11": False, "quad_double_threat": False,
+            },
+        }
+
         if engine is not None and user_token:
             try:
                 with Session(engine) as session:
-                    rows = (
+                    # One query per table — all filtered by this user's token
+                    alarm_rows  = (
                         session.query(Alarm)
                                .filter(Alarm.user_token == user_token, Alarm.is_active.is_(True))
                                .all()
                     )
-                    # Build dicts INSIDE the session so attributes are never detached
+                    player_rows = session.query(FavoritePlayerDB).filter_by(user_token=user_token).all()
+                    team_rows   = session.query(FavoriteTeamDB).filter_by(user_token=user_token).all()
+                    pref        = session.get(UserPreferenceDB, user_token)
+
+                    # Build all dicts INSIDE the session so ORM attributes are never detached
                     db_alarms = [
                         {
                             "alarm_id":       r.id,
@@ -1354,32 +1368,58 @@ def active_monitors(user_token: str = ""):
                             "threshold":      r.threshold,
                             "start_quarter":  r.start_quarter if r.start_quarter is not None else 4,
                         }
-                        for r in rows
+                        for r in alarm_rows
                     ]
+                    fav_players = {
+                        p.target_id: {
+                            "name":        p.target_name or "",
+                            "total_pts":   p.total_pts,
+                            "early_pts_q": p.early_pts_q,
+                            "early_pts":   p.early_pts,
+                            "td_watch":    bool(p.td_watch),
+                            "alert_type":  p.alert_type or "silent",
+                        }
+                        for p in player_rows
+                    }
+                    fav_teams = [
+                        {
+                            "team_id":       t.team_id,
+                            "team_name":     t.team_name or "",
+                            "max_diff":      t.score_gap or 5,
+                            "start_quarter": t.start_quarter or 4,
+                            "alert_type":    t.alert_type or "silent",
+                        }
+                        for t in team_rows
+                    ]
+                    if pref:
+                        radar_cfg = {
+                            "enabled":       pref.radar_enabled,
+                            "max_diff":      pref.radar_gap,
+                            "start_quarter": pref.radar_start_q,
+                        }
+                        hist_cfg = {
+                            "enabled":    pref.historical_mode_enabled,
+                            "categories": {
+                                "scoring_40_half":    pref.hist_scoring_40_half,
+                                "threes_11":          pref.hist_threes_11,
+                                "quad_double_threat": pref.hist_quad_double,
+                            },
+                        }
             except Exception as db_err:
                 log.error("DB error in active_monitors query: %s", db_err)
-                db_alarms = []   # degrade gracefully – don't 500
+                # Degrade gracefully — return whatever was built before the error
 
         return {
             "game_alarms":   game_alarms,
             "player_alarms": player_alarms,
             "db_alarms":     db_alarms,
             "global_radar": {
-                "enabled":       radar_cfg.get("enabled", False),
-                "running":       get_radar_status(),
-                "max_diff":      radar_cfg.get("max_diff", 5),
-                "start_quarter": radar_cfg.get("start_quarter", 4),
+                **radar_cfg,
+                "running": get_radar_status(),   # live thread status — not stored in DB
             },
-            "favorite_teams":   prefs.get("FavoriteTeams", []),
-            "favorite_players": prefs.get("FavoritePlayers", {}),
-            "historical_mode":  prefs.get("HistoricalMode", {
-                "enabled": False,
-                "categories": {
-                    "scoring_40_half":    False,
-                    "threes_11":          False,
-                    "quad_double_threat": False,
-                },
-            }),
+            "favorite_teams":   fav_teams,
+            "favorite_players": fav_players,
+            "historical_mode":  hist_cfg,
         }
 
     except Exception as e:
