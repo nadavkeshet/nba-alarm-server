@@ -42,10 +42,17 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
       });
     } catch {}
 
-    // Display notification FIRST — Android gives Headless JS a narrow time
-    // window in killed state. Nothing must block this call.
+    // Cancel the OS-level notification that FCM showed via the `notification`
+    // field (tagged "nba_alarm") so we can replace it with a full Notifee
+    // version that has DISMISS + FSI.  If this fails the OS notification
+    // stays visible — that is fine, the user still gets the alert.
+    try { await notifee.cancelNotification('nba_alarm'); } catch {}
+
+    // Display full Notifee notification — Android gives Headless JS a narrow
+    // time window in killed state. Nothing must block this call.
     try {
       await notifee.displayNotification({
+        id:    'nba_alarm',
         title: data.title ?? 'NBA Alarm',
         body:  data.body  ?? '',
         data:  { alert_type: 'alarm' },
@@ -56,11 +63,6 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
           category:         AndroidCategory.ALARM,
           visibility:       AndroidVisibility.PUBLIC,
           pressAction:      { id: 'default' },
-          // fullScreenAction wakes the screen and shows over the lock screen
-          // when the phone is locked — critical for the night-time use case.
-          // NOTE: withFullScreenIntent.js patches ExpoNotificationBuilder.kt
-          // (expo-notifications) which is NOT used here. Notifee needs this
-          // fullScreenAction field to call setFullScreenIntent() on its own builder.
           fullScreenAction: { id: 'default' },
           actions:          [{ title: 'DISMISS', pressAction: { id: 'dismiss' } }],
         },
