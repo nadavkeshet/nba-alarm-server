@@ -317,8 +317,12 @@ def _extract_player_stats(event: dict, target_id: str) -> dict[str, int]:
     return stats
 
 
-def _check_and_fire(alarm: Alarm, events: list[dict]) -> bool:
-    """Return True if the alarm condition is met against the live scoreboard."""
+def _check_and_fire(alarm: Alarm, events: list[dict]) -> bool | None:
+    """
+    Return True if the alarm condition is met (fire + deactivate).
+    Return None if the alarm has expired and should be deactivated without firing.
+    Return False if condition not yet met (keep watching).
+    """
     if alarm.condition_type == "score_diff":
         required_quarter = alarm.start_quarter or 4   # default: only fire from Q4
         for event in events:
@@ -326,6 +330,9 @@ def _check_and_fire(alarm: Alarm, events: list[dict]) -> bool:
                 continue
             state  = _get_event_state(event)
             period = _get_event_period(event)
+            if state == "post":
+                print(f"Poller: score_diff alarm {alarm.id} – game Final, expiring.", flush=True)
+                return None  # game over — deactivate without firing
             # Must be live AND have reached the target quarter
             if state != "in":
                 print(f"Poller: score_diff alarm {alarm.id} – game not live (state={state}), skipping.", flush=True)
@@ -342,14 +349,20 @@ def _check_and_fire(alarm: Alarm, events: list[dict]) -> bool:
         # start_quarter == 0 / None means no quarter limit (pts_goal)
         quarter_limit = alarm.start_quarter or 0
         for event in events:
+            state  = _get_event_state(event)
             period = _get_event_period(event)
             if quarter_limit > 0 and period > quarter_limit:
                 print(
                     f"Poller: points alarm {alarm.id} ({alarm.target_name}) – "
-                    f"Q{period} exceeded Q{quarter_limit} limit, alarm expired.",
+                    f"Q{period} exceeded Q{quarter_limit} limit, expiring.",
                     flush=True,
                 )
-                return False   # quarter has passed – condition can never be met now
+                return None  # deadline quarter passed — deactivate without firing
+            if state == "post":
+                # Game over and pts_goal not reached
+                pts = _extract_player_pts(event, alarm.target_id)
+                if pts is None or pts < alarm.threshold:
+                    return None
             pts = _extract_player_pts(event, alarm.target_id)
             if pts is not None and pts >= alarm.threshold:
                 return True
@@ -415,7 +428,8 @@ async def _alarm_poller() -> None:
                             (alarm.target_id, _alarm_slot(alarm)) in active_player_keys:
                         continue
 
-                    if _check_and_fire(alarm, events):
+                    result = _check_and_fire(alarm, events)
+                    if result is True:
                         _send_push_notification(
                             push_token=alarm.user_token,
                             title="NBA Alarm",
@@ -429,6 +443,18 @@ async def _alarm_poller() -> None:
                                 session.commit()
                         print(
                             f"Poller: fired + deactivated alarm {alarm.id} "
+                            f"({alarm.condition_type} / {alarm.target_id})",
+                            flush=True,
+                        )
+                    elif result is None:
+                        # Alarm expired (game Final / quarter deadline passed) — deactivate silently
+                        with Session(engine) as session:
+                            db_row = session.get(Alarm, alarm.id)
+                            if db_row:
+                                db_row.is_active = False
+                                session.commit()
+                        print(
+                            f"Poller: expired + deactivated alarm {alarm.id} "
                             f"({alarm.condition_type} / {alarm.target_id})",
                             flush=True,
                         )
@@ -1036,6 +1062,9 @@ def register_token(req: RegisterTokenRequest):
         return {"status": "error", "detail": "empty push_token"}
     print(f"DEBUG: /register-token  token='{req.push_token[:20]}...'  channel='{req.sound_channel}'", flush=True)
     save_push_token(req.push_token, req.sound_channel)
+    # Rebuild JSON prefs from DB so the radar starts with the correct favorites.
+    # This is critical after a Railway restart that wiped the ephemeral JSON file.
+    _restore_prefs_from_db(req.push_token)
     threading.Thread(
         target=start_radar_job,
         args=(req.push_token, req.sound_channel),
@@ -1180,8 +1209,16 @@ def cancel_db_alarm(alarm_id: int, user_token: str = ""):
             raise HTTPException(status_code=404, detail="Alarm not found.")
         if alarm.user_token != user_token:
             raise HTTPException(status_code=403, detail="Not your alarm.")
+        target_id      = alarm.target_id
+        condition_type = alarm.condition_type
         session.delete(alarm)
         session.commit()
+    # Also stop any in-memory monitoring thread for this target so it doesn't
+    # keep logging after the DB row is gone.
+    if condition_type == "score_diff":
+        cancel_game_alarm(target_id)
+    else:
+        cancel_player_alarm(target_id)
     print(f"DB: Alarm {alarm_id} permanently deleted for token ...{user_token[-10:]}", flush=True)
     return {"deleted": True, "alarm_id": alarm_id}
 
