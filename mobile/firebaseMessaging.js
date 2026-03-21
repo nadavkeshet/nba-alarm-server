@@ -40,6 +40,11 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
         visibility: AndroidVisibility.PUBLIC,
         vibration:  true,
       });
+      // Patch to STREAM_ALARM so sound plays even in vibrate/silent mode.
+      // Must run after createChannel — covers the case where the channel was
+      // freshly recreated (delete+create in index.tsx) but the app was killed
+      // before patchChannel ran in the foreground startup sequence.
+      NativeModules.AlarmChannel?.patchChannel('classic_alarm', 'classic_alarm');
     } catch {}
 
     // Cancel the OS-level notification that FCM showed via the `notification`
