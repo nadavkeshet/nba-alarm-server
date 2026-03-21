@@ -743,11 +743,10 @@ def _send_push_notification(
     is_alarm   = (alert_type == "alarm")
     channel_id = sound_channel if is_alarm else "silent"
 
-    # Hybrid FCM message — includes BOTH a `notification` field (so Android
-    # displays it at OS level even when Doze / OEM battery-saving kills the
-    # Headless JS task) AND a `data` field (so the background handler can
-    # cancel the OS notification and replace it with a full Notifee version
-    # that has DISMISS + FSI when the JS task does run).
+    # Data-only FCM message — no `notification` field, so Android does NOT
+    # handle the message at OS level; instead it wakes the Headless JS task
+    # which calls setBackgroundMessageHandler.  Notifee then builds and
+    # displays the full notification (with sound, channel, DISMISS action).
     data = {
         "title":      title,
         "body":       body,
@@ -759,16 +758,8 @@ def _send_push_notification(
     try:
         message = fb_messaging.Message(
             data=data,
-            notification=fb_messaging.Notification(
-                title=title,
-                body=body,
-            ),
             android=fb_messaging.AndroidConfig(
                 priority="high",
-                notification=fb_messaging.AndroidNotification(
-                    channel_id=channel_id,
-                    tag="nba_alarm",
-                ),
             ),
             token=push_token,
         )

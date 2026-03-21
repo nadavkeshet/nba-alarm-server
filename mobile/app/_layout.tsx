@@ -1,7 +1,3 @@
-// Must be the very first import — registers FCM background handler + Notifee
-// background event handler before any React component mounts.
-import '../firebaseMessaging';
-
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import notifee, { EventType } from '@notifee/react-native';
 import messaging from '@react-native-firebase/messaging';
