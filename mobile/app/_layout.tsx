@@ -4,11 +4,14 @@ import '../firebaseMessaging';
 
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import notifee, { EventType } from '@notifee/react-native';
+import messaging from '@react-native-firebase/messaging';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useEffect, useRef, useState } from 'react';
-import { AppState, I18nManager, NativeModules, StyleSheet, View } from 'react-native';
+import { AppState, I18nManager, NativeModules, Platform, StyleSheet, View } from 'react-native';
+
+import { SERVER_URL } from '../config';
 import ConfettiCannon from 'react-native-confetti-cannon';
 import 'react-native-reanimated';
 
@@ -52,6 +55,26 @@ export default function RootLayout() {
   };
 
   useEffect(() => {
+    // FCM token rotation — fires when the OS issues a new push token.
+    // Read the old token from AsyncStorage so the backend can migrate all
+    // user data (favorites, preferences, alarms) to the new token before
+    // the old one is invalidated.
+    const unsubTokenRefresh = messaging().onTokenRefresh(async (newToken) => {
+      try {
+        const oldToken = await AsyncStorage.getItem('nba_fcm_token') ?? '';
+        await fetch(`${SERVER_URL}/register-token`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({
+            push_token:    newToken,
+            sound_channel: 'classic_alarm',
+            old_token:     oldToken,
+          }),
+        });
+        await AsyncStorage.setItem('nba_fcm_token', newToken);
+      } catch {}
+    });
+
     // Killed state: app launched by tapping a notification
     notifee.getInitialNotification().then(initial => {
       if (initial?.notification?.data?.alert_type === 'alarm') {
@@ -92,6 +115,7 @@ export default function RootLayout() {
     });
 
     return () => {
+      unsubTokenRefresh();
       unsub();
       appStateSub.remove();
       if (confettiTimer.current) clearTimeout(confettiTimer.current);

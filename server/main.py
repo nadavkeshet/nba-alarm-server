@@ -26,6 +26,7 @@ from monitor import (
     get_active_player_alarms,
     cancel_game_alarm,
     cancel_player_alarm,
+    _has_manual_alarm,
     # Roster
     fetch_game_roster,
     fetch_game_summary_roster,
@@ -86,6 +87,11 @@ class Alarm(_Base):
     condition_type = Column(String,  nullable=False)   # "points" | "score_diff" | "triple_double"
     threshold      = Column(Integer, nullable=False)
     start_quarter  = Column(Integer, nullable=True)
+    # game_id / game_name: for player alarms these differ from target_id/target_name.
+    # Stored so monitoring threads can be restarted after a server restart.
+    game_id        = Column(String,  nullable=True)
+    game_name      = Column(String,  nullable=True)
+    alert_type     = Column(String,  nullable=True, default="alarm")
     is_active      = Column(Boolean, default=True, nullable=False)
 
 
@@ -167,6 +173,10 @@ def _init_db() -> None:
         "ALTER TABLE favorite_teams ADD COLUMN alert_type VARCHAR DEFAULT 'silent'",
         # Partial index so is_active=True scans are fast even with thousands of rows
         "CREATE INDEX idx_alarms_active ON alarms (is_active) WHERE is_active = TRUE",
+        # Fields needed to restart monitoring threads after a server restart
+        "ALTER TABLE alarms ADD COLUMN game_id    VARCHAR",
+        "ALTER TABLE alarms ADD COLUMN game_name  VARCHAR",
+        "ALTER TABLE alarms ADD COLUMN alert_type VARCHAR DEFAULT 'alarm'",
     ]
     for sql in migrations:
         try:
@@ -204,23 +214,77 @@ register_db_deactivate(_deactivate_db_alarm)
 def _invalidate_push_token(push_token: str) -> None:
     """
     Called when Firebase returns UnregisteredError for a token.
-    Removes the token from all 3 DB tables so it is never retried.
+
+    NON-DESTRUCTIVE: only deactivates active Alarm rows so they are not
+    retried against a dead token.  FavoriteTeamDB, FavoritePlayerDB, and
+    UserPreferenceDB are intentionally preserved — FCM tokens rotate
+    silently (reinstall, OS refresh), and deleting preference data would
+    cause permanent data loss for the user.  When the user reopens the app
+    and registers a new token, _migrate_token re-keys all rows to the fresh
+    token so nothing is lost.
     """
     if engine is None or not push_token:
         return
     try:
         with Session(engine) as session:
-            session.query(FavoritePlayerDB).filter_by(user_token=push_token).delete()
-            session.query(FavoriteTeamDB).filter_by(user_token=push_token).delete()
-            session.query(UserPreferenceDB).filter_by(user_token=push_token).delete()
-            session.query(Alarm).filter_by(user_token=push_token).delete()
+            deactivated = (
+                session.query(Alarm)
+                .filter(Alarm.user_token == push_token, Alarm.is_active.is_(True))
+                .update({"is_active": False})
+            )
             session.commit()
-        log.info("DB: removed all records for invalid token %s", push_token[-8:])
+        log.warning(
+            "FCM: token invalidated %s – deactivated %d alarm(s). "
+            "Favorites and preferences preserved for token re-association.",
+            push_token[-8:], deactivated,
+        )
     except Exception as exc:
         log.error("DB: _invalidate_push_token failed – %s", exc)
 
 
 register_db_invalidate_token(_invalidate_push_token)
+
+
+def _migrate_token(old_token: str, new_token: str) -> None:
+    """
+    Re-key all user data from old_token to new_token.
+    Called by /register-token when the frontend sends an old_token alongside
+    a fresh FCM token (i.e. after token rotation detected by onTokenRefresh).
+
+    Uses raw SQL UPDATE for UserPreferenceDB because its PK is user_token
+    and SQLAlchemy ORM does not support in-place PK changes.
+    """
+    if engine is None or not old_token or not new_token or old_token == new_token:
+        return
+    try:
+        with Session(engine) as session:
+            session.query(FavoritePlayerDB).filter_by(user_token=old_token).update(
+                {"user_token": new_token}, synchronize_session=False
+            )
+            session.query(FavoriteTeamDB).filter_by(user_token=old_token).update(
+                {"user_token": new_token}, synchronize_session=False
+            )
+            session.query(Alarm).filter(Alarm.user_token == old_token).update(
+                {"user_token": new_token}, synchronize_session=False
+            )
+            # UserPreferenceDB has user_token as primary key — update via raw SQL.
+            # If new_token already has a prefs row (fresh install wrote one first),
+            # the old orphaned row is deleted to avoid a PK conflict.
+            existing_new = session.get(UserPreferenceDB, new_token)
+            if existing_new is None:
+                session.execute(
+                    text("UPDATE user_preferences SET user_token = :new WHERE user_token = :old"),
+                    {"new": new_token, "old": old_token},
+                )
+            else:
+                session.execute(
+                    text("DELETE FROM user_preferences WHERE user_token = :old"),
+                    {"old": old_token},
+                )
+            session.commit()
+        log.info("DB: token migrated ...%s → ...%s", old_token[-8:], new_token[-8:])
+    except Exception as exc:
+        log.error("DB: _migrate_token failed – %s", exc)
 
 
 def _persist_fired_alert(key: str) -> None:
@@ -626,6 +690,7 @@ async def _alarm_poller() -> None:
                             title="NBA Alarm",
                             body=f"Condition met for {alarm.target_name or alarm.target_id}!",
                             sound_channel="classic_alarm",
+                            alert_type=alarm.alert_type or "alarm",
                         )
                         with Session(engine) as session:
                             db_row = session.get(Alarm, alarm.id)
@@ -679,12 +744,113 @@ def _find_token_from_db() -> str:
     return ""
 
 
+def _restart_alarm_threads_from_db() -> None:
+    """
+    On server startup, restart a dedicated monitoring thread for every alarm
+    that was active when the server last shut down.
+
+    This ensures users never miss an alarm because the server restarted
+    mid-game (e.g. a Railway redeploy at midnight).
+
+    Player alarms without a stored game_id are skipped here — the async
+    _alarm_poller picks them up within 60 s as a safety net (old DB rows
+    created before this column was added).
+    """
+    if engine is None:
+        return
+    try:
+        with Session(engine) as session:
+            rows = session.query(Alarm).filter(Alarm.is_active.is_(True)).all()
+            # Snapshot inside session — ORM objects detach once session closes
+            snapshot = [
+                {
+                    "condition_type": r.condition_type,
+                    "target_id":      r.target_id,
+                    "target_name":    r.target_name or "",
+                    "game_id":        r.game_id,        # None for old rows
+                    "game_name":      r.game_name or r.target_name or "",
+                    "threshold":      r.threshold,
+                    "start_quarter":  r.start_quarter or 0,
+                    "user_token":     r.user_token,
+                    "alert_type":     r.alert_type or "alarm",
+                }
+                for r in rows
+            ]
+    except Exception as exc:
+        log.error("STARTUP: failed to read active alarms from DB – %s", exc)
+        return
+
+    started = 0
+    for alarm in snapshot:
+        try:
+            if alarm["condition_type"] == "score_diff":
+                # game_id == target_id for game alarms — always restartable
+                threading.Thread(
+                    target=start_monitoring_job,
+                    args=(
+                        alarm["target_id"],
+                        alarm["game_name"],
+                        alarm["threshold"],
+                        alarm["start_quarter"],
+                        alarm["user_token"],
+                        "classic_alarm",
+                        alarm["alert_type"],
+                    ),
+                    daemon=True,
+                ).start()
+                started += 1
+
+            elif alarm["condition_type"] in ("points", "triple_double"):
+                game_id = alarm["game_id"]
+                if not game_id:
+                    # Old row without game_id — _alarm_poller handles it
+                    log.info(
+                        "STARTUP: player alarm for %s has no game_id – poller will cover.",
+                        alarm["target_name"] or alarm["target_id"],
+                    )
+                    continue
+                # Derive the exact condition string from condition_type + start_quarter
+                if alarm["condition_type"] == "triple_double":
+                    condition = "triple_double"
+                elif alarm["start_quarter"] > 0:
+                    condition = "pts_early"
+                else:
+                    condition = "pts_goal"
+                threading.Thread(
+                    target=start_player_monitoring_job,
+                    kwargs=dict(
+                        game_id=game_id,
+                        game_name=alarm["game_name"],
+                        player_id=alarm["target_id"],
+                        player_name=alarm["target_name"],
+                        push_token=alarm["user_token"],
+                        sound_channel="classic_alarm",
+                        condition=condition,
+                        pts_threshold=alarm["threshold"],
+                        quarter_deadline=alarm["start_quarter"],
+                        alert_type=alarm["alert_type"],
+                    ),
+                    daemon=True,
+                ).start()
+                started += 1
+
+        except Exception as exc:
+            log.error(
+                "STARTUP: failed to restart thread for %s – %s",
+                alarm["target_name"] or alarm["target_id"], exc,
+            )
+
+    if started:
+        log.info("STARTUP: restarted %d monitoring thread(s) from DB.", started)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # ── Startup ──
     _init_db()
     _load_fired_alerts_from_db()   # hydrate dedup set before radar starts
     clear_stale_state()
+    _restart_alarm_threads_from_db()   # resume monitoring for alarms active at shutdown
     threading.Thread(target=update_all_rosters, daemon=True).start()
     token, channel = get_saved_push_token()
     if token:
@@ -760,6 +926,11 @@ class SetAlarmRequest(BaseModel):
     condition_type: str        # "points" | "score_diff" | "triple_double"
     threshold:      int
     start_quarter:  int = 4    # for score_diff: earliest quarter to fire (default Q4)
+    # For player alarms: the game being played (differs from target_id/target_name).
+    # Needed to restart monitoring threads after a server restart.
+    game_id:        str = ""
+    game_name:      str = ""
+    alert_type:     str = "alarm"
 
 
 @app.post("/set_alarm")
@@ -799,6 +970,10 @@ def set_alarm(req: SetAlarmRequest):
             condition_type=condition_type,
             threshold=req.threshold,
             start_quarter=req.start_quarter,
+            # For game alarms game_id == target_id; for player alarms they differ.
+            game_id=req.game_id or req.target_id,
+            game_name=req.game_name or req.target_name or req.target_id,
+            alert_type=req.alert_type or "alarm",
             is_active=True,
         )
         session.add(alarm)
@@ -830,6 +1005,16 @@ class AlarmRequest(BaseModel):
 async def start_alarm(req: AlarmRequest):
     """Kick off a background thread monitoring a game's point differential."""
     save_push_token(req.push_token, req.sound_channel)
+    # Dedup: one monitoring thread per game_id — prevents thread exhaustion
+    # if the client retries or a bad actor hammers this endpoint.
+    if _has_manual_alarm(req.game_id):
+        log.info("ALARM: duplicate request for game %s – already monitoring.", req.game_id)
+        return {
+            "status":        "already_monitoring",
+            "game":          req.game_name,
+            "max_diff":      req.max_diff,
+            "start_quarter": req.start_quarter,
+        }
     threading.Thread(
         target=start_monitoring_job,
         args=(req.game_id, req.game_name, req.max_diff, req.start_quarter,
@@ -864,6 +1049,10 @@ class PlayerAlarmRequest(BaseModel):
 async def start_player_alarm(req: PlayerAlarmRequest):
     """Kick off a background thread monitoring a specific player's stats."""
     save_push_token(req.push_token, req.sound_channel)
+    # Note: no game-level dedup here. _register_player_alarm keys by (player_id, condition)
+    # so pts_goal + triple_double for the same player are two separate valid threads.
+    # Duplicate (player_id, condition) requests are handled inside _register_player_alarm
+    # by cancelling the existing thread before starting a new one — safe by design.
     threading.Thread(
         target=start_player_monitoring_job,
         kwargs=dict(
@@ -1266,12 +1455,16 @@ def update_thresholds(req: GlobalThresholdsRequest):
 class RegisterTokenRequest(BaseModel):
     push_token: str
     sound_channel: str = "classic_alarm"
+    old_token: str     = ""   # set by onTokenRefresh to trigger data migration
 
 
 @app.post("/register-token")
 def register_token(req: RegisterTokenRequest):
     if not req.push_token:
         return {"status": "error", "detail": "empty push_token"}
+    # If the FCM token rotated, migrate all user data before saving the new token.
+    if req.old_token and req.old_token != req.push_token:
+        _migrate_token(req.old_token, req.push_token)
     save_push_token(req.push_token, req.sound_channel)
     # Rebuild JSON prefs from DB so the radar starts with the correct favorites.
     # This is critical after a Railway restart that wiped the ephemeral JSON file.

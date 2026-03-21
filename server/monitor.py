@@ -541,6 +541,13 @@ def _fetch_nba_game(game_id: str) -> dict | None:
     return None
 
 
+def _period_label(quarter: int) -> str:
+    """Return 'Q1'–'Q4' for regulation, 'OT1'/'OT2'... for overtime periods."""
+    if quarter <= 4:
+        return f"Q{quarter}"
+    return f"OT{quarter - 4}"
+
+
 def _clock_minutes_remaining(event: dict) -> float:
     """
     Returns minutes remaining in the current period from ESPN's displayClock.
@@ -857,6 +864,14 @@ def start_monitoring_job(
                     return
                 continue
 
+            # Hard guard: ensure the event is strictly for this alarm's game.
+            # _fetch_nba_game already filters by game_id, but this makes it
+            # impossible for a mis-matched event to ever trigger a wrong alarm.
+            if str(event.get("id")) != str(game_id):
+                log.error("GAME WATCH  mismatch | expected %s got %s – skipping tick.", game_id, event.get("id"))
+                stop_event.wait(timeout=POLL_INTERVAL)
+                continue
+
             quarter, diff, _ = _parse_nba_state(event)
 
             if quarter == 9:
@@ -869,7 +884,7 @@ def start_monitoring_job(
                 _send_push_notification(
                     push_token=push_token,
                     title="Smart Alarm! It's Getting Dramatic!",
-                    body=f"{game_name}\nQ{quarter} | Point Diff: {diff} | CLOSE GAME!",
+                    body=f"{game_name}\n{_period_label(quarter)} | Point Diff: {diff} | CLOSE GAME!",
                     sound_channel=sound_channel,
                     alert_type=alert_type,
                 )
@@ -930,7 +945,7 @@ def start_player_monitoring_job(
             notif_body = f"[TEST] {player_name} has scored {pts} points in {game_name}!"
         elif condition == "pts_early" and pts >= pts_threshold:
             triggered  = True
-            notif_body = f"[TEST] {player_name} already has {pts} pts in Q{quarter} — on fire early!"
+            notif_body = f"[TEST] {player_name} already has {pts} pts in {_period_label(quarter)} — on fire early!"
         elif condition == "triple_double" and _check_triple_double(pts, reb, ast, stl, blk):
             hot        = [c for c, v in zip(["PTS","REB","AST","STL","BLK"], [pts,reb,ast,stl,blk]) if v >= 9]
             triggered  = True
@@ -974,6 +989,12 @@ def start_player_monitoring_job(
                     return
                 continue
 
+            # Hard guard: ensure event is strictly for this alarm's game.
+            if str(event.get("id")) != str(game_id):
+                log.error("PLAYER WATCH mismatch | expected %s got %s – skipping tick.", game_id, event.get("id"))
+                stop_event.wait(timeout=POLL_INTERVAL)
+                continue
+
             quarter, _, _ = _parse_nba_state(event)
 
             if quarter == 9:
@@ -1007,7 +1028,7 @@ def start_player_monitoring_job(
                 notif_body = f"{player_name} has scored {pts} points in {game_name}!"
             elif condition == "pts_early" and pts >= pts_threshold:
                 triggered  = True
-                notif_body = f"{player_name} already has {pts} pts in Q{quarter} — on fire early!"
+                notif_body = f"{player_name} already has {pts} pts in {_period_label(quarter)} — on fire early!"
             elif condition == "triple_double" and _check_triple_double(pts, reb, ast, stl, blk):
                 hot        = [f"{n} {v}" for n, v in zip(["PTS","REB","AST","STL","BLK"], [pts,reb,ast,stl,blk]) if v >= 9]
                 triggered  = True
@@ -1091,7 +1112,7 @@ def _run_radar_tick_for_user(
         game_name = event.get("name", game_id)
         quarter, diff, _ = _parse_nba_state(event)
 
-        if quarter < 1 or quarter > 4:
+        if quarter < 1 or quarter == 9:
             continue
 
         # ── Game-level alert (Priority 2: Favorite Team / Priority 3: Global Radar) ─
@@ -1117,7 +1138,7 @@ def _run_radar_tick_for_user(
                         _send_push_notification(
                             push_token=push_token,
                             title=label,
-                            body=f"{game_name}\nQ{quarter} | Diff: {diff} pts",
+                            body=f"{game_name}\n{_period_label(quarter)} | Diff: {diff} pts",
                             sound_channel=sound_channel,
                             alert_type=c_alert,
                         )
@@ -1181,7 +1202,7 @@ def _run_radar_tick_for_user(
                                     _send_push_notification(
                                         push_token=push_token,
                                         title="Early Points Alert!",
-                                        body=f"{player_name}: {pts} pts by Q{quarter} in {game_name}!",
+                                        body=f"{player_name}: {pts} pts by {_period_label(quarter)} in {game_name}!",
                                         sound_channel=sound_channel, alert_type=p_alert,
                                     )
 
@@ -1203,7 +1224,7 @@ def _run_radar_tick_for_user(
                         if _fire_once(f"{game_id}_{player_id}_scoring_40", token):
                             _send_push_notification(
                                 push_token=push_token, title="Historic Scoring Pace!",
-                                body=f"{player_name}: {pts} pts in Q{quarter} of {game_name}!",
+                                body=f"{player_name}: {pts} pts in {_period_label(quarter)} of {game_name}!",
                                 sound_channel=sound_channel, alert_type=hist_alert_type,
                             )
 

@@ -83,6 +83,7 @@ const QRow = React.memo(function QRow({ value, onChange }: { value: string; onCh
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const [userToken, setUserToken]       = useState('');
+  const [tokenLoaded, setTokenLoaded]   = useState(false);
   const [settings, setSettings]         = useState<AppSettings | null>(null);
   const [loading, setLoading]           = useState(true);
   const [radarRunning, setRadarRunning] = useState(false);
@@ -139,7 +140,8 @@ export default function SettingsScreen() {
   useEffect(() => {
     messaging().getToken()
       .then(t => setUserToken(t))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setTokenLoaded(true));
   }, []);
 
   // ── Load teams once on mount (roster is static — no need to re-fetch on focus) ─
@@ -205,9 +207,9 @@ export default function SettingsScreen() {
     }
   }, [userToken]);
 
-  // Re-fetch whenever the token becomes available (token arrives async after first render,
-  // so useFocusEffect alone misses it — the screen may already be focused by then)
-  useEffect(() => { loadSettings(); }, [loadSettings]);
+  // Only load settings once the token attempt has completed (resolves the empty-token
+  // race: no API call fires before we know the user's identity).
+  useEffect(() => { if (tokenLoaded) loadSettings(); }, [loadSettings, tokenLoaded]);
 
   useFocusEffect(
     useCallback(() => { loadSettings(); }, [loadSettings]),
@@ -218,10 +220,19 @@ export default function SettingsScreen() {
     setTimeout(() => setSavedId(prev => prev === id ? null : prev), 1500);
   }, []);
 
+  // Guard used by every mutation: returns true only when the FCM token is
+  // resolved.  Prevents creating DB rows under an empty user_token if the
+  // user somehow triggers a save before the async token fetch completes.
+  const requireToken = (): boolean => {
+    if (userToken) return true;
+    showInfo('Not ready', 'Your device token is still loading. Please try again in a moment.');
+    return false;
+  };
+
   // ── API helpers ────────────────────────────────────────────────────────
 
   const patchGlobalRadar = async (patch: Partial<GlobalRadar>) => {
-    if (!settings) return;
+    if (!requireToken() || !settings) return;
     const next = { ...settings.GlobalGameRadar, ...patch };
     setSaving(true);
     try {
@@ -245,7 +256,7 @@ export default function SettingsScreen() {
 
 
   const patchHistorical = async (patch: { enabled?: boolean; alert_type?: string; categories?: Partial<HistoricalCats> }) => {
-    if (!settings) return;
+    if (!requireToken() || !settings) return;
     const cur  = settings.HistoricalMode;
     const next = { enabled: patch.enabled ?? cur.enabled, alert_type: patch.alert_type ?? cur.alert_type ?? 'silent', categories: { ...cur.categories, ...patch.categories } };
     setSaving(true);
@@ -262,6 +273,7 @@ export default function SettingsScreen() {
   // ── Team CRUD ─────────────────────────────────────────────────────────
 
   const saveTeam = async (payload: FavTeam) => {
+    if (!requireToken()) return;
     setSaving(true);
     try {
       await fetch(`${SERVER_URL}/settings/teams`, {
@@ -280,8 +292,9 @@ export default function SettingsScreen() {
   };
 
   const removeTeam = async (team_id: string) => {
+    if (!requireToken()) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    const q = userToken ? `?user_token=${encodeURIComponent(userToken)}` : '';
+    const q = `?user_token=${encodeURIComponent(userToken)}`;
     await fetch(`${SERVER_URL}/settings/teams/${team_id}${q}`, { method: 'DELETE' });
     setSettings(s => s ? { ...s, FavoriteTeams: s.FavoriteTeams.filter(t => t.team_id !== team_id) } : s);
     setTeamEdits(prev => { const n = { ...prev }; delete n[team_id]; return n; });
@@ -315,7 +328,7 @@ export default function SettingsScreen() {
   // ── Player CRUD ───────────────────────────────────────────────────────
 
   const confirmAddPlayer = async () => {
-    if (!pickedPlayer) return;
+    if (!requireToken() || !pickedPlayer) return;
     if (!newTotalPtsEnabled && !newHotStartEnabled && !newTdWatch) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       showInfo('No Condition Selected', 'Please enable at least one alarm condition before adding the player.');
@@ -370,6 +383,7 @@ export default function SettingsScreen() {
   };
 
   const savePlayerSettings = async (player_id: string, name: string, alert_type: string) => {
+    if (!requireToken()) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     const edit = playerEdits[player_id];
     if (!edit) return;
@@ -408,8 +422,9 @@ export default function SettingsScreen() {
   };
 
   const removePlayer = async (player_id: string) => {
+    if (!requireToken()) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    const q = userToken ? `?user_token=${encodeURIComponent(userToken)}` : '';
+    const q = `?user_token=${encodeURIComponent(userToken)}`;
     await fetch(`${SERVER_URL}/settings/players/${player_id}${q}`, { method: 'DELETE' });
     setSettings(s => {
       if (!s) return s;

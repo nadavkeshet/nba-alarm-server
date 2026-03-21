@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import messaging from '@react-native-firebase/messaging';
 import notifee, { AndroidImportance, AndroidCategory, AndroidVisibility } from '@notifee/react-native';
@@ -263,9 +264,12 @@ export default function HomeScreen() {
 
 
   // ── Load favorites from server settings ──────────────────────────
-  const loadFavorites = async () => {
+  // token must be passed explicitly — never call without it or star
+  // indicators will show another user's (or no user's) favorites.
+  const loadFavorites = async (token: string) => {
+    if (!token) return;
     try {
-      const resp = await fetch(`${SERVER_URL}/settings`);
+      const resp = await fetch(`${SERVER_URL}/settings?user_token=${encodeURIComponent(token)}`);
       if (!resp.ok) return;
       const prefs = await resp.json();
       setFavoriteTeamIds(new Set((prefs.FavoriteTeams ?? []).map((t: any) => t.team_id)));
@@ -326,6 +330,10 @@ export default function HomeScreen() {
     setupNotifee().then(async (token: string | undefined) => {
       if (!token) return;
       setExpoPushToken(token);
+      // Persist token so _layout.tsx can read it as `old_token` when FCM rotates.
+      AsyncStorage.setItem('nba_fcm_token', token).catch(() => {});
+      // Load favorites only after the token is known so we fetch the correct user's data.
+      loadFavorites(token);
       const success = await sendTokenToServer(token);
       if (!success) {
         retryIntervalRef.current = setInterval(async () => {
@@ -339,7 +347,6 @@ export default function HomeScreen() {
     });
 
     fetchGames();
-    loadFavorites();
 
     // FSI fix: when FSI brings the app to foreground the onMessage event has
     // already passed. AppState catches every foreground transition and checks
@@ -449,6 +456,7 @@ export default function HomeScreen() {
           condition_type: 'score_diff',
           threshold:      parseInt(maxDiff, 10),
           start_quarter:  parseInt(startQuarter, 10),
+          alert_type:     alertType,
         }),
       }).catch(() => {});
 
@@ -525,6 +533,9 @@ export default function HomeScreen() {
             condition_type: cond.condition_type,
             threshold:      cond.threshold,
             start_quarter:  cond.start_quarter,
+            game_id:        selectedGame.id,
+            game_name:      selectedGame.name,
+            alert_type:     alertType,
           }),
         }).catch(() => {});
 
