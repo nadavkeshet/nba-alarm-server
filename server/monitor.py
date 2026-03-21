@@ -307,13 +307,14 @@ def _deactivate_db_alarm_for(target_id: str) -> None:
             log.warning("DB alarm deactivation failed for %s: %s", target_id, exc)
 
 
-def _fire_once(key: str) -> bool:
+def _fire_once(key: str, token: str = "") -> bool:
     """
     Returns True (and marks the key) the first time it is called for this key
     on the current UTC date.  Returns False on all subsequent calls today.
+    token is included in the key so different users never block each other.
     """
     today    = datetime.now(timezone.utc).strftime("%Y%m%d")
-    full_key = f"{today}_{key}"
+    full_key = f"{today}_{token}_{key}" if token else f"{today}_{key}"
     with _FIRED_LOCK:
         if full_key in _FIRED_ALERTS:
             return False
@@ -469,7 +470,7 @@ def clear_stale_state() -> None:
         _alarm_stop_events.clear()
         _player_stop_events.clear()
 
-    print("STARTUP: Stale state cleared – active_monitors reset.", flush=True)
+    log.info("STARTUP: Stale state cleared – active_monitors reset.")
 
 
 # ---------------------------------------------------------------------------
@@ -985,60 +986,73 @@ def get_radar_status() -> bool:
     return _radar_running
 
 
-def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
-    """Single radar scan – called once per poll cycle."""
+# ---------------------------------------------------------------------------
+# DB callback — registered by main.py to supply all users' preferences
+# ---------------------------------------------------------------------------
+
+_DB_GET_ALL_USERS_FN = None
+
+
+def register_db_get_all_users(fn) -> None:
+    """Register a callable() → list[{token, channel, prefs}] for multi-user radar."""
+    global _DB_GET_ALL_USERS_FN
+    _DB_GET_ALL_USERS_FN = fn
+
+
+# ---------------------------------------------------------------------------
+# Multi-user radar
+# ---------------------------------------------------------------------------
+
+def _run_radar_tick_for_user(
+    push_token: str,
+    sound_channel: str,
+    prefs: dict,
+    events: list[dict],
+    summaries: dict,          # mutable cache: game_id → summary JSON (shared across users)
+) -> None:
+    """
+    Check one user's preferences against pre-fetched ESPN data.
+    `summaries` is populated lazily and shared so each game is fetched only once
+    even when multiple users watch the same game.
+    """
     radar_cfg        = prefs.get("GlobalGameRadar", {})
     radar_alert_type = radar_cfg.get("alert_type", "silent")
     fav_teams        = {t["team_id"]: t for t in prefs.get("FavoriteTeams", [])}
     fav_players      = prefs.get("FavoritePlayers", {})
     hist_cfg         = prefs.get("HistoricalMode", {})
-    hist_enabled    = hist_cfg.get("enabled", False)
-    hist_alert_type = hist_cfg.get("alert_type", "silent")
-    hist_cats       = hist_cfg.get("categories", {})
-
-    # ── Fetch all of today's games ───────────────────────────────────────────
-    try:
-        resp = requests.get(ESPN_NBA_URL, timeout=10)
-        resp.raise_for_status()
-        events = resp.json().get("events", [])
-    except Exception as exc:
-        log.warning("RADAR: scoreboard fetch failed: %s", exc)
-        return
-
-    needs_boxscore = bool(fav_players) or hist_enabled
+    hist_enabled     = hist_cfg.get("enabled", False)
+    hist_alert_type  = hist_cfg.get("alert_type", "silent")
+    hist_cats        = hist_cfg.get("categories", {})
+    needs_boxscore   = bool(fav_players) or hist_enabled
+    token            = push_token   # short alias for _fire_once calls
 
     for event in events:
         game_id   = str(event.get("id", ""))
         game_name = event.get("name", game_id)
         quarter, diff, _ = _parse_nba_state(event)
 
-        # Only care about live games
         if quarter < 1 or quarter > 4:
             continue
 
-        # ── Game-level alert (Priority 2 / 3) ───────────────────────────────
+        # ── Game-level alert (Priority 2: Favorite Team / Priority 3: Global Radar) ─
         if not _has_manual_alarm(game_id):
             competitors = event.get("competitions", [{}])[0].get("competitors", [])
-
-            # Priority 2: Favorite Team
             criteria = None
             for comp in competitors:
                 tid = str(comp.get("team", {}).get("id", ""))
                 if tid in fav_teams:
                     criteria = fav_teams[tid]
                     break
-
-            # Priority 3: Global Radar (fallback)
             if criteria is None and radar_cfg.get("enabled", False):
                 criteria = radar_cfg
 
             if criteria:
-                max_d    = int(criteria.get("max_diff", 5))
-                start_q  = int(criteria.get("start_quarter", 4))
-                c_alert  = criteria.get("alert_type", radar_alert_type)
+                max_d   = int(criteria.get("max_diff", 5))
+                start_q = int(criteria.get("start_quarter", 4))
+                c_alert = criteria.get("alert_type", radar_alert_type)
                 if quarter >= start_q and diff <= max_d:
                     label = "Favorite Team Alert!" if "team_name" in criteria else "NBA Radar – Close Game!"
-                    if _fire_once(f"{game_id}_game"):
+                    if _fire_once(f"{game_id}_game", token):
                         log.info("RADAR ALARM  fire   | %s | Q%d diff=%d | %s", game_name, quarter, diff, label)
                         _send_push_notification(
                             push_token=push_token,
@@ -1048,16 +1062,22 @@ def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
                             alert_type=c_alert,
                         )
 
-        # ── Player-level alerts (Career High + Historical) ───────────────────
+        # ── Player-level alerts ──────────────────────────────────────────────
         if not needs_boxscore:
             continue
 
-        try:
-            s_resp = requests.get(ESPN_SUMMARY_URL, params={"event": game_id}, timeout=10)
-            s_resp.raise_for_status()
-            summary = s_resp.json()
-        except Exception as exc:
-            log.warning("RADAR: summary fetch failed for %s: %s", game_id, exc)
+        # Fetch summary lazily; result is cached in `summaries` for other users
+        if game_id not in summaries:
+            try:
+                s_resp = requests.get(ESPN_SUMMARY_URL, params={"event": game_id}, timeout=10)
+                s_resp.raise_for_status()
+                summaries[game_id] = s_resp.json()
+            except Exception as exc:
+                log.warning("RADAR: summary fetch failed for %s: %s", game_id, exc)
+                summaries[game_id] = None
+
+        summary = summaries.get(game_id)
+        if not summary:
             continue
 
         for section in summary.get("boxscore", {}).get("players", []):
@@ -1076,130 +1096,128 @@ def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
                     blk    = int(raw.get("BLK",  0) or 0)
                     threes = int(raw.get("3PM",  0) or 0)
 
-                    # ── Favorite Player Alerts (fully per-player settings) ──
-                    # Skip if a manual player alarm is already handling this player
-                    if player_id in fav_players and _has_manual_player_alarm(player_id):
-                        continue
+                    # ── Favorite Player Alerts ───────────────────────────────
+                    if player_id in fav_players and not _has_manual_player_alarm(player_id):
+                        fav_cfg      = fav_players[player_id]
+                        p_alert      = fav_cfg.get("alert_type", "silent")
+                        total_pts_thr = fav_cfg.get("total_pts")
+                        early_pts_q  = fav_cfg.get("early_pts_q")
+                        early_pts    = fav_cfg.get("early_pts")
+                        td_watch     = bool(fav_cfg.get("td_watch", False))
 
-                    if player_id in fav_players:
-                        fav_cfg       = fav_players[player_id]
-                        p_alert_type  = fav_cfg.get("alert_type", "silent")
-                        # None = user did not enable that condition — skip it entirely
-                        total_pts_thr = fav_cfg.get("total_pts")      # int or None
-                        early_pts_q   = fav_cfg.get("early_pts_q")    # int or None
-                        early_pts = fav_cfg.get("early_pts")  # int or None
-                        td_watch      = bool(fav_cfg.get("td_watch", False))
+                        if total_pts_thr is not None and pts >= int(total_pts_thr):
+                            if _fire_once(f"{game_id}_{player_id}_total_pts", token):
+                                log.info("RADAR ALARM  fire   | %s | %d pts in %s", player_name, pts, game_name)
+                                _send_push_notification(
+                                    push_token=push_token,
+                                    title="Scoring Alert!",
+                                    body=f"{player_name} has {pts} pts in {game_name}!",
+                                    sound_channel=sound_channel, alert_type=p_alert,
+                                )
 
-                        # Total PTS threshold (only if condition is enabled)
-                        if total_pts_thr is not None:
-                            total_pts_thr = int(total_pts_thr)
-                            if pts >= total_pts_thr:
-                                if _fire_once(f"{game_id}_{player_id}_total_pts"):
-                                    log.info("RADAR ALARM  fire   | %s | %d pts in %s", player_name, pts, game_name)
-                                    _send_push_notification(
-                                        push_token=push_token,
-                                        title="Scoring Alert!",
-                                        body=f"{player_name} has {pts} pts in {game_name}!",
-                                        sound_channel=sound_channel,
-                                        alert_type=p_alert_type,
-                                    )
-
-                        # Early Points (fires when threshold is hit at or before the deadline quarter)
                         if early_pts_q is not None and early_pts is not None:
-                            early_pts_q   = int(early_pts_q)
-                            early_pts = int(early_pts)
-                            if quarter <= early_pts_q and pts >= early_pts:
-                                if _fire_once(f"{game_id}_{player_id}_early_pts_q{early_pts_q}"):
+                            if quarter <= int(early_pts_q) and pts >= int(early_pts):
+                                if _fire_once(f"{game_id}_{player_id}_early_pts_q{early_pts_q}", token):
                                     _send_push_notification(
                                         push_token=push_token,
                                         title="Early Points Alert!",
                                         body=f"{player_name}: {pts} pts by Q{quarter} in {game_name}!",
-                                        sound_channel=sound_channel,
-                                        alert_type=p_alert_type,
+                                        sound_channel=sound_channel, alert_type=p_alert,
                                     )
 
-                        # Triple-double watch (only if enabled)
                         if td_watch and _check_triple_double(pts, reb, ast, stl, blk):
                             hot = [f"{n} {v}" for n, v in zip(["PTS","REB","AST","STL","BLK"], [pts,reb,ast,stl,blk]) if v >= 9]
-                            if _fire_once(f"{game_id}_{player_id}_triple_double"):
+                            if _fire_once(f"{game_id}_{player_id}_triple_double", token):
                                 _send_push_notification(
                                     push_token=push_token,
                                     title="Triple-Double Watch!",
                                     body=f"{player_name}: {' / '.join(hot)} in {game_name}!",
-                                    sound_channel=sound_channel,
-                                    alert_type=p_alert_type,
+                                    sound_channel=sound_channel, alert_type=p_alert,
                                 )
 
                     # ── Historical Mode ──────────────────────────────────────
                     if not hist_enabled:
                         continue
 
-                    # Historic scoring pace: 40+ pts by end of Q2 (halftime)
                     if hist_cats.get("scoring_40_half") and pts >= 40 and quarter <= 2:
-                        if _fire_once(f"{game_id}_{player_id}_scoring_40"):
+                        if _fire_once(f"{game_id}_{player_id}_scoring_40", token):
                             _send_push_notification(
-                                push_token=push_token,
-                                title="Historic Scoring Pace!",
+                                push_token=push_token, title="Historic Scoring Pace!",
                                 body=f"{player_name}: {pts} pts in Q{quarter} of {game_name}!",
-                                sound_channel=sound_channel,
-                                alert_type=hist_alert_type,
+                                sound_channel=sound_channel, alert_type=hist_alert_type,
                             )
 
-                    # Historic 3PM game: 12+ with more than 3 minutes remaining
                     if hist_cats.get("threes_11") and threes >= 12:
                         clock_mins = _clock_minutes_remaining(event)
                         if not (quarter >= 4 and clock_mins <= 3):
-                            if _fire_once(f"{game_id}_{player_id}_threes_11"):
+                            if _fire_once(f"{game_id}_{player_id}_threes_11", token):
                                 _send_push_notification(
-                                    push_token=push_token,
-                                    title="Historic 3-Point Game!",
+                                    push_token=push_token, title="Historic 3-Point Game!",
                                     body=f"{player_name}: {threes} threes in {game_name}!",
-                                    sound_channel=sound_channel,
-                                    alert_type=hist_alert_type,
+                                    sound_channel=sound_channel, alert_type=hist_alert_type,
                                 )
 
-                    # Quad-double threat: 8+ in any 4 of 5 categories
                     if hist_cats.get("quad_double_threat"):
                         cats_at_8 = sum(1 for v in [pts, reb, ast, stl, blk] if v >= 8)
                         if cats_at_8 >= 4:
-                            if _fire_once(f"{game_id}_{player_id}_quad"):
-                                hot = [
-                                    f"{n} {v}"
-                                    for n, v in zip(["PTS","REB","AST","STL","BLK"], [pts,reb,ast,stl,blk])
-                                    if v >= 8
-                                ]
+                            hot = [f"{n} {v}" for n, v in zip(["PTS","REB","AST","STL","BLK"], [pts,reb,ast,stl,blk]) if v >= 8]
+                            if _fire_once(f"{game_id}_{player_id}_quad", token):
                                 _send_push_notification(
-                                    push_token=push_token,
-                                    title="Quad-Double Threat!",
+                                    push_token=push_token, title="Quad-Double Threat!",
                                     body=f"{player_name}: {' / '.join(hot)} in {game_name}!",
-                                    sound_channel=sound_channel,
-                                    alert_type=hist_alert_type,
+                                    sound_channel=sound_channel, alert_type=hist_alert_type,
                                 )
 
 
-def _has_passive_monitoring(prefs: dict) -> bool:
-    """Return True if the radar has anything to do this tick."""
-    # Active manual alarms — keep radar alive alongside them
-    with _manual_lock:
-        if _active_manual_alarms or _active_player_alarms:
+def _run_radar_tick(users: list[dict]) -> None:
+    """
+    Full radar scan for all users.
+    ESPN scoreboard is fetched ONCE; game summaries are fetched lazily and
+    cached so multiple users watching the same game share one HTTP request.
+    """
+    try:
+        resp = requests.get(ESPN_NBA_URL, timeout=10)
+        resp.raise_for_status()
+        events = resp.json().get("events", [])
+    except Exception as exc:
+        log.warning("RADAR: scoreboard fetch failed: %s", exc)
+        return
+
+    summaries: dict = {}   # shared lazy cache: game_id → summary JSON
+
+    for user in users:
+        try:
+            _run_radar_tick_for_user(
+                push_token    = user["token"],
+                sound_channel = user.get("channel", "classic_alarm"),
+                prefs         = user["prefs"],
+                events        = events,
+                summaries     = summaries,
+            )
+        except Exception as exc:
+            log.error("RADAR: error processing user %s: %s", _tid(user.get("token", "")), exc)
+
+
+def _has_passive_monitoring(users: list[dict]) -> bool:
+    """Return True if any user has passive features configured."""
+    for user in users:
+        prefs = user.get("prefs", {})
+        if prefs.get("GlobalGameRadar", {}).get("enabled", False):
             return True
-    # Passive preference-based features
-    if prefs.get("GlobalGameRadar", {}).get("enabled", False):
-        return True
-    if prefs.get("FavoriteTeams", []):
-        return True
-    if bool(prefs.get("FavoritePlayers", {})):
-        return True
-    if prefs.get("HistoricalMode", {}).get("enabled", False):
-        return True
+        if prefs.get("FavoriteTeams"):
+            return True
+        if prefs.get("FavoritePlayers"):
+            return True
+        if prefs.get("HistoricalMode", {}).get("enabled", False):
+            return True
     return False
 
 
-def start_radar_job(push_token: str, sound_channel: str = "classic_alarm") -> None:
+def start_radar_job() -> None:
     """
-    Continuous background radar.  Only one instance runs at a time.
-    Scans all live games every POLL_INTERVAL seconds.
-    Stops automatically when no passive monitoring features are configured.
+    Continuous background radar — one instance at a time, all users.
+    Reads all users from DB on every tick via the registered callback.
+    Stops when no user has any passive features configured.
     """
     global _radar_running
     with _radar_lock:
@@ -1208,14 +1226,14 @@ def start_radar_job(push_token: str, sound_channel: str = "classic_alarm") -> No
             return
         _radar_running = True
 
-    log.info("RADAR: background radar started.")
+    log.info("RADAR: started.")
     try:
         while True:
-            prefs = get_preferences()
-            if not _has_passive_monitoring(prefs):
-                log.info("RADAR: nothing to watch (no passive features configured) – stopping.")
+            users = _DB_GET_ALL_USERS_FN() if _DB_GET_ALL_USERS_FN else []
+            if not _has_passive_monitoring(users):
+                log.info("RADAR: no active preferences for any user – stopping.")
                 return
-            _run_radar_tick(push_token, sound_channel, prefs)
+            _run_radar_tick(users)
             time.sleep(POLL_INTERVAL)
     except Exception as exc:
         log.error("RADAR: unexpected error: %s", exc)

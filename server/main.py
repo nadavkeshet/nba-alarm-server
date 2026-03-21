@@ -46,6 +46,8 @@ from monitor import (
     clear_stale_state,
     # DB deactivation registration
     register_db_deactivate,
+    # Multi-user radar registration
+    register_db_get_all_users,
 )
 
 
@@ -239,6 +241,94 @@ def _restore_prefs_from_db(user_token: str) -> None:
         log.error("DB: _restore_prefs_from_db failed – %s", exc)
 
 
+# ── Multi-user radar feed ─────────────────────────────────────────────────────
+
+def _get_all_users_for_radar() -> list[dict]:
+    """
+    Return [{token, channel, prefs}] for every user that has any favorites
+    or passive monitoring configured.  Called by the radar on every tick.
+    """
+    if engine is None:
+        return []
+    try:
+        with Session(engine) as session:
+            team_tokens   = {r.user_token for r in session.query(FavoriteTeamDB.user_token).distinct()}
+            player_tokens = {r.user_token for r in session.query(FavoritePlayerDB.user_token).distinct()}
+            pref_tokens   = {r.user_token for r in session.query(UserPreferenceDB.user_token).distinct()}
+            all_tokens    = team_tokens | player_tokens | pref_tokens
+
+        users: list[dict] = []
+        for token in all_tokens:
+            with Session(engine) as session:
+                players = session.query(FavoritePlayerDB).filter_by(user_token=token).all()
+                teams   = session.query(FavoriteTeamDB).filter_by(user_token=token).all()
+                pref    = session.get(UserPreferenceDB, token)
+
+                fav_players = {
+                    p.target_id: {
+                        "name":        p.target_name or "",
+                        "total_pts":   p.total_pts,
+                        "early_pts_q": p.early_pts_q,
+                        "early_pts":   p.early_pts,
+                        "td_watch":    bool(p.td_watch),
+                        "alert_type":  p.alert_type or "silent",
+                    }
+                    for p in players
+                }
+                fav_teams = [
+                    {
+                        "team_id":       t.team_id,
+                        "team_name":     t.team_name or "",
+                        "max_diff":      t.score_gap or 5,
+                        "start_quarter": t.start_quarter or 4,
+                        "alert_type":    t.alert_type or "silent",
+                    }
+                    for t in teams
+                ]
+                radar_cfg = {
+                    "enabled":       pref.radar_enabled       if pref else False,
+                    "max_diff":      pref.radar_gap           if pref else 5,
+                    "start_quarter": pref.radar_start_q       if pref else 4,
+                    "alert_type":    pref.alert_type          if pref else "silent",
+                }
+                hist_cfg = {
+                    "enabled":    pref.historical_mode_enabled if pref else False,
+                    "alert_type": pref.hist_alert_type         if pref else "silent",
+                    "categories": {
+                        "scoring_40_half":    pref.hist_scoring_40_half if pref else False,
+                        "threes_11":          pref.hist_threes_11       if pref else False,
+                        "quad_double_threat": pref.hist_quad_double     if pref else False,
+                    },
+                }
+
+            channel = "classic_alarm"
+            try:
+                from monitor import get_saved_push_token as _gst  # noqa: avoid circular at module level
+                if token == _gst()[0]:
+                    channel = _gst()[1]
+            except Exception:
+                pass
+
+            users.append({
+                "token":   token,
+                "channel": channel,
+                "prefs": {
+                    "FavoritePlayers": fav_players,
+                    "FavoriteTeams":   fav_teams,
+                    "GlobalGameRadar": radar_cfg,
+                    "HistoricalMode":  hist_cfg,
+                },
+            })
+        return users
+    except Exception as exc:
+        log.error("_get_all_users_for_radar failed: %s", exc)
+        return []
+
+
+# Register so monitor.py radar can call it each tick
+register_db_get_all_users(_get_all_users_for_radar)
+
+
 # ── Background Async Poller ────────────────────────────────────────────────────
 
 ESPN_SCOREBOARD = (
@@ -328,14 +418,11 @@ def _check_and_fire(alarm: Alarm, events: list[dict]) -> bool | None:
             state  = _get_event_state(event)
             period = _get_event_period(event)
             if state == "post":
-                print(f"Poller: score_diff alarm {alarm.id} – game Final, expiring.", flush=True)
                 return None  # game over — deactivate without firing
             # Must be live AND have reached the target quarter
             if state != "in":
-                print(f"Poller: score_diff alarm {alarm.id} – game not live (state={state}), skipping.", flush=True)
                 continue
             if period < required_quarter:
-                print(f"Poller: score_diff alarm {alarm.id} – Q{period} < Q{required_quarter} target, skipping.", flush=True)
                 continue
             diff = _extract_game_diff(event)
             if diff is not None and diff <= alarm.threshold:
@@ -349,11 +436,6 @@ def _check_and_fire(alarm: Alarm, events: list[dict]) -> bool | None:
             state  = _get_event_state(event)
             period = _get_event_period(event)
             if quarter_limit > 0 and period > quarter_limit:
-                print(
-                    f"Poller: points alarm {alarm.id} ({alarm.target_name}) – "
-                    f"Q{period} exceeded Q{quarter_limit} limit, expiring.",
-                    flush=True,
-                )
                 return None  # deadline quarter passed — deactivate without firing
             if state == "post":
                 # Game over and pts_goal not reached
@@ -445,7 +527,7 @@ async def _alarm_poller() -> None:
                                 db_row.is_active = False
                                 session.commit()
                 except Exception as alarm_err:
-                    print(f"Poller error alarm {alarm.id}: {alarm_err}", flush=True)
+                    log.error("Poller error alarm %d: %s", alarm.id, alarm_err)
 
             # NOTE: Favorite players and teams are monitored exclusively by the
             # background radar (monitor.py _run_radar_tick) which has its own
@@ -453,7 +535,7 @@ async def _alarm_poller() -> None:
             # double notifications (separate dedup sets).  Do not re-add.
 
         except Exception as exc:
-            print(f"Poller: cycle error – {exc}", flush=True)
+            log.error("Poller: cycle error – %s", exc)
 
 
 # ── App Lifespan ───────────────────────────────────────────────────────────────
@@ -501,7 +583,7 @@ async def lifespan(_app: FastAPI):
         if not prefs.get("FavoriteTeams") and not prefs.get("FavoritePlayers"):
             fallback_token = _find_token_from_db()
             if fallback_token and fallback_token != token:
-                print(f"STARTUP: token mismatch – retrying restore with DB token ...{fallback_token[-10:]}", flush=True)
+                log.info("STARTUP: token mismatch – retrying restore with DB token ...%s", fallback_token[-10:])
                 save_push_token(fallback_token, channel)
                 token = fallback_token
                 _restore_prefs_from_db(token)
@@ -509,11 +591,11 @@ async def lifespan(_app: FastAPI):
         # No token in JSON at all — scan DB for any registered token
         token = _find_token_from_db()
         if token:
-            print(f"STARTUP: no JSON token – found token from DB ...{token[-10:]}", flush=True)
+            log.info("STARTUP: no JSON token – found token from DB ...%s", token[-10:])
             save_push_token(token, channel)
             _restore_prefs_from_db(token)
     if token:
-        threading.Thread(target=start_radar_job, args=(token, channel), daemon=True).start()
+        threading.Thread(target=start_radar_job, daemon=True).start()
     # Start the async DB poller
     poller_task = asyncio.create_task(_alarm_poller())
 
@@ -641,11 +723,7 @@ async def start_alarm(req: AlarmRequest):
               req.push_token, req.sound_channel, req.alert_type),
         daemon=True,
     ).start()
-    threading.Thread(
-        target=start_radar_job,
-        args=(req.push_token, req.sound_channel),
-        daemon=True,
-    ).start()
+    threading.Thread(target=start_radar_job, daemon=True).start()
     return {
         "status":        "monitoring_started",
         "game":          req.game_name,
@@ -684,11 +762,7 @@ async def start_player_alarm(req: PlayerAlarmRequest):
         ),
         daemon=True,
     ).start()
-    threading.Thread(
-        target=start_radar_job,
-        args=(req.push_token, req.sound_channel),
-        daemon=True,
-    ).start()
+    threading.Thread(target=start_radar_job, daemon=True).start()
     return {
         "status":    "player_monitoring_started",
         "game":      req.game_name,
@@ -750,18 +824,13 @@ class RadarRequest(BaseModel):
 
 
 def _maybe_start_radar() -> None:
-    token, channel = get_saved_push_token()
-    if token:
-        threading.Thread(target=start_radar_job, args=(token, channel), daemon=True).start()
+    threading.Thread(target=start_radar_job, daemon=True).start()
 
 
 @app.post("/start-radar")
 def start_radar(req: RadarRequest):
-    threading.Thread(
-        target=start_radar_job,
-        args=(req.push_token, req.sound_channel),
-        daemon=True,
-    ).start()
+    save_push_token(req.push_token, req.sound_channel)
+    threading.Thread(target=start_radar_job, daemon=True).start()
     return {"status": "radar_started"}
 
 
@@ -1094,11 +1163,7 @@ def register_token(req: RegisterTokenRequest):
     # Rebuild JSON prefs from DB so the radar starts with the correct favorites.
     # This is critical after a Railway restart that wiped the ephemeral JSON file.
     _restore_prefs_from_db(req.push_token)
-    threading.Thread(
-        target=start_radar_job,
-        args=(req.push_token, req.sound_channel),
-        daemon=True,
-    ).start()
+    threading.Thread(target=start_radar_job, daemon=True).start()
     return {"status": "token_registered", "push_token": req.push_token}
 
 
@@ -1179,7 +1244,7 @@ def active_monitors(user_token: str = ""):
                         for r in rows
                     ]
             except Exception as db_err:
-                print(f"CRITICAL DB ERROR in active_monitors query: {db_err}", flush=True)
+                log.error("DB error in active_monitors query: %s", db_err)
                 db_alarms = []   # degrade gracefully – don't 500
 
         return {
@@ -1205,7 +1270,7 @@ def active_monitors(user_token: str = ""):
         }
 
     except Exception as e:
-        print(f"CRITICAL SERVER ERROR in active_monitors: {e}", flush=True)
+        log.error("Error in active_monitors: %s", e)
         return _empty_response
 
 
