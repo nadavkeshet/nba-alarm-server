@@ -4,6 +4,7 @@ import logging
 import threading
 import requests as http
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Optional
 
 log = logging.getLogger("nba_monitor")
@@ -13,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, text
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, text
 from sqlalchemy.orm import DeclarativeBase, Session
 
 from monitor import (
@@ -50,6 +51,9 @@ from monitor import (
     register_db_get_all_users,
     # Invalid token cleanup
     register_db_invalidate_token,
+    # Fired-alert persistence (survives server restarts)
+    register_db_persist_fired,
+    hydrate_fired_alerts,
 )
 
 
@@ -112,6 +116,18 @@ class FavoriteTeamDB(_Base):
     score_gap     = Column(Integer, nullable=True)    # max_diff
     start_quarter = Column(Integer, nullable=True)
     alert_type    = Column(String,  nullable=True, default='silent')
+
+
+class FiredAlertDB(_Base):
+    """
+    Persisted record of every radar/favorite alert fired today.
+    Hydrated into _FIRED_ALERTS on startup so server restarts during a game
+    don't cause duplicate wake-ups.  Rows older than today are deleted at startup.
+    """
+    __tablename__ = "fired_alerts"
+
+    key      = Column(String,                primary_key=True)   # same key used in _fire_once
+    fired_at = Column(DateTime(timezone=True), nullable=False)
 
 
 class UserPreferenceDB(_Base):
@@ -205,6 +221,54 @@ def _invalidate_push_token(push_token: str) -> None:
 
 
 register_db_invalidate_token(_invalidate_push_token)
+
+
+def _persist_fired_alert(key: str) -> None:
+    """
+    Upsert a fired-alert key into PostgreSQL.
+    Called by _fire_once immediately after adding the key to the in-memory set,
+    so the record survives a server restart during the same UTC day.
+    """
+    if engine is None:
+        return
+    try:
+        with Session(engine) as session:
+            existing = session.get(FiredAlertDB, key)
+            if existing is None:
+                session.add(FiredAlertDB(key=key, fired_at=datetime.now(timezone.utc)))
+                session.commit()
+    except Exception as exc:
+        log.warning("DB: _persist_fired_alert failed for %s: %s", key, exc)
+
+
+register_db_persist_fired(_persist_fired_alert)
+
+
+def _load_fired_alerts_from_db() -> None:
+    """
+    At startup: load today's fired-alert keys from DB into the in-memory set,
+    then delete rows from previous days (they're no longer needed).
+    """
+    if engine is None:
+        return
+    try:
+        today_prefix = datetime.now(timezone.utc).strftime("%Y%m%d")
+        with Session(engine) as session:
+            rows = session.query(FiredAlertDB).all()
+            today_keys  = {r.key for r in rows if r.key.startswith(today_prefix)}
+            stale_keys  = [r.key for r in rows if not r.key.startswith(today_prefix)]
+            if stale_keys:
+                session.query(FiredAlertDB).filter(
+                    FiredAlertDB.key.in_(stale_keys)
+                ).delete(synchronize_session=False)
+                session.commit()
+        hydrate_fired_alerts(today_keys)
+        log.info(
+            "STARTUP: fired-alerts hydrated – %d keys loaded, %d stale rows deleted.",
+            len(today_keys), len(stale_keys),
+        )
+    except Exception as exc:
+        log.error("DB: _load_fired_alerts_from_db failed – %s", exc)
 
 
 # ── Startup Restore ────────────────────────────────────────────────────────────
@@ -619,6 +683,7 @@ def _find_token_from_db() -> str:
 async def lifespan(_app: FastAPI):
     # ── Startup ──
     _init_db()
+    _load_fired_alerts_from_db()   # hydrate dedup set before radar starts
     clear_stale_state()
     threading.Thread(target=update_all_rosters, daemon=True).start()
     token, channel = get_saved_push_token()

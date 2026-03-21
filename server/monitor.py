@@ -312,6 +312,35 @@ def register_db_invalidate_token(fn) -> None:
     _DB_INVALIDATE_TOKEN_FN = fn
 
 
+# ---------------------------------------------------------------------------
+# Fired-alert persistence  (survives server restarts during live games)
+# ---------------------------------------------------------------------------
+
+_DB_PERSIST_FIRED_FN = None
+
+
+def register_db_persist_fired(fn) -> None:
+    """
+    Register a callable(key: str) that persists a fired-alert key to the DB.
+    Called from _fire_once every time an alert is sent for the first time.
+    """
+    global _DB_PERSIST_FIRED_FN
+    _DB_PERSIST_FIRED_FN = fn
+
+
+def hydrate_fired_alerts(keys: set[str]) -> None:
+    """
+    Load a set of already-fired keys (read from DB at startup) into the
+    in-memory _FIRED_ALERTS set so duplicate alerts are suppressed even after
+    a server restart mid-game.
+    """
+    if not keys:
+        return
+    with _FIRED_LOCK:
+        _FIRED_ALERTS.update(keys)
+    log.info("STARTUP: hydrated %d fired-alert keys from DB.", len(keys))
+
+
 def _deactivate_db_alarm_for(target_id: str) -> None:
     if _DB_DEACTIVATE_FN is not None:
         try:
@@ -325,6 +354,9 @@ def _fire_once(key: str, token: str = "") -> bool:
     Returns True (and marks the key) the first time it is called for this key
     on the current UTC date.  Returns False on all subsequent calls today.
     token is included in the key so different users never block each other.
+
+    On first fire: persists the key to the DB (via callback) so the dedup
+    state survives a server restart mid-game — no duplicate wake-ups.
     """
     today    = datetime.now(timezone.utc).strftime("%Y%m%d")
     full_key = f"{today}_{token}_{key}" if token else f"{today}_{key}"
@@ -332,7 +364,13 @@ def _fire_once(key: str, token: str = "") -> bool:
         if full_key in _FIRED_ALERTS:
             return False
         _FIRED_ALERTS.add(full_key)
-        return True
+    # Persist outside the lock — DB write is slow, shouldn't block concurrent checks
+    if _DB_PERSIST_FIRED_FN is not None:
+        try:
+            _DB_PERSIST_FIRED_FN(full_key)
+        except Exception as exc:
+            log.warning("_fire_once: DB persist failed for %s: %s", full_key, exc)
+    return True
 
 
 # ---------------------------------------------------------------------------
