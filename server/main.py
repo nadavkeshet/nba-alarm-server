@@ -1,9 +1,12 @@
 import os
 import asyncio
+import logging
 import threading
 import requests as http
 from contextlib import asynccontextmanager
 from typing import Optional
+
+log = logging.getLogger("nba_monitor")
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -121,16 +124,14 @@ class UserPreferenceDB(_Base):
 def _init_db() -> None:
     """Create tables if they don't already exist, and run lightweight migrations."""
     if engine is None:
-        print("DB: No DATABASE_URL set – skipping table creation.", flush=True)
+        log.warning("DB: No DATABASE_URL set – skipping table creation.")
         return
     try:
         _Base.metadata.create_all(bind=engine)
-        print("DB: Tables ready.", flush=True)
+        log.info("DB: tables ready.")
     except Exception as exc:
-        print(f"DB: Failed to create tables – {exc}", flush=True)
+        log.error("DB: failed to create tables – %s", exc)
         return
-    # Migrations: each statement gets its own connection+transaction so a
-    # "column already exists" failure on one doesn't abort the others.
     migrations = [
         "ALTER TABLE alarms ADD COLUMN target_name   VARCHAR",
         "ALTER TABLE alarms ADD COLUMN start_quarter INTEGER",
@@ -145,7 +146,6 @@ def _init_db() -> None:
             with engine.connect() as conn:
                 conn.execute(text(sql))
                 conn.commit()
-            print(f"DB: Migration applied – {sql}", flush=True)
         except Exception:
             pass  # column already exists – safe to ignore
 
@@ -166,10 +166,8 @@ def _deactivate_db_alarm(target_id: str) -> None:
             for row in rows:
                 row.is_active = False
             session.commit()
-            if rows:
-                print(f"DB: deactivated {len(rows)} alarm(s) for target {target_id}", flush=True)
     except Exception as exc:
-        print(f"DB: deactivation failed for {target_id}: {exc}", flush=True)
+        log.error("DB: deactivation failed for %s: %s", target_id, exc)
 
 
 # Register the callback so monitor.py threads can deactivate DB records after firing
@@ -233,13 +231,12 @@ def _restore_prefs_from_db(user_token: str) -> None:
                 },
             }
         save_preferences(prefs)
-        print(
-            f"DB: Restored {len(fav_players)} players, {len(fav_teams)} teams "
-            f"for ...{user_token[-10:]}",
-            flush=True,
+        log.info(
+            "DB restore  | %d teams  %d players  for ...%s",
+            len(fav_teams), len(fav_players), user_token[-8:],
         )
     except Exception as exc:
-        print(f"DB: _restore_prefs_from_db failed – {exc}", flush=True)
+        log.error("DB: _restore_prefs_from_db failed – %s", exc)
 
 
 # ── Background Async Poller ────────────────────────────────────────────────────
@@ -441,25 +438,14 @@ async def _alarm_poller() -> None:
                             if db_row:
                                 db_row.is_active = False
                                 session.commit()
-                        print(
-                            f"Poller: fired + deactivated alarm {alarm.id} "
-                            f"({alarm.condition_type} / {alarm.target_id})",
-                            flush=True,
-                        )
                     elif result is None:
-                        # Alarm expired (game Final / quarter deadline passed) — deactivate silently
                         with Session(engine) as session:
                             db_row = session.get(Alarm, alarm.id)
                             if db_row:
                                 db_row.is_active = False
                                 session.commit()
-                        print(
-                            f"Poller: expired + deactivated alarm {alarm.id} "
-                            f"({alarm.condition_type} / {alarm.target_id})",
-                            flush=True,
-                        )
                 except Exception as alarm_err:
-                    print(f"Poller: error processing alarm {alarm.id} – {alarm_err}", flush=True)
+                    print(f"Poller error alarm {alarm.id}: {alarm_err}", flush=True)
 
             # NOTE: Favorite players and teams are monitored exclusively by the
             # background radar (monitor.py _run_radar_tick) which has its own
@@ -495,7 +481,7 @@ def _find_token_from_db() -> str:
             if pref:
                 return pref.user_token
     except Exception as exc:
-        print(f"DB: _find_token_from_db failed – {exc}", flush=True)
+        log.error("DB: _find_token_from_db failed – %s", exc)
     return ""
 
 
@@ -844,7 +830,7 @@ def get_settings(user_token: str = ""):
             "HistoricalMode":  hist_cfg,
         }
     except Exception as exc:
-        print(f"DB: /settings read error – {exc}", flush=True)
+        log.error("DB: /settings read error – %s", exc)
         return json_prefs
 
 
@@ -875,7 +861,7 @@ def update_global_radar(req: GlobalRadarSettings):
                     ))
                 session.commit()
         except Exception as exc:
-            print(f"DB: update_global_radar failed – {exc}", flush=True)
+            log.error("DB: update_global_radar failed – %s", exc)
     prefs = get_preferences()
     prefs["GlobalGameRadar"] = {
         "enabled": req.enabled, "max_diff": req.max_diff,
@@ -916,9 +902,8 @@ def upsert_team(req: FavoriteTeam):
                         start_quarter=req.start_quarter, alert_type=req.alert_type,
                     ))
                 session.commit()
-            print(f"DB: Upserted favorite team {req.team_name}", flush=True)
         except Exception as exc:
-            print(f"DB: upsert_team failed – {exc}", flush=True)
+            log.error("DB: upsert_team failed – %s", exc)
     prefs = get_preferences()
     teams = [t for t in prefs.get("FavoriteTeams", []) if t["team_id"] != req.team_id]
     teams.append({
@@ -944,7 +929,7 @@ def remove_team(team_id: str, user_token: str = ""):
                     session.delete(row)
                     session.commit()
         except Exception as exc:
-            print(f"DB: remove_team failed – {exc}", flush=True)
+            log.error("DB: remove_team failed – %s", exc)
     prefs = get_preferences()
     prefs["FavoriteTeams"] = [t for t in prefs.get("FavoriteTeams", []) if t["team_id"] != team_id]
     save_preferences(prefs)
@@ -985,9 +970,8 @@ def upsert_player(req: FavoritePlayer):
                         td_watch=req.td_watch, alert_type=req.alert_type,
                     ))
                 session.commit()
-            print(f"DB: Upserted favorite player {req.name}", flush=True)
         except Exception as exc:
-            print(f"DB: upsert_player failed – {exc}", flush=True)
+            log.error("DB: upsert_player failed – %s", exc)
     prefs = get_preferences()
     players: dict = prefs.get("FavoritePlayers", {})
     players[req.player_id] = {
@@ -1016,7 +1000,7 @@ def remove_player(player_id: str, user_token: str = ""):
                     session.delete(row)
                     session.commit()
         except Exception as exc:
-            print(f"DB: remove_player failed – {exc}", flush=True)
+            log.error("DB: remove_player failed – %s", exc)
     prefs = get_preferences()
     players: dict = prefs.get("FavoritePlayers", {})
     players.pop(player_id, None)
@@ -1061,7 +1045,7 @@ def update_historical(req: HistoricalSettings):
                     ))
                 session.commit()
         except Exception as exc:
-            print(f"DB: update_historical failed – {exc}", flush=True)
+            log.error("DB: update_historical failed – %s", exc)
     prefs = get_preferences()
     prefs["HistoricalMode"] = {
         "enabled": req.enabled, "alert_type": req.alert_type,
@@ -1106,7 +1090,6 @@ class RegisterTokenRequest(BaseModel):
 def register_token(req: RegisterTokenRequest):
     if not req.push_token:
         return {"status": "error", "detail": "empty push_token"}
-    print(f"DEBUG: /register-token  token='{req.push_token[:20]}...'  channel='{req.sound_channel}'", flush=True)
     save_push_token(req.push_token, req.sound_channel)
     # Rebuild JSON prefs from DB so the radar starts with the correct favorites.
     # This is critical after a Railway restart that wiped the ephemeral JSON file.
@@ -1183,9 +1166,6 @@ def active_monitors(user_token: str = ""):
                                .filter(Alarm.user_token == user_token, Alarm.is_active.is_(True))
                                .all()
                     )
-                    print(f"DEBUG: Found {len(rows)} rows in DB for user ...{user_token[-10:]}", flush=True)
-                    for r in rows:
-                        print(f"DEBUG: alarm id={r.id} type={r.condition_type} target={r.target_name} active={r.is_active}", flush=True)
                     # Build dicts INSIDE the session so attributes are never detached
                     db_alarms = [
                         {
@@ -1198,7 +1178,6 @@ def active_monitors(user_token: str = ""):
                         }
                         for r in rows
                     ]
-                print(f"DB: Returning {len(db_alarms)} active alarms for token ...{user_token[-10:]}", flush=True)
             except Exception as db_err:
                 print(f"CRITICAL DB ERROR in active_monitors query: {db_err}", flush=True)
                 db_alarms = []   # degrade gracefully – don't 500
@@ -1265,7 +1244,6 @@ def cancel_db_alarm(alarm_id: int, user_token: str = ""):
         cancel_game_alarm(target_id)
     else:
         cancel_player_alarm(target_id)
-    print(f"DB: Alarm {alarm_id} permanently deleted for token ...{user_token[-10:]}", flush=True)
     return {"deleted": True, "alarm_id": alarm_id}
 
 

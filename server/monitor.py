@@ -44,13 +44,18 @@ _firebase_ready: bool = _init_firebase()
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s  %(message)s",
+    format="%(asctime)s  %(levelname)-5s  %(message)s",
     stream=sys.stdout,
     force=True,
 )
 log = logging.getLogger("nba_monitor")
 
 POLL_INTERVAL = 60  # seconds between active-monitoring checks
+
+
+def _tid(token: str) -> str:
+    """Short user identifier — last 8 chars of push token."""
+    return f"[...{token[-8:]}]" if len(token) >= 8 else "[no-token]"
 
 # Mock stats used when test_mode=True (bypasses live ESPN fetch)
 MOCK_STATS = {"PTS": 25, "REB": 9, "AST": 9, "STL": 2, "BLK": 9}
@@ -75,10 +80,7 @@ _CACHE_LOCK   = threading.Lock()
 
 
 def update_all_rosters() -> None:
-    """
-    ממלא את המחסן בכל השחקנים של 30 הקבוצות מ-ESPN.
-    """
-    log.info("Roster cache: starting full refresh...")
+    log.info("Roster cache: refreshing all 30 teams...")
 
     # שלב 1: קבלת רשימת כל הקבוצות
     try:
@@ -120,7 +122,6 @@ def update_all_rosters() -> None:
                     "position": a.get("position", {}).get("abbreviation", ""),
                 })
 
-            # שמירה ב-Cache לפי ה-ID של הקבוצה
             new_cache[team_id] = {
                 "id": team_id,
                 "name": team.get("displayName", ""),
@@ -129,8 +130,7 @@ def update_all_rosters() -> None:
                 "players": players,
             }
 
-            print(f"Successfully cached {len(players)} players for {team_abbr}", flush=True)
-            time.sleep(0.15)  # מנוחה קצרה כדי לא להיחסם
+            time.sleep(0.15)
 
         except Exception as exc:
             log.warning("Roster cache failed for team %s: %s", team_id, exc)
@@ -156,7 +156,6 @@ def get_all_teams() -> list[dict]:
 
 _SERVER_DIR   = Path(os.getcwd())
 _PREFS_FILE   = _SERVER_DIR / "user_preferences.json"
-print(f"DEBUG: Data directory = {_SERVER_DIR}", flush=True)
 _FILE_LOCK    = threading.Lock()
 
 _DEFAULT_PREFS: dict = {
@@ -250,7 +249,6 @@ def save_push_token(push_token: str, sound_channel: str = "classic_alarm") -> No
     changed = _MEM_PUSH_TOKEN != push_token
     _MEM_PUSH_TOKEN    = push_token
     _MEM_SOUND_CHANNEL = sound_channel
-    # Also write to disk (best-effort – may be wiped on Render restart)
     try:
         prefs = get_preferences()
         prefs["_push_token"]    = push_token
@@ -259,7 +257,7 @@ def save_push_token(push_token: str, sound_channel: str = "classic_alarm") -> No
     except Exception as exc:
         log.warning("save_push_token: disk write failed: %s", exc)
     if changed:
-        print(f"DEBUG: Push token saved (memory + disk): {push_token[:20]}...", flush=True)
+        log.info("Token registered %s", _tid(push_token))
 
 
 def get_saved_push_token() -> tuple[str, str]:
@@ -618,11 +616,10 @@ def fetch_game_summary_roster(game_id: str) -> dict:
 
         if cached:
             teams_out.append(cached)
-            log.info("Cache hit: %s (%d players)", cached["abbreviation"], len(cached["players"]))
             continue
 
         # Cache miss — live fetch and populate cache for next time
-        log.warning("Cache miss for team %s; fetching live.", team_id)
+        log.warning("Roster cache miss for team %s – fetching live.", team_id)
         try:
             r = requests.get(f"{ESPN_TEAMS_URL}/{team_id}/roster", timeout=10)
             r.raise_for_status()
@@ -648,11 +645,9 @@ def fetch_game_summary_roster(game_id: str) -> dict:
             with _CACHE_LOCK:
                 _ROSTER_CACHE[team_id] = entry
             teams_out.append(entry)
-            print(f"Successfully cached {len(players)} players for {entry['abbreviation']} (live fallback)", flush=True)
         except Exception as exc:
             log.warning("Live fetch for team %s failed: %s", team_id, exc)
 
-    log.info("Game summary returned %d teams for game %s.", len(teams_out), game_id)
     return {"teams": teams_out}
 
 
@@ -676,11 +671,10 @@ def _send_push_notification(
     if not push_token:
         saved_token, saved_channel = get_saved_push_token()
         if saved_token:
-            print(f"DEBUG: push_token empty – using saved ({saved_token[:20]}...)", flush=True)
             push_token    = saved_token
             sound_channel = saved_channel
         else:
-            log.warning("No push token – skipping notification.")
+            log.warning("FCM: no push token available – notification dropped.")
             return
 
     if not _firebase_ready:
@@ -790,28 +784,27 @@ def start_monitoring_job(
 
         # Game is now live (or imminent) – flip status so UI shows "WATCHING"
         _update_alarm_status(game_id, "live")
-        log.info("Active game monitoring started. Checking every %ds.", POLL_INTERVAL)
+        log.info("GAME WATCH  start | %s | diff≤%d from Q%d", game_name, max_diff, start_quarter)
 
         while True:
             event = _fetch_nba_game(game_id)
             if event is None:
-                log.warning("Fetch failed. Retrying in %ds.", POLL_INTERVAL)
+                log.warning("ESPN fetch failed for %s – retrying in %ds.", game_name, POLL_INTERVAL)
                 stop_event.wait(timeout=POLL_INTERVAL)
                 if stop_event.is_set():
-                    log.info("Game alarm for %s was cancelled.", game_name)
+                    log.info("GAME WATCH  cancel | %s", game_name)
                     return
                 continue
 
-            quarter, diff, detail = _parse_nba_state(event)
-            log.info("Poll | Q%s | diff=%d | %s", quarter, diff, detail)
+            quarter, diff, _ = _parse_nba_state(event)
 
             if quarter == 9:
-                log.info("Game FINAL. Alarm not triggered. Stopping.")
+                log.info("GAME WATCH  final  | %s | alarm not triggered", game_name)
                 _deactivate_db_alarm_for(game_id)
                 return
 
             if quarter >= start_quarter and diff <= max_diff:
-                log.info("ALARM TRIGGERED | Q%d | diff=%d pts", quarter, diff)
+                log.info("GAME ALARM  fire   | %s | Q%d diff=%d", game_name, quarter, diff)
                 _send_push_notification(
                     push_token=push_token,
                     title="Smart Alarm! It's Getting Dramatic!",
@@ -822,13 +815,9 @@ def start_monitoring_job(
                 _deactivate_db_alarm_for(game_id)
                 return
 
-            log.info(
-                "Game: %s | Q%d | diff=%d pts | Waiting for Q>=%d and diff<=%d. No alarm. Next check in %ds.",
-                game_name, quarter, diff, start_quarter, max_diff, POLL_INTERVAL,
-            )
             stop_event.wait(timeout=POLL_INTERVAL)
             if stop_event.is_set():
-                log.info("Game alarm for %s was cancelled.", game_name)
+                log.info("GAME WATCH  cancel | %s", game_name)
                 return
 
     finally:
@@ -858,9 +847,9 @@ def start_player_monitoring_job(
     alert_type: str = "alarm",
 ) -> None:
     log.info(
-        "START player monitoring | player=%s | game=%s | condition=%s | threshold=%d%s",
+        "PLAYER WATCH start | %s | %s | %s threshold=%d%s",
         player_name, game_name, condition, pts_threshold,
-        " | TEST MODE" if test_mode else "",
+        " [TEST]" if test_mode else "",
     )
 
     # ── Test mode: skip live game entirely, fire immediately with mock stats ──
@@ -872,32 +861,22 @@ def start_player_monitoring_job(
         ast = int(stats["AST"])
         stl = int(stats["STL"])
         blk = int(stats["BLK"])
-        log.info(
-            "[TEST] Mock stats | %s | PTS=%d REB=%d AST=%d STL=%d BLK=%d | Q%d",
-            player_name, pts, reb, ast, stl, blk, quarter,
-        )
-
         triggered  = False
         notif_body = ""
 
         if condition == "pts_goal" and pts >= pts_threshold:
             triggered  = True
             notif_body = f"[TEST] {player_name} has scored {pts} points in {game_name}!"
-
         elif condition == "pts_early" and pts >= pts_threshold:
             triggered  = True
             notif_body = f"[TEST] {player_name} already has {pts} pts in Q{quarter} — on fire early!"
-
         elif condition == "triple_double" and _check_triple_double(pts, reb, ast, stl, blk):
             hot        = [c for c, v in zip(["PTS","REB","AST","STL","BLK"], [pts,reb,ast,stl,blk]) if v >= 9]
             triggered  = True
-            notif_body = (
-                f"[TEST] {player_name}: {' / '.join(hot)}\n"
-                f"Approaching a stat-stuffing game in {game_name}!"
-            )
+            notif_body = f"[TEST] {player_name}: {' / '.join(hot)} in {game_name}!"
 
         if triggered:
-            log.info("[TEST] ALARM TRIGGERED | %s", notif_body)
+            log.info("PLAYER ALARM fire   | [TEST] %s", notif_body)
             _send_push_notification(
                 push_token=push_token,
                 title="[TEST] Player Alert!",
@@ -906,7 +885,7 @@ def start_player_monitoring_job(
                 alert_type=alert_type,
             )
         else:
-            log.info("[TEST] Condition '%s' not met with mock stats – no notification sent.", condition)
+            log.info("PLAYER WATCH [TEST] | %s | condition '%s' not met with mock stats", player_name, condition)
         return
 
     # ── Live mode ─────────────────────────────────────────────────────────────
@@ -922,38 +901,34 @@ def start_player_monitoring_job(
 
         # Game is now live (or imminent) – flip status so UI shows "WATCHING"
         _update_player_alarm_status(player_id, condition, "live")
-        log.info("Active player monitoring started. Checking every %ds.", POLL_INTERVAL)
+        log.info("PLAYER WATCH live   | %s | %s | threshold=%d", player_name, game_name, pts_threshold)
 
         while True:
             event = _fetch_nba_game(game_id)
             if event is None:
-                log.warning("Game fetch failed. Retrying in %ds.", POLL_INTERVAL)
+                log.warning("ESPN fetch failed for %s – retrying in %ds.", game_name, POLL_INTERVAL)
                 stop_event.wait(timeout=POLL_INTERVAL)
                 if stop_event.is_set():
-                    log.info("Player alarm for %s was cancelled.", player_name)
+                    log.info("PLAYER WATCH cancel | %s | %s", player_name, condition)
                     return
                 continue
 
             quarter, _, _ = _parse_nba_state(event)
 
             if quarter == 9:
-                log.info("Game FINAL. Player alarm not triggered. Stopping.")
+                log.info("PLAYER WATCH final  | %s | alarm not triggered", player_name)
                 _deactivate_db_alarm_for(player_id)
                 return
 
             if condition == "pts_early" and quarter >= quarter_deadline:
-                log.info(
-                    "Q%d reached – %s didn't hit %d pts before Q%d. Stopping.",
-                    quarter, player_name, pts_threshold, quarter_deadline,
-                )
+                log.info("PLAYER WATCH expire | %s | Q%d deadline passed", player_name, quarter_deadline)
                 return
 
             stats = _fetch_player_stats(game_id, player_id)
             if stats is None:
-                log.warning("Player stats unavailable. Retrying in %ds.", POLL_INTERVAL)
                 stop_event.wait(timeout=POLL_INTERVAL)
                 if stop_event.is_set():
-                    log.info("Player alarm for %s was cancelled.", player_name)
+                    log.info("PLAYER WATCH cancel | %s | %s", player_name, condition)
                     return
                 continue
 
@@ -962,10 +937,6 @@ def start_player_monitoring_job(
             ast = int(stats.get("AST", 0) or 0)
             stl = int(stats.get("STL", 0) or 0)
             blk = int(stats.get("BLK", 0) or 0)
-            log.info(
-                "Player stats | %s | PTS=%d REB=%d AST=%d STL=%d BLK=%d | Q%d",
-                player_name, pts, reb, ast, stl, blk, quarter,
-            )
 
             triggered  = False
             notif_body = ""
@@ -973,21 +944,16 @@ def start_player_monitoring_job(
             if condition == "pts_goal" and pts >= pts_threshold:
                 triggered  = True
                 notif_body = f"{player_name} has scored {pts} points in {game_name}!"
-
             elif condition == "pts_early" and pts >= pts_threshold:
                 triggered  = True
                 notif_body = f"{player_name} already has {pts} pts in Q{quarter} — on fire early!"
-
             elif condition == "triple_double" and _check_triple_double(pts, reb, ast, stl, blk):
                 hot        = [f"{n} {v}" for n, v in zip(["PTS","REB","AST","STL","BLK"], [pts,reb,ast,stl,blk]) if v >= 9]
                 triggered  = True
-                notif_body = (
-                    f"{player_name}: {' / '.join(hot)}\n"
-                    f"Approaching a stat-stuffing game in {game_name}!"
-                )
+                notif_body = f"{player_name}: {' / '.join(hot)} in {game_name}!"
 
             if triggered:
-                log.info("PLAYER ALARM TRIGGERED | %s", notif_body)
+                log.info("PLAYER ALARM fire   | %s", notif_body)
                 _send_push_notification(
                     push_token=push_token,
                     title="Player Alert!",
@@ -998,10 +964,9 @@ def start_player_monitoring_job(
                 _deactivate_db_alarm_for(player_id)
                 return
 
-            log.info("No trigger yet. Next check in %ds.", POLL_INTERVAL)
             stop_event.wait(timeout=POLL_INTERVAL)
             if stop_event.is_set():
-                log.info("Player alarm for %s was cancelled.", player_name)
+                log.info("PLAYER WATCH cancel | %s | %s", player_name, condition)
                 return
 
     finally:
@@ -1022,17 +987,11 @@ def get_radar_status() -> bool:
 
 def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
     """Single radar scan – called once per poll cycle."""
-    print("--- STARTING RADAR TICK ---", flush=True)
-    radar_cfg       = prefs.get("GlobalGameRadar", {})
+    radar_cfg        = prefs.get("GlobalGameRadar", {})
     radar_alert_type = radar_cfg.get("alert_type", "silent")
-    fav_teams       = {t["team_id"]: t for t in prefs.get("FavoriteTeams", [])}
-    fav_players     = prefs.get("FavoritePlayers", {})   # {player_id: {name, threshold, alert_type}}
-    global_thresh   = prefs.get("GlobalThresholds", {})
-    if not fav_players:
-        print("DEBUG: Radar is ticking – no favorite players configured.", flush=True)
-    else:
-        print(f"DEBUG: Radar watching {len(fav_players)} favorite player(s): {[v.get('name','?') for v in fav_players.values()]}", flush=True)
-    hist_cfg        = prefs.get("HistoricalMode", {})
+    fav_teams        = {t["team_id"]: t for t in prefs.get("FavoriteTeams", [])}
+    fav_players      = prefs.get("FavoritePlayers", {})
+    hist_cfg         = prefs.get("HistoricalMode", {})
     hist_enabled    = hist_cfg.get("enabled", False)
     hist_alert_type = hist_cfg.get("alert_type", "silent")
     hist_cats       = hist_cfg.get("categories", {})
@@ -1080,6 +1039,7 @@ def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
                 if quarter >= start_q and diff <= max_d:
                     label = "Favorite Team Alert!" if "team_name" in criteria else "NBA Radar – Close Game!"
                     if _fire_once(f"{game_id}_game"):
+                        log.info("RADAR ALARM  fire   | %s | Q%d diff=%d | %s", game_name, quarter, diff, label)
                         _send_push_notification(
                             push_token=push_token,
                             title=label,
@@ -1134,8 +1094,8 @@ def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
                         if total_pts_thr is not None:
                             total_pts_thr = int(total_pts_thr)
                             if pts >= total_pts_thr:
-                                print(f"Checking {player_name}: {pts} pts >= total_pts {total_pts_thr}. FIRING!", flush=True)
                                 if _fire_once(f"{game_id}_{player_id}_total_pts"):
+                                    log.info("RADAR ALARM  fire   | %s | %d pts in %s", player_name, pts, game_name)
                                     _send_push_notification(
                                         push_token=push_token,
                                         title="Scoring Alert!",
@@ -1143,8 +1103,6 @@ def _run_radar_tick(push_token: str, sound_channel: str, prefs: dict) -> None:
                                         sound_channel=sound_channel,
                                         alert_type=p_alert_type,
                                     )
-                            else:
-                                print(f"Checking {player_name}: {pts} pts / total_pts {total_pts_thr}. No alarm.", flush=True)
 
                         # Early Points (fires when threshold is hit at or before the deadline quarter)
                         if early_pts_q is not None and early_pts is not None:
