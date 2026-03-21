@@ -472,6 +472,33 @@ async def _alarm_poller() -> None:
 
 # ── App Lifespan ───────────────────────────────────────────────────────────────
 
+def _find_token_from_db() -> str:
+    """
+    Fallback: if the JSON push token is missing or doesn't match any DB records,
+    scan the DB tables for any token that has favorites configured and return it.
+    This handles the case where Railway wiped the ephemeral JSON file and the
+    cached token no longer matches the token used to register favorites.
+    """
+    if engine is None:
+        return ""
+    try:
+        with Session(engine) as session:
+            # Prefer a token that has favorite teams or players
+            row = session.query(FavoriteTeamDB).first()
+            if row:
+                return row.user_token
+            row = session.query(FavoritePlayerDB).first()
+            if row:
+                return row.user_token
+            # Fall back to any token registered in user_preferences
+            pref = session.query(UserPreferenceDB).first()
+            if pref:
+                return pref.user_token
+    except Exception as exc:
+        print(f"DB: _find_token_from_db failed – {exc}", flush=True)
+    return ""
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # ── Startup ──
@@ -481,6 +508,25 @@ async def lifespan(_app: FastAPI):
     token, channel = get_saved_push_token()
     if token:
         _restore_prefs_from_db(token)   # rebuild JSON cache from PostgreSQL
+        # If restore found nothing (token mismatch after ephemeral FS wipe),
+        # try to find the correct token directly from the DB.
+        from monitor import get_preferences as _gp
+        prefs = _gp()
+        if not prefs.get("FavoriteTeams") and not prefs.get("FavoritePlayers"):
+            fallback_token = _find_token_from_db()
+            if fallback_token and fallback_token != token:
+                print(f"STARTUP: token mismatch – retrying restore with DB token ...{fallback_token[-10:]}", flush=True)
+                save_push_token(fallback_token, channel)
+                token = fallback_token
+                _restore_prefs_from_db(token)
+    else:
+        # No token in JSON at all — scan DB for any registered token
+        token = _find_token_from_db()
+        if token:
+            print(f"STARTUP: no JSON token – found token from DB ...{token[-10:]}", flush=True)
+            save_push_token(token, channel)
+            _restore_prefs_from_db(token)
+    if token:
         threading.Thread(target=start_radar_job, args=(token, channel), daemon=True).start()
     # Start the async DB poller
     poller_task = asyncio.create_task(_alarm_poller())
