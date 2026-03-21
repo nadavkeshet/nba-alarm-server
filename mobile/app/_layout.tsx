@@ -84,8 +84,12 @@ export default function RootLayout() {
 
     // Foreground + background state notification events (single handler — Notifee allows only one)
     const unsub = notifee.onForegroundEvent(async ({ type, detail }) => {
-      // User tapped the notification body → celebrate + stop alarm
+      // User tapped the notification body → celebrate + stop alarm.
+      // Call stopAlarmSound directly (NativeModules always available in foreground)
+      // in addition to triggerStop() to cover the race where index.tsx hasn't
+      // registered its stop handler yet (e.g. app just opened via notification tap).
       if (type === EventType.PRESS && detail.notification?.data?.alert_type === 'alarm') {
+        NativeModules.AlarmChannel?.stopAlarmSound();
         triggerStop();
         await notifee.cancelAllNotifications();
         fireConfetti();
@@ -98,6 +102,7 @@ export default function RootLayout() {
       }
       // User tapped DISMISS → stop sound + cancel notification
       if (type === EventType.ACTION_PRESS && detail.pressAction?.id === 'dismiss') {
+        NativeModules.AlarmChannel?.stopAlarmSound();
         triggerStop();
         await notifee.cancelAllNotifications();
       }

@@ -63,7 +63,6 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
           category:         AndroidCategory.ALARM,
           visibility:       AndroidVisibility.PUBLIC,
           pressAction:      { id: 'default' },
-          fullScreenAction: { id: 'default' },
           actions:          [{ title: 'DISMISS', pressAction: { id: 'dismiss' } }],
         },
       });
