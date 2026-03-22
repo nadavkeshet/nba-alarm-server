@@ -578,7 +578,11 @@ export default function ActiveScreen() {
                   <View style={{ flex: 1 }}>
                     <Text style={styles.favName}>{p.name}</Text>
                     <Text style={styles.rowSub}>
-                      {p.total_pts} pts · Early {p.early_pts}+ pts by Q{p.early_pts_q}{p.td_watch ? ' · TD watch' : ''}
+                      {[
+                        p.total_pts != null && `${p.total_pts} pts`,
+                        p.early_pts != null && p.early_pts_q != null && `Early ${p.early_pts}+ pts by Q${p.early_pts_q}`,
+                        p.td_watch && 'TD watch',
+                      ].filter(Boolean).join(' · ')}
                     </Text>
                   </View>
                 </View>
