@@ -9,7 +9,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
-  AppState,
   FlatList,
   Image,
   LayoutAnimation,
@@ -348,20 +347,6 @@ export default function HomeScreen() {
 
     fetchGames();
 
-    // FSI fix: when FSI brings the app to foreground the onMessage event has
-    // already passed. AppState catches every foreground transition and checks
-    // for a displayed alarm notification — covers cold-start and resume.
-    const checkAlarmOnForeground = () => {
-      notifee.getDisplayedNotifications().then(displayed => {
-        const alarm = displayed.find(n => n.notification?.data?.alert_type === 'alarm');
-        if (alarm) playAlarmSound();
-      });
-    };
-    checkAlarmOnForeground();
-    const appStateSub = AppState.addEventListener('change', state => {
-      if (state === 'active') checkAlarmOnForeground();
-    });
-
     // Foreground: FCM data message arrives while app is open → display via Notifee
     const unsubMessage = messaging().onMessage(async remoteMessage => {
       const data = remoteMessage.data ?? {};
@@ -405,7 +390,6 @@ export default function HomeScreen() {
 
     return () => {
       unsubMessage();
-      appStateSub.remove();
       clearInterval(refreshInterval);
       if (retryIntervalRef.current) clearInterval(retryIntervalRef.current);
     };
