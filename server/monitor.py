@@ -1354,15 +1354,25 @@ def start_radar_job() -> None:
 # Games list  (for /games endpoint)
 # ---------------------------------------------------------------------------
 
+_games_cache: list[dict] = []
+_games_cache_time: float = 0.0
+_GAMES_CACHE_TTL: int = 60  # seconds
+
 def get_today_games() -> list[dict]:
-    """Return today's NBA games from ESPN (US Eastern date)."""
+    """Return today's NBA games from ESPN (US Eastern date), cached for 60 s."""
+    global _games_cache, _games_cache_time
+    now = time.time()
+    if _games_cache and now - _games_cache_time < _GAMES_CACHE_TTL:
+        return _games_cache
     try:
         eastern_date = (datetime.now(timezone.utc) - timedelta(hours=5)).strftime("%Y%m%d")
         resp = requests.get(f"{ESPN_NBA_URL}?dates={eastern_date}", timeout=10)
         resp.raise_for_status()
         events = resp.json().get("events", [])
         log.info("NBA: %d games fetched for %s", len(events), eastern_date)
+        _games_cache = events
+        _games_cache_time = now
         return events
     except Exception as exc:
         log.warning("NBA games fetch failed: %s", exc)
-        return []
+        return _games_cache  # return stale cache on error rather than empty list

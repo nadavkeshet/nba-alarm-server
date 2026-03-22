@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Animated,
   FlatList,
+  RefreshControl,
   Image,
   LayoutAnimation,
   Modal,
@@ -218,8 +219,10 @@ async function sendTokenToServer(token: string): Promise<boolean> {
 
 export default function HomeScreen() {
   // ── Games state ───────────────────────────────────────────────────
-  const [games, setGames]     = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [games, setGames]       = useState<any[]>([]);
+  const [loading, setLoading]   = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
   const [expoPushToken, setExpoPushToken] = useState('');
 
   // ── Favorites state ───────────────────────────────────────────────
@@ -281,18 +284,28 @@ export default function HomeScreen() {
   // ── Fetch games ──────────────────────────────────────────────────
   const fetchGames = async (silent = false) => {
     if (!silent) setLoading(true);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
     try {
-      const resp = await fetch(`${SERVER_URL}/games`);
+      const resp = await fetch(`${SERVER_URL}/games`, { signal: controller.signal });
       if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
       const data = await resp.json();
       if (!silent) LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setGames(data.games || []);
+      setFetchError(false);
     } catch (error) {
       console.error('Games fetch error:', error);
-      if (!silent) setGames([]);
+      if (!silent) setFetchError(true);
     } finally {
+      clearTimeout(timer);
       if (!silent) setLoading(false);
     }
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await fetchGames(false);
+    setRefreshing(false);
   };
 
   // ── Load roster ──────────────────────────────────────────────────
@@ -570,6 +583,15 @@ export default function HomeScreen() {
         <ScrollView contentContainerStyle={{ paddingBottom: 24 }}>
           {[0, 1, 2, 3].map(i => <SkeletonGameCard key={i} />)}
         </ScrollView>
+      ) : fetchError && games.length === 0 ? (
+        <View style={styles.centeredMessage}>
+          <Ionicons name="wifi-outline" size={56} color="#30363d" style={{ marginBottom: 16 }} />
+          <Text style={styles.emptyTitle}>Connection Error</Text>
+          <Text style={styles.emptyText}>Could not reach the server.</Text>
+          <TouchableOpacity style={styles.retryBtn} onPress={() => fetchGames()}>
+            <Text style={styles.retryBtnText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
       ) : games.length === 0 ? (
         <View style={styles.centeredMessage}>
           <Ionicons name="basketball-outline" size={56} color="#30363d" style={{ marginBottom: 16 }} />
@@ -588,6 +610,7 @@ export default function HomeScreen() {
             />
           )}
           contentContainerStyle={{ paddingBottom: 24 }}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#4d8cf5" />}
         />
       )}
 
@@ -886,6 +909,8 @@ const styles = StyleSheet.create({
   centeredMessage: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   emptyTitle: { fontSize: 16, fontWeight: '700', color: C.textMuted, marginBottom: 6 },
   emptyText:  { fontSize: 13, color: C.textMuted, textAlign: 'center', paddingHorizontal: 32 },
+  retryBtn:     { marginTop: 20, paddingHorizontal: 28, paddingVertical: 10, borderRadius: 10, backgroundColor: 'rgba(77,140,245,0.15)', borderWidth: 1, borderColor: C.accentBlue },
+  retryBtnText: { color: C.accentBlue, fontWeight: '700', fontSize: 14 },
 
   gameCard: {
     backgroundColor: C.card, borderRadius: 16,
