@@ -11,7 +11,14 @@ const { withDangerousMod } = require('@expo/config-plugins');
 const fs   = require('fs');
 const path = require('path');
 
-const SOUNDS = ['classic_alarm.wav'];
+const SOUNDS = [
+  'classic_alarm.wav',
+  'musical1.wav',
+  'musical2.wav',
+  'buzzer.wav',
+  'dreamscape.wav',
+  'morningjoy.wav',
+];
 
 module.exports = function withSoundFiles(config) {
   return withDangerousMod(config, [

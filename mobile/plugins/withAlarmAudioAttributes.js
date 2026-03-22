@@ -86,7 +86,7 @@ class AlarmChannelModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun startAlarmSound() {
+    fun startAlarmSound(soundFileName: String) {
         stopPlayer()
         val ctx = reactApplicationContext
 
@@ -100,7 +100,7 @@ class AlarmChannelModule(reactContext: ReactApplicationContext) :
         } catch (_: Exception) {}
 
         val soundUri = Uri.parse(
-            "android.resource://\${ctx.packageName}/raw/classic_alarm"
+            "android.resource://\${ctx.packageName}/raw/\$soundFileName"
         )
         val audioAttr = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_ALARM)
