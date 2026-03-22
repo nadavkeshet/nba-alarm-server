@@ -93,7 +93,8 @@ export default function RootLayout() {
       }
       // Trigger notification delivered while app is in foreground → start alarm sound
       if (type === EventType.DELIVERED && detail.notification?.data?.alert_type === 'alarm') {
-        NativeModules.AlarmChannel?.startAlarmSound();
+        const savedSound = (await AsyncStorage.getItem('nba_alarm_sound').catch(() => null)) ?? 'classic_alarm';
+        NativeModules.AlarmChannel?.startAlarmSound(savedSound);
         return;
       }
       // User tapped DISMISS → stop sound + cancel notification

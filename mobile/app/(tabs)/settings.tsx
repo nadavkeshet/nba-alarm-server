@@ -2,12 +2,15 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useFocusEffect } from '@react-navigation/native';
 import messaging from '@react-native-firebase/messaging';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import notifee, { AndroidImportance, AndroidVisibility } from '@notifee/react-native';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
   Linking,
   Modal,
+  NativeModules,
   ScrollView,
   StyleSheet,
   Text,
@@ -20,6 +23,19 @@ import { BasketballToggle } from '../../components/basketball-toggle';
 import { NumericKeypad, useNumericKeypad } from '../../components/numeric-keypad';
 import { WelcomeGuide } from '../../components/welcome-guide';
 import { SERVER_URL } from '../../config';
+
+// ─── Sound definitions ────────────────────────────────────────────────────────
+
+const ALARM_SOUNDS = [
+  { id: 'classic_alarm', label: 'Classic Alarm' },
+  { id: 'musical1',      label: 'Musical 1'     },
+  { id: 'musical2',      label: 'Musical 2'     },
+  { id: 'buzzer',        label: 'Buzzer'         },
+  { id: 'dreamscape',    label: 'Dreamscape'     },
+  { id: 'morningjoy',    label: 'Morning Joy'    },
+] as const;
+
+const SOUND_KEY = 'nba_alarm_sound';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -91,6 +107,11 @@ export default function SettingsScreen() {
   const [savedId, setSavedId]           = useState<string | null>(null);
   const [guideVisible, setGuideVisible] = useState(false);
   const [infoModal, setInfoModal] = useState<{ visible: boolean; title: string; message: string }>({ visible: false, title: '', message: '' });
+
+  // ── Sound picker state ─────────────────────────────────────────────
+  const [savedSound,     setSavedSound]     = useState('classic_alarm');
+  const [pendingSound,   setPendingSound]   = useState('classic_alarm');
+  const [previewingSound, setPreviewingSound] = useState<string | null>(null);
   const showInfo = (title: string, message: string) => setInfoModal({ visible: true, title, message });
   const hideInfo = () => setInfoModal(prev => ({ ...prev, visible: false }));
   const [allTeams, setAllTeams]         = useState<CachedTeam[]>([]);
@@ -142,6 +163,15 @@ export default function SettingsScreen() {
       .then(t => setUserToken(t))
       .catch(() => {})
       .finally(() => setTokenLoaded(true));
+  }, []);
+
+  // ── Load saved sound once on mount ─────────────────────────────────
+  useEffect(() => {
+    AsyncStorage.getItem(SOUND_KEY).then(s => {
+      const v = s ?? 'classic_alarm';
+      setSavedSound(v);
+      setPendingSound(v);
+    });
   }, []);
 
   // ── Load teams once on mount (roster is static — no need to re-fetch on focus) ─
@@ -212,13 +242,54 @@ export default function SettingsScreen() {
   useEffect(() => { if (tokenLoaded) loadSettings(); }, [loadSettings, tokenLoaded]);
 
   useFocusEffect(
-    useCallback(() => { loadSettings(); }, [loadSettings]),
+    useCallback(() => {
+      loadSettings();
+      return () => {
+        NativeModules.AlarmChannel?.stopAlarmSound();
+        setPreviewingSound(null);
+      };
+    }, [loadSettings]),
   );
 
   const flashSaved = useCallback((id: string) => {
     setSavedId(id);
     setTimeout(() => setSavedId(prev => prev === id ? null : prev), 1500);
   }, []);
+
+  // ── Sound picker handlers ──────────────────────────────────────────
+
+  const handlePreview = (id: string) => {
+    if (previewingSound === id) {
+      NativeModules.AlarmChannel?.stopAlarmSound();
+      setPreviewingSound(null);
+    } else {
+      NativeModules.AlarmChannel?.stopAlarmSound();
+      NativeModules.AlarmChannel?.startAlarmSound(id);
+      setPreviewingSound(id);
+      setPendingSound(id);
+    }
+  };
+
+  const saveAlarmSound = async () => {
+    NativeModules.AlarmChannel?.stopAlarmSound();
+    setPreviewingSound(null);
+    await AsyncStorage.setItem(SOUND_KEY, pendingSound);
+    setSavedSound(pendingSound);
+    // Recreate notification channel with the new sound
+    await notifee.deleteChannel('classic_alarm').catch(() => {});
+    await notifee.createChannel({
+      id:         'classic_alarm',
+      name:       'Classic Alarm',
+      sound:      pendingSound,
+      importance: AndroidImportance.HIGH,
+      bypassDnd:  true,
+      visibility: AndroidVisibility.PUBLIC,
+      vibration:  true,
+    });
+    NativeModules.AlarmChannel?.patchChannel('classic_alarm', pendingSound);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    flashSaved('sound');
+  };
 
   // Guard used by every mutation: returns true only when the FCM token is
   // resolved.  Prevents creating DB rows under an empty user_token if the
@@ -812,6 +883,47 @@ export default function SettingsScreen() {
           )}
         </View>
 
+        {/* ═══════════════════════════════════════════════════════════════
+            ALARM SOUND
+        ═══════════════════════════════════════════════════════════════ */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>ALARM SOUND</Text>
+          <Text style={styles.sectionDesc}>
+            Tap a sound to preview it. Select one and press Save.
+          </Text>
+
+          {ALARM_SOUNDS.map(s => (
+            <TouchableOpacity
+              key={s.id}
+              style={[styles.soundRow, pendingSound === s.id && styles.soundRowSelected]}
+              onPress={() => handlePreview(s.id)}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name={previewingSound === s.id ? 'stop-circle' : 'play-circle-outline'}
+                size={26}
+                color={pendingSound === s.id ? C.orange : C.textMuted}
+              />
+              <Text style={[styles.soundLabel, pendingSound === s.id && styles.soundLabelSelected]}>
+                {s.label}
+              </Text>
+              {savedSound === s.id && (
+                <Ionicons name="checkmark-circle" size={20} color={C.liveGreen} />
+              )}
+            </TouchableOpacity>
+          ))}
+
+          <TouchableOpacity
+            style={[styles.updateBtn, { marginTop: 12 }]}
+            onPress={saveAlarmSound}
+            disabled={saving}
+          >
+            <Text style={[styles.updateBtnText, savedId === 'sound' && styles.savedBtnText]}>
+              {savedId === 'sound' ? 'Saved ✓' : 'Save Sound'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
         {/* ── App Guide button ──────────────────────────────────────── */}
         <TouchableOpacity
           style={styles.guideBtn}
@@ -1298,6 +1410,16 @@ const styles = StyleSheet.create({
 
   statusDot: { width: 10, height: 10, borderRadius: 5 },
   emptyHint: { color: C.textMuted, fontSize: 13, fontStyle: 'italic', paddingVertical: 6 },
+
+  // Sound picker
+  soundRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingVertical: 11, paddingHorizontal: 6,
+    borderBottomWidth: 1, borderColor: C.border,
+  },
+  soundRowSelected: { backgroundColor: 'rgba(255,107,0,0.07)', borderRadius: 8, borderBottomWidth: 0 },
+  soundLabel:         { flex: 1, fontSize: 15, color: C.textMuted, fontWeight: '600' },
+  soundLabelSelected: { color: C.textPrimary },
 
   // ── Modal ──────────────────────────────────────────────────────────────
 

@@ -166,13 +166,14 @@ function GameCard({
 async function setupNotifee(): Promise<string | undefined> {
   try {
     if (Platform.OS === 'android') {
+      const savedSound = (await AsyncStorage.getItem('nba_alarm_sound').catch(() => null)) ?? 'classic_alarm';
       // Notifee creates the base channel, then the native module overwrites it
       // with AudioAttributes.USAGE_ALARM so the sound plays even in vibrate mode.
       await notifee.deleteChannel(ALARM_CHANNEL).catch(() => {});
       await notifee.createChannel({
         id:         ALARM_CHANNEL,
         name:       'Classic Alarm',
-        sound:      'classic_alarm',
+        sound:      savedSound,
         importance: AndroidImportance.HIGH,
         bypassDnd:  true,
         visibility: AndroidVisibility.PUBLIC,
@@ -180,7 +181,7 @@ async function setupNotifee(): Promise<string | undefined> {
         vibrationPattern: [100, 300, 200, 400],
       });
       // Patch channel to use STREAM_ALARM — bypasses vibrate/ringer-off mode
-      NativeModules.AlarmChannel?.patchChannel(ALARM_CHANNEL, 'classic_alarm');
+      NativeModules.AlarmChannel?.patchChannel(ALARM_CHANNEL, savedSound);
     }
 
     const permission = await notifee.requestPermission();
@@ -326,8 +327,9 @@ export default function HomeScreen() {
   };
 
   // ── Alarm audio helpers (native MediaPlayer via AlarmChannelModule) ──
-  const playAlarmSound = () => {
-    NativeModules.AlarmChannel?.startAlarmSound();
+  const playAlarmSound = async () => {
+    const sound = (await AsyncStorage.getItem('nba_alarm_sound').catch(() => null)) ?? 'classic_alarm';
+    NativeModules.AlarmChannel?.startAlarmSound(sound);
   };
 
   const stopAlarmSound = () => {
@@ -364,13 +366,14 @@ export default function HomeScreen() {
     const unsubMessage = messaging().onMessage(async remoteMessage => {
       const data = remoteMessage.data ?? {};
       if (data.alert_type === 'alarm') {
+        const savedSound = (await AsyncStorage.getItem('nba_alarm_sound').catch(() => null)) ?? 'classic_alarm';
         await notifee.displayNotification({
           title: String(data.title ?? 'NBA Alarm'),
           body:  String(data.body  ?? ''),
           data:  { alert_type: 'alarm' },
           android: {
             channelId:        String(data.channel_id ?? ALARM_CHANNEL),
-            sound:            'classic_alarm',
+            sound:            savedSound,
             importance:       AndroidImportance.HIGH,
             category:         AndroidCategory.ALARM,
             visibility:       AndroidVisibility.PUBLIC,

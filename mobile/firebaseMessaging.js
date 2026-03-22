@@ -27,6 +27,8 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
   const data = remoteMessage.data ?? {};
 
   if (data.alert_type === 'alarm') {
+    const savedSound = (await AsyncStorage.getItem('nba_alarm_sound').catch(() => null)) ?? 'classic_alarm';
+
     // Ensure the alarm channel exists — defensive guard for edge cases where
     // the channel was not yet created (e.g., very first install, race condition).
     // createChannel is idempotent: Android ignores updates to existing channels.
@@ -34,17 +36,14 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
       await notifee.createChannel({
         id:         'classic_alarm',
         name:       'Classic Alarm',
-        sound:      'classic_alarm',
+        sound:      savedSound,
         importance: AndroidImportance.HIGH,
         bypassDnd:  true,
         visibility: AndroidVisibility.PUBLIC,
         vibration:  true,
       });
       // Patch to STREAM_ALARM so sound plays even in vibrate/silent mode.
-      // Must run after createChannel — covers the case where the channel was
-      // freshly recreated (delete+create in index.tsx) but the app was killed
-      // before patchChannel ran in the foreground startup sequence.
-      NativeModules.AlarmChannel?.patchChannel('classic_alarm', 'classic_alarm');
+      NativeModules.AlarmChannel?.patchChannel('classic_alarm', savedSound);
     } catch {}
 
     // Cancel the OS-level notification that FCM showed via the `notification`
@@ -63,7 +62,7 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
         data:  { alert_type: 'alarm' },
         android: {
           channelId:        data.channel_id ?? 'classic_alarm',
-          sound:            'classic_alarm',
+          sound:            savedSound,
           importance:       AndroidImportance.HIGH,
           category:         AndroidCategory.ALARM,
           visibility:       AndroidVisibility.PUBLIC,
@@ -111,7 +110,8 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
   // Notification delivered while app is in background/killed → start alarm sound.
   // NativeModules may not be fully available in killed state — always guard with try-catch.
   if (type === EventType.DELIVERED && detail.notification?.data?.alert_type === 'alarm') {
-    try { NativeModules.AlarmChannel?.startAlarmSound(); } catch {}
+    const savedSound = (await AsyncStorage.getItem('nba_alarm_sound').catch(() => null)) ?? 'classic_alarm';
+    try { NativeModules.AlarmChannel?.startAlarmSound(savedSound); } catch {}
     return;
   }
   // User tapped notification body → stop sound, set confetti flag, cancel notification
