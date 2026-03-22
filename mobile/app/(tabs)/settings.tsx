@@ -286,7 +286,7 @@ export default function SettingsScreen() {
       visibility: AndroidVisibility.PUBLIC,
       vibration:  true,
     });
-    NativeModules.AlarmChannel?.patchChannel('classic_alarm', pendingSound);
+    await NativeModules.AlarmChannel?.patchChannel('classic_alarm', pendingSound);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     flashSaved('sound');
   };

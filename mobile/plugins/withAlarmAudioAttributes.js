@@ -26,6 +26,7 @@ import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
+import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
@@ -54,8 +55,8 @@ class AlarmChannelModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun patchChannel(channelId: String, soundFileName: String) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    fun patchChannel(channelId: String, soundFileName: String, promise: Promise) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) { promise.resolve(null); return }
         val ctx = reactApplicationContext
         val nm  = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
@@ -83,6 +84,7 @@ class AlarmChannelModule(reactContext: ReactApplicationContext) :
         }
 
         nm.createNotificationChannel(channel)
+        promise.resolve(null)
     }
 
     @ReactMethod

@@ -71,9 +71,13 @@ export default function RootLayout() {
       } catch {}
     });
 
-    // Killed state: app launched by tapping a notification
+    // Killed state: app launched by tapping a notification.
+    // This is the ONLY event fired for a killed-state notification tap —
+    // neither onForegroundEvent PRESS nor onBackgroundEvent PRESS fires here.
     notifee.getInitialNotification().then(initial => {
       if (initial?.notification?.data?.alert_type === 'alarm') {
+        NativeModules.AlarmChannel?.stopAlarmSound();
+        notifee.cancelAllNotifications().catch(() => {});
         fireConfetti();
       }
     });

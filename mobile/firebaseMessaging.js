@@ -43,7 +43,9 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
         vibration:  true,
       });
       // Patch to STREAM_ALARM so sound plays even in vibrate/silent mode.
-      NativeModules.AlarmChannel?.patchChannel('classic_alarm', savedSound);
+      // Must be awaited — patchChannel deletes+recreates the channel, and
+      // displayNotification below must see the updated channel with the correct sound.
+      await NativeModules.AlarmChannel?.patchChannel('classic_alarm', savedSound);
     } catch {}
 
     // Cancel the OS-level notification that FCM showed via the `notification`

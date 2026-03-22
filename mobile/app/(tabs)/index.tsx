@@ -181,7 +181,7 @@ async function setupNotifee(): Promise<string | undefined> {
         vibrationPattern: [100, 300, 200, 400],
       });
       // Patch channel to use STREAM_ALARM — bypasses vibrate/ringer-off mode
-      NativeModules.AlarmChannel?.patchChannel(ALARM_CHANNEL, savedSound);
+      await NativeModules.AlarmChannel?.patchChannel(ALARM_CHANNEL, savedSound);
     }
 
     const permission = await notifee.requestPermission();
