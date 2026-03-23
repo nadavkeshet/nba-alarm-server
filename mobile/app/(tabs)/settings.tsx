@@ -19,8 +19,8 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import Slider from '@react-native-community/slider';
 import { BasketballToggle } from '../../components/basketball-toggle';
-import { NumericKeypad, useNumericKeypad } from '../../components/numeric-keypad';
 import { WelcomeGuide } from '../../components/welcome-guide';
 import { SERVER_URL } from '../../config';
 
@@ -124,22 +124,19 @@ export default function SettingsScreen() {
   const [radarStartQ, setRadarStartQ]   = useState('4');
 
   // Per-team in-place edit state for existing favorites
-  const [teamEdits, setTeamEdits] = useState<Record<string, { max_diff: string; start_quarter: string; alert_type: string }>>({});
+  const [teamEdits, setTeamEdits] = useState<Record<string, { max_diff: number; start_quarter: string; alert_type: string }>>({});
 
   // ── Add Team Modal state ──────────────────────────────────────────────
   const [teamModalVisible, setTeamModalVisible] = useState(false);
   const [pickedTeam, setPickedTeam]             = useState<CachedTeam | null>(null);
-  const [newTeamMaxDiff, setNewTeamMaxDiff]       = useState('5');
+  const [newTeamMaxDiff, setNewTeamMaxDiff]       = useState(5);
   const [newTeamStartQ, setNewTeamStartQ]         = useState('4');
   const [newTeamAlertType, setNewTeamAlertType]   = useState<'alarm' | 'silent'>('silent');
 
-  // ── Numeric keypad ────────────────────────────────────────────────────
-  const { kpVisible, kpValue, kpLabel, kpMaxLen, openKp, closeKp, onKpChange } = useNumericKeypad();
-
   // Per-player in-place edit state (all 4 conditions + enabled toggles)
   const [playerEdits, setPlayerEdits] = useState<Record<string, {
-    totalPtsEnabled: boolean; total_pts: string;
-    hotStartEnabled: boolean; early_pts_q: string; early_pts: string;
+    totalPtsEnabled: boolean; total_pts: number;
+    hotStartEnabled: boolean; early_pts_q: string; early_pts: number;
     td_watch: boolean; alert_type: string;
   }>>({});
 
@@ -149,10 +146,10 @@ export default function SettingsScreen() {
   const [pickedPlayer, setPickedPlayer]               = useState<CachedPlayer | null>(null);
   // New player config — toggles default OFF; inputs only appear when toggled ON
   const [newTotalPtsEnabled,  setNewTotalPtsEnabled]  = useState(false);
-  const [newTotalPts,         setNewTotalPts]         = useState('40');
+  const [newTotalPts,         setNewTotalPts]         = useState(40);
   const [newHotStartEnabled,  setNewHotStartEnabled]  = useState(false);
   const [newHotStartQ,        setNewHotStartQ]        = useState('1');
-  const [newHotStartPts,      setNewHotStartPts]      = useState('15');
+  const [newHotStartPts,      setNewHotStartPts]      = useState(15);
   const [newTdWatch,          setNewTdWatch]          = useState(false);
   const [newPlayerAlertType, setNewPlayerAlertType]   = useState<'alarm' | 'silent'>('silent');
 
@@ -201,29 +198,29 @@ export default function SettingsScreen() {
 
       setSettings(s);
       setRadarRunning(r.running ?? false);
-      setRadarMaxDiff(String(s.GlobalGameRadar?.max_diff ?? 5));
+      setRadarMaxDiff(s.GlobalGameRadar?.max_diff ?? 5);
       setRadarStartQ(String(s.GlobalGameRadar?.start_quarter ?? 4));
 
       // Init per-team editable fields
-      const edits: Record<string, { max_diff: string; start_quarter: string; alert_type: string }> = {};
+      const edits: Record<string, { max_diff: number; start_quarter: string; alert_type: string }> = {};
       for (const ft of s.FavoriteTeams ?? []) {
-        edits[ft.team_id] = { max_diff: String(ft.max_diff), start_quarter: String(ft.start_quarter), alert_type: ft.alert_type ?? 'silent' };
+        edits[ft.team_id] = { max_diff: ft.max_diff, start_quarter: String(ft.start_quarter), alert_type: ft.alert_type ?? 'silent' };
       }
       setTeamEdits(edits);
 
       // Init per-player editable fields — derive enabled state from null checks
       const pEdits: Record<string, {
-        totalPtsEnabled: boolean; total_pts: string;
-        hotStartEnabled: boolean; early_pts_q: string; early_pts: string;
+        totalPtsEnabled: boolean; total_pts: number;
+        hotStartEnabled: boolean; early_pts_q: string; early_pts: number;
         td_watch: boolean; alert_type: string;
       }> = {};
       for (const [pid, p] of Object.entries(s.FavoritePlayers ?? {})) {
         pEdits[pid] = {
           totalPtsEnabled: p.total_pts     != null,
-          total_pts:       String(p.total_pts     ?? 40),
+          total_pts:       p.total_pts     ?? 40,
           hotStartEnabled: p.early_pts != null && p.early_pts_q != null,
           early_pts_q:     String(p.early_pts_q   ?? 1),
-          early_pts:   String(p.early_pts ?? 15),
+          early_pts:       p.early_pts ?? 15,
           td_watch:        p.td_watch ?? false,
           alert_type:      p.alert_type ?? 'silent',
         };
@@ -357,7 +354,7 @@ export default function SettingsScreen() {
       } : s);
       setTeamEdits(prev => ({
         ...prev,
-        [payload.team_id]: { max_diff: String(payload.max_diff), start_quarter: String(payload.start_quarter), alert_type: payload.alert_type },
+        [payload.team_id]: { max_diff: payload.max_diff, start_quarter: String(payload.start_quarter), alert_type: payload.alert_type },
       }));
     } finally { setSaving(false); }
   };
@@ -377,7 +374,7 @@ export default function SettingsScreen() {
     await saveTeam({
       team_id:       pickedTeam.id,
       team_name:     pickedTeam.name,
-      max_diff:      parseInt(newTeamMaxDiff, 10) || 5,
+      max_diff:      newTeamMaxDiff || 5,
       start_quarter: parseInt(newTeamStartQ, 10) || 4,
       alert_type:    newTeamAlertType,
     });
@@ -386,10 +383,10 @@ export default function SettingsScreen() {
 
   const updateExistingTeam = async (team: FavTeam) => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    const edit = teamEdits[team.team_id] ?? { max_diff: String(team.max_diff), start_quarter: String(team.start_quarter), alert_type: team.alert_type };
+    const edit = teamEdits[team.team_id] ?? { max_diff: team.max_diff, start_quarter: String(team.start_quarter), alert_type: team.alert_type };
     await saveTeam({
       ...team,
-      max_diff:      parseInt(edit.max_diff, 10) || 5,
+      max_diff:      edit.max_diff || 5,
       start_quarter: parseInt(edit.start_quarter, 10) || 4,
       alert_type:    edit.alert_type,
     });
@@ -411,9 +408,9 @@ export default function SettingsScreen() {
       player_id:     pickedPlayer.id,
       name:          pickedPlayer.name,
       // Send null for disabled conditions — server will store as NULL
-      total_pts:     newTotalPtsEnabled  ? (parseInt(newTotalPts,    10) || 40) : null,
-      early_pts_q:   newHotStartEnabled  ? (parseInt(newHotStartQ,   10) || 1)  : null,
-      early_pts: newHotStartEnabled  ? (parseInt(newHotStartPts, 10) || 15) : null,
+      total_pts:     newTotalPtsEnabled  ? (newTotalPts  || 40) : null,
+      early_pts_q:   newHotStartEnabled  ? (parseInt(newHotStartQ, 10) || 1) : null,
+      early_pts:     newHotStartEnabled  ? (newHotStartPts || 15) : null,
       td_watch:      newTdWatch,
       alert_type:    newPlayerAlertType,
     };
@@ -441,10 +438,10 @@ export default function SettingsScreen() {
         ...prev,
         [pickedPlayer.id]: {
           totalPtsEnabled: payload.total_pts    != null,
-          total_pts:       String(payload.total_pts    ?? 40),
+          total_pts:       payload.total_pts    ?? 40,
           hotStartEnabled: payload.early_pts != null,
           early_pts_q:     String(payload.early_pts_q  ?? 1),
-          early_pts:   String(payload.early_pts ?? 15),
+          early_pts:       payload.early_pts ?? 15,
           td_watch:        payload.td_watch,
           alert_type:      newPlayerAlertType,
         },
@@ -462,9 +459,9 @@ export default function SettingsScreen() {
       user_token:    userToken,
       player_id,
       name,
-      total_pts:     edit.totalPtsEnabled  ? (parseInt(edit.total_pts,     10) || 40) : null,
-      early_pts_q:   edit.hotStartEnabled  ? (parseInt(edit.early_pts_q,   10) || 1)  : null,
-      early_pts: edit.hotStartEnabled  ? (parseInt(edit.early_pts, 10) || 15) : null,
+      total_pts:     edit.totalPtsEnabled  ? (edit.total_pts || 40) : null,
+      early_pts_q:   edit.hotStartEnabled  ? (parseInt(edit.early_pts_q, 10) || 1) : null,
+      early_pts:     edit.hotStartEnabled  ? (edit.early_pts || 15) : null,
       td_watch:      edit.td_watch,
       alert_type,
     };
@@ -510,7 +507,7 @@ export default function SettingsScreen() {
 
   const openTeamModal = () => {
     setPickedTeam(null);
-    setNewTeamMaxDiff('5');
+    setNewTeamMaxDiff(5);
     setNewTeamStartQ('4');
     setNewTeamAlertType('silent');
     setTeamModalVisible(true);
@@ -527,10 +524,10 @@ export default function SettingsScreen() {
     setPickedTeamForPlayer(null);
     setPickedPlayer(null);
     setNewTotalPtsEnabled(false);
-    setNewTotalPts('40');
+    setNewTotalPts(40);
     setNewHotStartEnabled(false);
     setNewHotStartQ('1');
-    setNewHotStartPts('15');
+    setNewHotStartPts(15);
     setNewTdWatch(false);
     setNewPlayerAlertType('silent');
   };
@@ -593,13 +590,19 @@ export default function SettingsScreen() {
                     </TouchableOpacity>
                   </View>
 
-                  <Text style={styles.inputLabel}>MAX POINT DIFF</Text>
-                  <TouchableOpacity
-                    style={styles.numDisplay}
-                    onPress={() => openKp(edit.max_diff, v => setTeamEdits(prev => ({ ...prev, [t.team_id]: { ...edit, max_diff: v } })), 'MAX POINT DIFF', 2)}
-                  >
-                    <Text style={styles.numDisplayText}>{edit.max_diff || '—'}</Text>
-                  </TouchableOpacity>
+                  <View style={styles.sliderRow}>
+                    <Text style={styles.inputLabel}>MAX POINT DIFF</Text>
+                    <Text style={styles.sliderValue}>{edit.max_diff}</Text>
+                  </View>
+                  <Slider
+                    style={styles.slider}
+                    minimumValue={1} maximumValue={25} step={1}
+                    value={edit.max_diff}
+                    onValueChange={v => setTeamEdits(prev => ({ ...prev, [t.team_id]: { ...edit, max_diff: v } }))}
+                    minimumTrackTintColor={C.orange}
+                    maximumTrackTintColor={C.border}
+                    thumbTintColor={C.orange}
+                  />
 
                   <Text style={styles.inputLabel}>START MONITORING FROM</Text>
                   <QRow
@@ -653,10 +656,10 @@ export default function SettingsScreen() {
             Object.entries(settings!.FavoritePlayers).map(([pid, p]) => {
               const edit = playerEdits[pid] ?? {
                 totalPtsEnabled: p.total_pts     != null,
-                total_pts:       String(p.total_pts     ?? 40),
+                total_pts:       p.total_pts     ?? 40,
                 hotStartEnabled: p.early_pts != null && p.early_pts_q != null,
                 early_pts_q:     String(p.early_pts_q   ?? 1),
-                early_pts:   String(p.early_pts ?? 15),
+                early_pts:       p.early_pts ?? 15,
                 td_watch:        p.td_watch ?? false,
                 alert_type:      p.alert_type ?? 'silent',
               };
@@ -684,12 +687,21 @@ export default function SettingsScreen() {
                       />
                     </View>
                     {edit.totalPtsEnabled && (
-                      <TouchableOpacity
-                        style={[styles.numDisplay, { marginTop: 10, marginBottom: 0 }]}
-                        onPress={() => openKp(edit.total_pts, v => setEdit({ total_pts: v }), 'POINTS TOTAL', 3)}
-                      >
-                        <Text style={styles.numDisplayText}>{edit.total_pts || '—'}</Text>
-                      </TouchableOpacity>
+                      <>
+                        <View style={[styles.sliderRow, { marginTop: 10 }]}>
+                          <Text style={styles.inputLabel}>POINTS THRESHOLD</Text>
+                          <Text style={styles.sliderValue}>{edit.total_pts}</Text>
+                        </View>
+                        <Slider
+                          style={styles.slider}
+                          minimumValue={1} maximumValue={80} step={1}
+                          value={edit.total_pts}
+                          onValueChange={v => setEdit({ total_pts: v })}
+                          minimumTrackTintColor={C.orange}
+                          maximumTrackTintColor={C.border}
+                          thumbTintColor={C.orange}
+                        />
+                      </>
                     )}
                   </View>
 
@@ -706,13 +718,19 @@ export default function SettingsScreen() {
                     </View>
                     {edit.hotStartEnabled && (
                       <>
-                        <Text style={[styles.inputLabel, { marginTop: 10 }]}>POINTS THRESHOLD</Text>
-                        <TouchableOpacity
-                          style={styles.numDisplay}
-                          onPress={() => openKp(edit.early_pts, v => setEdit({ early_pts: v }), 'EARLY PTS', 3)}
-                        >
-                          <Text style={styles.numDisplayText}>{edit.early_pts || '—'}</Text>
-                        </TouchableOpacity>
+                        <View style={[styles.sliderRow, { marginTop: 10 }]}>
+                          <Text style={styles.inputLabel}>POINTS THRESHOLD</Text>
+                          <Text style={styles.sliderValue}>{edit.early_pts}</Text>
+                        </View>
+                        <Slider
+                          style={styles.slider}
+                          minimumValue={1} maximumValue={80} step={1}
+                          value={edit.early_pts}
+                          onValueChange={v => setEdit({ early_pts: v })}
+                          minimumTrackTintColor={C.orange}
+                          maximumTrackTintColor={C.border}
+                          thumbTintColor={C.orange}
+                        />
                         <Text style={styles.inputLabel}>BY END OF QUARTER</Text>
                         <QRow value={edit.early_pts_q} onChange={q => setEdit({ early_pts_q: q })} quarters={['1', '2', '3']} />
                       </>
@@ -796,19 +814,25 @@ export default function SettingsScreen() {
 
           {radar?.enabled && (
             <>
-              <Text style={styles.inputLabel}>MAX POINT DIFF TO ALERT</Text>
-              <TouchableOpacity
-                style={styles.numDisplay}
-                onPress={() => openKp(radarMaxDiff, setRadarMaxDiff, 'MAX POINT DIFF', 2)}
-              >
-                <Text style={styles.numDisplayText}>{radarMaxDiff || '—'}</Text>
-              </TouchableOpacity>
+              <View style={styles.sliderRow}>
+                <Text style={styles.inputLabel}>MAX POINT DIFF TO ALERT</Text>
+                <Text style={styles.sliderValue}>{radarMaxDiff}</Text>
+              </View>
+              <Slider
+                style={styles.slider}
+                minimumValue={1} maximumValue={25} step={1}
+                value={radarMaxDiff}
+                onValueChange={setRadarMaxDiff}
+                minimumTrackTintColor={C.orange}
+                maximumTrackTintColor={C.border}
+                thumbTintColor={C.orange}
+              />
               <Text style={styles.inputLabel}>START MONITORING FROM</Text>
               <QRow value={radarStartQ} onChange={setRadarStartQ} />
               <TouchableOpacity
                 style={styles.updateBtn}
                 onPress={() => patchGlobalRadar({
-                  max_diff:      parseInt(radarMaxDiff, 10) || 5,
+                  max_diff:      radarMaxDiff || 5,
                   start_quarter: parseInt(radarStartQ, 10) || 4,
                 })}
                 disabled={saving}
@@ -1013,13 +1037,19 @@ export default function SettingsScreen() {
                   <Text style={styles.configTitle}>{pickedTeam.name}</Text>
                   <Text style={styles.configSub}>Set alert criteria for this team's games.</Text>
 
-                  <Text style={styles.inputLabel}>MAX POINT DIFF TO ALERT</Text>
-                  <TouchableOpacity
-                    style={styles.numDisplay}
-                    onPress={() => openKp(newTeamMaxDiff, setNewTeamMaxDiff, 'MAX POINT DIFF', 2)}
-                  >
-                    <Text style={styles.numDisplayText}>{newTeamMaxDiff || '—'}</Text>
-                  </TouchableOpacity>
+                  <View style={styles.sliderRow}>
+                    <Text style={styles.inputLabel}>MAX POINT DIFF TO ALERT</Text>
+                    <Text style={styles.sliderValue}>{newTeamMaxDiff}</Text>
+                  </View>
+                  <Slider
+                    style={styles.slider}
+                    minimumValue={1} maximumValue={25} step={1}
+                    value={newTeamMaxDiff}
+                    onValueChange={setNewTeamMaxDiff}
+                    minimumTrackTintColor={C.orange}
+                    maximumTrackTintColor={C.border}
+                    thumbTintColor={C.orange}
+                  />
 
                   <Text style={styles.inputLabel}>START MONITORING FROM QUARTER</Text>
                   <QRow value={newTeamStartQ} onChange={setNewTeamStartQ} />
@@ -1042,7 +1072,7 @@ export default function SettingsScreen() {
                   <View style={styles.configSummary}>
                     <Ionicons name="information-circle-outline" size={14} color={C.textMuted} />
                     <Text style={styles.configSummaryText}>
-                      Alert fires when diff ≤ {newTeamMaxDiff || '5'} pts from Q{newTeamStartQ}
+                      Alert fires when diff ≤ {newTeamMaxDiff || 5} pts from Q{newTeamStartQ}
                     </Text>
                   </View>
 
@@ -1054,6 +1084,9 @@ export default function SettingsScreen() {
                     <Text style={styles.confirmBtnText}>
                       {saving ? 'Saving…' : `Add ${pickedTeam.abbreviation} to Favorites`}
                     </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.cancelBtn} onPress={closeTeamModal}>
+                    <Text style={styles.cancelBtnText}>Cancel</Text>
                   </TouchableOpacity>
                 </View>
               </ScrollView>
@@ -1181,12 +1214,21 @@ export default function SettingsScreen() {
                       />
                     </View>
                     {newTotalPtsEnabled && (
-                      <TouchableOpacity
-                        style={[styles.numDisplay, { marginTop: 10, marginBottom: 0 }]}
-                        onPress={() => openKp(newTotalPts, setNewTotalPts, 'POINTS TOTAL', 3)}
-                      >
-                        <Text style={styles.numDisplayText}>{newTotalPts || '—'}</Text>
-                      </TouchableOpacity>
+                      <>
+                        <View style={[styles.sliderRow, { marginTop: 10 }]}>
+                          <Text style={styles.inputLabel}>POINTS THRESHOLD</Text>
+                          <Text style={styles.sliderValue}>{newTotalPts}</Text>
+                        </View>
+                        <Slider
+                          style={styles.slider}
+                          minimumValue={1} maximumValue={80} step={1}
+                          value={newTotalPts}
+                          onValueChange={setNewTotalPts}
+                          minimumTrackTintColor={C.orange}
+                          maximumTrackTintColor={C.border}
+                          thumbTintColor={C.orange}
+                        />
+                      </>
                     )}
                   </View>
 
@@ -1204,13 +1246,19 @@ export default function SettingsScreen() {
                     </View>
                     {newHotStartEnabled && (
                       <>
-                        <Text style={[styles.inputLabel, { marginTop: 10 }]}>POINTS THRESHOLD</Text>
-                        <TouchableOpacity
-                          style={styles.numDisplay}
-                          onPress={() => openKp(newHotStartPts, setNewHotStartPts, 'EARLY PTS', 3)}
-                        >
-                          <Text style={styles.numDisplayText}>{newHotStartPts || '—'}</Text>
-                        </TouchableOpacity>
+                        <View style={[styles.sliderRow, { marginTop: 10 }]}>
+                          <Text style={styles.inputLabel}>POINTS THRESHOLD</Text>
+                          <Text style={styles.sliderValue}>{newHotStartPts}</Text>
+                        </View>
+                        <Slider
+                          style={styles.slider}
+                          minimumValue={1} maximumValue={80} step={1}
+                          value={newHotStartPts}
+                          onValueChange={setNewHotStartPts}
+                          minimumTrackTintColor={C.orange}
+                          maximumTrackTintColor={C.border}
+                          thumbTintColor={C.orange}
+                        />
                         <Text style={styles.inputLabel}>BY END OF QUARTER</Text>
                         <QRow value={newHotStartQ} onChange={setNewHotStartQ} quarters={['1', '2', '3']} />
                       </>
@@ -1253,8 +1301,8 @@ export default function SettingsScreen() {
                       <Ionicons name="information-circle-outline" size={14} color={C.textMuted} />
                       <Text style={styles.configSummaryText}>
                         {[
-                          newTotalPtsEnabled  && `${newTotalPts || '40'}+ pts`,
-                          newHotStartEnabled  && `${newHotStartPts || '15'} pts by Q${newHotStartQ}`,
+                          newTotalPtsEnabled  && `${newTotalPts || 40}+ pts`,
+                          newHotStartEnabled  && `${newHotStartPts || 15} pts by Q${newHotStartQ}`,
                           newTdWatch          && 'Triple-Double watch',
                         ].filter(Boolean).join('  ·  ')}
                       </Text>
@@ -1270,6 +1318,9 @@ export default function SettingsScreen() {
                       {saving ? 'Saving…' : `Add ${pickedPlayer.name} to Favorites`}
                     </Text>
                   </TouchableOpacity>
+                  <TouchableOpacity style={styles.cancelBtn} onPress={closePlayerModal}>
+                    <Text style={styles.cancelBtnText}>Cancel</Text>
+                  </TouchableOpacity>
                 </View>
               </ScrollView>
             )}
@@ -1277,16 +1328,6 @@ export default function SettingsScreen() {
           </View>
         </View>
       </Modal>
-
-      {/* ── Numeric Keypad ────────────────────────────────────────── */}
-      <NumericKeypad
-        visible={kpVisible}
-        value={kpValue}
-        label={kpLabel}
-        maxLen={kpMaxLen}
-        onChange={onKpChange}
-        onDone={closeKp}
-      />
 
       <Modal visible={infoModal.visible} transparent animationType="fade" onRequestClose={hideInfo}>
         <View style={styles.infoOverlay}>
@@ -1361,20 +1402,17 @@ const styles = StyleSheet.create({
   // Labels & inputs
   inputLabel: {
     fontSize: 10, fontWeight: '800', color: C.textMuted,
-    letterSpacing: 1.5, marginBottom: 6, marginTop: 10,
+    letterSpacing: 1.5, marginBottom: 0, marginTop: 10,
   },
-  numDisplay: {
-    borderBottomWidth: 2, borderColor: C.orange,
-    paddingVertical: 4, marginBottom: 10,
-    alignItems: 'center',
+  sliderRow: {
+    flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'space-between', marginTop: 10,
   },
-  numDisplayText: {
-    fontSize: 26, fontWeight: '800', color: C.textPrimary,
+  sliderValue: {
+    fontSize: 18, fontWeight: '800', color: C.orange,
   },
-  numInput: {
-    borderBottomWidth: 2, borderColor: C.blue,
-    color: C.textPrimary, fontSize: 26,
-    paddingVertical: 4, marginBottom: 10,
+  slider: {
+    width: '100%', height: 40, marginBottom: 4,
   },
 
   // Quarter picker
@@ -1471,6 +1509,11 @@ const styles = StyleSheet.create({
   },
   confirmBtnDisabled: { opacity: 0.5 },
   confirmBtnText: { color: '#fff', fontWeight: '800', fontSize: 15 },
+  cancelBtn: {
+    marginTop: 12, padding: 14,
+    borderRadius: 14, alignItems: 'center',
+  },
+  cancelBtnText: { color: C.textMuted, fontWeight: '700', fontSize: 14 },
 
   // Alert type toggle
   alertTypeRow: {
