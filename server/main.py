@@ -574,56 +574,71 @@ def _extract_player_stats(event: dict, target_id: str) -> dict[str, int]:
     return stats
 
 
-def _check_and_fire(alarm: Alarm, events: list[dict]) -> bool | None:
+def _period_str(period: int) -> str:
+    return f"Q{period}" if period <= 4 else f"OT{period - 4}"
+
+
+def _check_and_fire(alarm: Alarm, events: list[dict]) -> dict | None | bool:
     """
-    Return True if the alarm condition is met (fire + deactivate).
+    Return a dict {"title": ..., "body": ...} if the alarm condition is met.
     Return None if the alarm has expired and should be deactivated without firing.
     Return False if condition not yet met (keep watching).
     """
+    game_name   = alarm.game_name   or alarm.target_name or alarm.target_id
+    player_name = alarm.target_name or alarm.target_id
+
     if alarm.condition_type == "score_diff":
-        required_quarter = alarm.start_quarter or 4   # default: only fire from Q4
+        required_quarter = alarm.start_quarter or 4
         for event in events:
             if str(event.get("id")) != str(alarm.target_id):
                 continue
             state  = _get_event_state(event)
             period = _get_event_period(event)
             if state == "post":
-                return None  # game over — deactivate without firing
-            # Must be live AND have reached the target quarter
-            if state != "in":
-                continue
-            if period < required_quarter:
+                return None
+            if state != "in" or period < required_quarter:
                 continue
             diff = _extract_game_diff(event)
             if diff is not None and diff <= alarm.threshold:
-                return True
+                return {
+                    "title": "Smart Alarm! It's Getting Dramatic!",
+                    "body":  f"{game_name}\n{_period_str(period)} | Point Diff: {diff} | CLOSE GAME!",
+                }
 
     elif alarm.condition_type == "points":
-        # start_quarter > 0 means "only fire if still in that quarter or earlier"
-        # start_quarter == 0 / None means no quarter limit (pts_goal)
         quarter_limit = alarm.start_quarter or 0
         for event in events:
             state  = _get_event_state(event)
             period = _get_event_period(event)
             if quarter_limit > 0 and period > quarter_limit:
-                return None  # deadline quarter passed — deactivate without firing
+                return None
             if state == "post":
-                # Game over and pts_goal not reached
                 pts = _extract_player_pts(event, alarm.target_id)
                 if pts is None or pts < alarm.threshold:
                     return None
             pts = _extract_player_pts(event, alarm.target_id)
             if pts is not None and pts >= alarm.threshold:
-                return True
+                if quarter_limit > 0:
+                    return {
+                        "title": "Player Alert!",
+                        "body":  f"{player_name} already has {pts} pts in {_period_str(period)} — on fire early!",
+                    }
+                return {
+                    "title": "Player Alert!",
+                    "body":  f"{player_name} has scored {pts} points in {game_name}!",
+                }
 
     elif alarm.condition_type == "triple_double":
-        # Fire when the player has 8+ in at least 3 stat categories (near TD)
         for event in events:
             stats = _extract_player_stats(event, alarm.target_id)
             if stats:
                 near_double = sum(1 for v in stats.values() if v >= 8)
                 if near_double >= 3:
-                    return True
+                    hot = [f"{k} {v}" for k, v in stats.items() if v >= 8]
+                    return {
+                        "title": "Triple-Double Watch!",
+                        "body":  f"{player_name}: {' / '.join(hot)} in {game_name}!",
+                    }
 
     return False
 
@@ -631,7 +646,7 @@ def _check_and_fire(alarm: Alarm, events: list[dict]) -> bool | None:
 async def _alarm_poller() -> None:
     """
     Every 60 s:
-      1. Fetch the ESPN scoreboard once.
+      1. Read the shared ESPN scoreboard cache (populated by monitor.py threads).
       2. Load all is_active alarms from DB.
       3. Check each alarm; fire + deactivate on match.
     """
@@ -640,8 +655,8 @@ async def _alarm_poller() -> None:
         if engine is None:
             continue
         try:
-            data = await asyncio.to_thread(_fetch_scoreboard)
-            events: list[dict] = data.get("events", [])
+            from monitor import get_today_games as _get_games
+            events: list[dict] = await asyncio.to_thread(_get_games)
 
             with Session(engine) as session:
                 alarms = (
@@ -678,7 +693,7 @@ async def _alarm_poller() -> None:
                         continue
 
                     result = _check_and_fire(alarm, events)
-                    if result is True:
+                    if isinstance(result, dict):
                         log.info(
                             "POLLER ALARM fire   | alarm_id=%d | %s | %s",
                             alarm.id,
@@ -687,8 +702,8 @@ async def _alarm_poller() -> None:
                         )
                         _send_push_notification(
                             push_token=alarm.user_token,
-                            title="NBA Alarm",
-                            body=f"Condition met for {alarm.target_name or alarm.target_id}!",
+                            title=result["title"],
+                            body=result["body"],
                             sound_channel="classic_alarm",
                             alert_type=alarm.alert_type or "alarm",
                         )

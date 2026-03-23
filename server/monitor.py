@@ -529,15 +529,15 @@ def clear_stale_state() -> None:
 # ---------------------------------------------------------------------------
 
 def _fetch_nba_game(game_id: str) -> dict | None:
-    """Return the raw ESPN event dict for game_id, or None on failure."""
-    try:
-        resp = requests.get(ESPN_NBA_URL, timeout=10)
-        resp.raise_for_status()
-        for event in resp.json().get("events", []):
-            if str(event.get("id")) == str(game_id):
-                return event
-    except Exception as exc:
-        log.warning("ESPN scoreboard fetch failed: %s", exc)
+    """
+    Return the raw ESPN event dict for game_id from the shared 60-second cache.
+    All monitoring threads (game + player) share one ESPN request per minute
+    instead of each making their own — prevents rate-limiting at scale.
+    Falls back to a direct fetch only if the cache is empty (e.g. first call).
+    """
+    for event in get_today_games():
+        if str(event.get("id")) == str(game_id):
+            return event
     return None
 
 
