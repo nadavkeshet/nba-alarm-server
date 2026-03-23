@@ -23,8 +23,8 @@ import {
   View,
 } from 'react-native';
 
+import Slider from '@react-native-community/slider';
 import { BasketballToggle } from '../../components/basketball-toggle';
-import { NumericKeypad, useNumericKeypad } from '../../components/numeric-keypad';
 
 
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -246,11 +246,8 @@ export default function HomeScreen() {
   // ── Alert type ────────────────────────────────────────────────────
   const [alertType, setAlertType] = useState<'alarm' | 'silent'>('alarm');
 
-  // ── Numeric keypad ────────────────────────────────────────────────
-  const { kpVisible, kpValue, kpLabel, kpMaxLen, openKp, closeKp, onKpChange } = useNumericKeypad();
-
   // ── Game alarm state ──────────────────────────────────────────────
-  const [maxDiff, setMaxDiff]           = useState('5');
+  const [maxDiff, setMaxDiff]           = useState(5);
   const [startQuarter, setStartQuarter] = useState('4');
 
   // ── Player alarm state ────────────────────────────────────────────
@@ -259,9 +256,9 @@ export default function HomeScreen() {
   const [selectedPlayer, setSelectedPlayer] = useState<any>(null);
   // Multi-condition toggles (each fires independently)
   const [ptsGoalEnabled,    setPtsGoalEnabled]    = useState(true);
-  const [ptsGoalThreshold,  setPtsGoalThreshold]  = useState('25');
+  const [ptsGoalThreshold,  setPtsGoalThreshold]  = useState(25);
   const [ptsEarlyEnabled,   setPtsEarlyEnabled]   = useState(false);
-  const [earlyPtsThreshold, setEarlyPtsThreshold] = useState('15');
+  const [earlyPtsThreshold, setEarlyPtsThreshold] = useState(15);
   const [earlyQuarter,      setEarlyQuarter]      = useState('3');
   const [tdWatchEnabled,    setTdWatchEnabled]    = useState(false);
 
@@ -426,9 +423,9 @@ export default function HomeScreen() {
     setTeams([]);
     setSelectedPlayer(null);
     setPtsGoalEnabled(true);
-    setPtsGoalThreshold('25');
+    setPtsGoalThreshold(25);
     setPtsEarlyEnabled(false);
-    setEarlyPtsThreshold('15');
+    setEarlyPtsThreshold(15);
     setEarlyQuarter('3');
     setTdWatchEnabled(false);
   };
@@ -453,7 +450,7 @@ export default function HomeScreen() {
           target_id:      selectedGame.id,
           target_name:    selectedGame.name,
           condition_type: 'score_diff',
-          threshold:      parseInt(maxDiff, 10),
+          threshold:      maxDiff,
           start_quarter:  parseInt(startQuarter, 10),
           alert_type:     alertType,
         }),
@@ -465,7 +462,7 @@ export default function HomeScreen() {
         body: JSON.stringify({
           game_id:       selectedGame.id,
           game_name:     selectedGame.name,
-          max_diff:      parseInt(maxDiff, 10),
+          max_diff:      maxDiff,
           start_quarter: parseInt(startQuarter, 10),
           push_token:    freshToken,
           sound_channel: ALARM_CHANNEL,
@@ -505,12 +502,12 @@ export default function HomeScreen() {
       condition_type: string; threshold: number; start_quarter: number;
     }> = [];
     if (ptsGoalEnabled) conditions.push({
-      condition: 'pts_goal', pts_threshold: parseInt(ptsGoalThreshold, 10), quarter_deadline: 0,
-      condition_type: 'points', threshold: parseInt(ptsGoalThreshold, 10), start_quarter: 0,
+      condition: 'pts_goal', pts_threshold: ptsGoalThreshold, quarter_deadline: 0,
+      condition_type: 'points', threshold: ptsGoalThreshold, start_quarter: 0,
     });
     if (ptsEarlyEnabled) conditions.push({
-      condition: 'pts_early', pts_threshold: parseInt(earlyPtsThreshold, 10), quarter_deadline: parseInt(earlyQuarter, 10),
-      condition_type: 'points', threshold: parseInt(earlyPtsThreshold, 10), start_quarter: parseInt(earlyQuarter, 10),
+      condition: 'pts_early', pts_threshold: earlyPtsThreshold, quarter_deadline: parseInt(earlyQuarter, 10),
+      condition_type: 'points', threshold: earlyPtsThreshold, start_quarter: parseInt(earlyQuarter, 10),
     });
     if (tdWatchEnabled) conditions.push({
       condition: 'triple_double', pts_threshold: 0, quarter_deadline: 0,
@@ -627,9 +624,16 @@ export default function HomeScreen() {
             contentContainerStyle={{ paddingBottom: 8 }}
           >
 
-            {/* Game name */}
-            <Text style={styles.modalSubtitle}>Set Alarm for</Text>
-            <Text style={styles.modalGameName}>{selectedGame?.name}</Text>
+            {/* Header row with X button */}
+            <View style={styles.modalHeaderRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.modalSubtitle}>Set Alarm for</Text>
+                <Text style={styles.modalGameName}>{selectedGame?.name}</Text>
+              </View>
+              <TouchableOpacity onPress={closeModal} style={styles.modalCloseBtn}>
+                <Ionicons name="close" size={22} color={C.textMuted} />
+              </TouchableOpacity>
+            </View>
 
             {/* Alert type toggle */}
             <View style={styles.alertTypeRow}>
@@ -665,13 +669,19 @@ export default function HomeScreen() {
             {/* ── Game Alarm tab ── */}
             {alarmTab === 'game' && (
               <>
-                <Text style={styles.inputLabel}>Max Point Difference</Text>
-                <TouchableOpacity
-                  style={styles.numDisplay}
-                  onPress={() => openKp(maxDiff, setMaxDiff, 'MAX POINT DIFF', 2)}
-                >
-                  <Text style={styles.numDisplayText}>{maxDiff || '—'}</Text>
-                </TouchableOpacity>
+                <View style={styles.sliderRow}>
+                  <Text style={styles.inputLabel}>Max Point Difference</Text>
+                  <Text style={styles.sliderValue}>{maxDiff}</Text>
+                </View>
+                <Slider
+                  style={styles.slider}
+                  minimumValue={1} maximumValue={25} step={1}
+                  value={maxDiff}
+                  onValueChange={setMaxDiff}
+                  minimumTrackTintColor={C.orange}
+                  maximumTrackTintColor={C.border}
+                  thumbTintColor={C.orange}
+                />
 
                 <Text style={styles.inputLabel}>Start Monitoring from Quarter</Text>
                 <View style={styles.quarterRow}>
@@ -768,12 +778,21 @@ export default function HomeScreen() {
                         />
                       </View>
                       {ptsGoalEnabled && (
-                        <TouchableOpacity
-                          style={[styles.numDisplay, { marginTop: 10 }]}
-                          onPress={() => openKp(ptsGoalThreshold, setPtsGoalThreshold, 'POINTS GOAL', 3)}
-                        >
-                          <Text style={styles.numDisplayText}>{ptsGoalThreshold || '—'}</Text>
-                        </TouchableOpacity>
+                        <>
+                          <View style={[styles.sliderRow, { marginTop: 10 }]}>
+                            <Text style={styles.inputLabel}>Points threshold</Text>
+                            <Text style={styles.sliderValue}>{ptsGoalThreshold}</Text>
+                          </View>
+                          <Slider
+                            style={styles.slider}
+                            minimumValue={1} maximumValue={80} step={1}
+                            value={ptsGoalThreshold}
+                            onValueChange={setPtsGoalThreshold}
+                            minimumTrackTintColor={C.orange}
+                            maximumTrackTintColor={C.border}
+                            thumbTintColor={C.orange}
+                          />
+                        </>
                       )}
                     </View>
 
@@ -790,34 +809,35 @@ export default function HomeScreen() {
                         />
                       </View>
                       {ptsEarlyEnabled && (
-                        <View style={[styles.earlyRow, { marginBottom: 0, marginTop: 10 }]}>
-                          <View style={styles.earlyField}>
-                            <Text style={styles.inputLabel}>Points</Text>
-                            <TouchableOpacity
-                              style={[styles.numDisplay, styles.numDisplaySmall]}
-                              onPress={() => openKp(earlyPtsThreshold, setEarlyPtsThreshold, 'EARLY PTS', 3)}
-                            >
-                              <Text style={styles.numDisplayText}>{earlyPtsThreshold || '—'}</Text>
-                            </TouchableOpacity>
+                        <>
+                          <View style={[styles.sliderRow, { marginTop: 10 }]}>
+                            <Text style={styles.inputLabel}>Points threshold</Text>
+                            <Text style={styles.sliderValue}>{earlyPtsThreshold}</Text>
                           </View>
-                          <Text style={styles.earlyBy}>by</Text>
-                          <View style={styles.earlyField}>
-                            <Text style={styles.inputLabel}>Before Q</Text>
-                            <View style={styles.miniQuarterRow}>
-                              {['1', '2', '3'].map(q => (
-                                <TouchableOpacity
-                                  key={q}
-                                  style={[styles.miniQBtn, earlyQuarter === q && styles.quarterButtonActive]}
-                                  onPress={() => setEarlyQuarter(q)}
-                                >
-                                  <Text style={[styles.quarterText, earlyQuarter === q && styles.quarterTextActive]}>
-                                    Q{q}
-                                  </Text>
-                                </TouchableOpacity>
-                              ))}
-                            </View>
+                          <Slider
+                            style={styles.slider}
+                            minimumValue={1} maximumValue={80} step={1}
+                            value={earlyPtsThreshold}
+                            onValueChange={setEarlyPtsThreshold}
+                            minimumTrackTintColor={C.orange}
+                            maximumTrackTintColor={C.border}
+                            thumbTintColor={C.orange}
+                          />
+                          <Text style={[styles.inputLabel, { marginTop: 4 }]}>Before end of quarter</Text>
+                          <View style={styles.miniQuarterRow}>
+                            {['1', '2', '3'].map(q => (
+                              <TouchableOpacity
+                                key={q}
+                                style={[styles.miniQBtn, earlyQuarter === q && styles.quarterButtonActive]}
+                                onPress={() => setEarlyQuarter(q)}
+                              >
+                                <Text style={[styles.quarterText, earlyQuarter === q && styles.quarterTextActive]}>
+                                  Q{q}
+                                </Text>
+                              </TouchableOpacity>
+                            ))}
                           </View>
-                        </View>
+                        </>
                       )}
                     </View>
 
@@ -852,16 +872,6 @@ export default function HomeScreen() {
           </View>
         </View>
       </Modal>
-
-      {/* ── Numeric Keypad ────────────────────────────────────────── */}
-      <NumericKeypad
-        visible={kpVisible}
-        value={kpValue}
-        label={kpLabel}
-        maxLen={kpMaxLen}
-        onChange={onKpChange}
-        onDone={closeKp}
-      />
 
       {/* ── Info / Confirmation Modal ──────────────────────────────── */}
       <Modal visible={infoModal.visible} transparent animationType="fade" onRequestClose={hideInfo}>
@@ -967,8 +977,15 @@ const styles = StyleSheet.create({
     padding: 24, paddingBottom: 40,
     maxHeight: '90%',
   },
+  modalHeaderRow: {
+    flexDirection: 'row', alignItems: 'flex-start',
+    marginBottom: 16,
+  },
+  modalCloseBtn: {
+    padding: 4, marginTop: 2,
+  },
   modalSubtitle: { fontSize: 13, color: C.textMuted, marginBottom: 2 },
-  modalGameName: { fontSize: 18, fontWeight: '800', color: C.textPrimary, marginBottom: 16 },
+  modalGameName: { fontSize: 18, fontWeight: '800', color: C.textPrimary },
 
   alertTypeRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },
   alertTypeBtn: {
@@ -991,13 +1008,13 @@ const styles = StyleSheet.create({
   alarmTabText:       { fontSize: 13, fontWeight: '700', color: C.textMuted },
   alarmTabTextActive: { color: '#fff' },
 
-  inputLabel: { fontSize: 12, color: C.textMuted, fontWeight: '700', marginBottom: 8, letterSpacing: 1 },
-  input: {
-    borderBottomWidth: 2, borderColor: C.orange,
-    marginBottom: 20, fontSize: 28,
-    color: C.textPrimary, paddingVertical: 4,
+  inputLabel: { fontSize: 12, color: C.textMuted, fontWeight: '700', marginBottom: 0, letterSpacing: 1 },
+  sliderRow: {
+    flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'space-between', marginTop: 10,
   },
-  inputSmall: { fontSize: 22, marginBottom: 0 },
+  sliderValue: { fontSize: 18, fontWeight: '800', color: C.orange },
+  slider: { width: '100%', height: 40, marginBottom: 8 },
 
   quarterRow:          { flexDirection: 'row', gap: 10, marginBottom: 20 },
   quarterButton: {
@@ -1058,11 +1075,7 @@ const styles = StyleSheet.create({
   conditionCardTitle:  { fontSize: 14, fontWeight: '700', color: C.textPrimary },
   conditionCardSub:    { fontSize: 12, color: C.textMuted, marginTop: 2 },
 
-  earlyRow:  { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
-  earlyField:{ flex: 1 },
-  earlyBy:   { fontSize: 14, color: C.textMuted, marginTop: 20 },
-
-  miniQuarterRow: { flexDirection: 'row', gap: 6 },
+  miniQuarterRow: { flexDirection: 'row', gap: 6, marginBottom: 8 },
   miniQBtn: {
     flex: 1, height: 38, borderRadius: 8,
     backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center',
@@ -1095,16 +1108,4 @@ const styles = StyleSheet.create({
   },
   infoOkText: { color: C.orange, fontWeight: '800', fontSize: 15 },
 
-  // ── Numeric display box (replaces TextInput for keypad) ───────────
-  numDisplay: {
-    borderBottomWidth: 2, borderColor: C.orange,
-    marginBottom: 20, paddingVertical: 6,
-    alignItems: 'center',
-  },
-  numDisplaySmall: {
-    marginBottom: 0,
-  },
-  numDisplayText: {
-    fontSize: 28, fontWeight: '800', color: C.textPrimary,
-  },
 });
