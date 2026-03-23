@@ -18,15 +18,11 @@ from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime
 from sqlalchemy.orm import DeclarativeBase, Session
 
 from monitor import (
-    # Alarm jobs
-    start_monitoring_job,
-    start_player_monitoring_job,
-    # Active monitors
+    # Active monitors (in-memory; always empty — threads removed)
     get_active_alarms,
     get_active_player_alarms,
     cancel_game_alarm,
     cancel_player_alarm,
-    _has_manual_alarm,
     # Roster
     fetch_game_roster,
     fetch_game_summary_roster,
@@ -55,6 +51,8 @@ from monitor import (
     # Fired-alert persistence (survives server restarts)
     register_db_persist_fired,
     hydrate_fired_alerts,
+    # Test-only: direct player monitoring thread
+    start_player_monitoring_job,
 )
 
 
@@ -665,33 +663,8 @@ async def _alarm_poller() -> None:
                            .all()
                 )
 
-            # Snapshot active in-memory alarms so we can skip DB records that
-            # already have a dedicated monitoring thread watching them.
-            active_game_ids    = {a["game_id"] for a in get_active_alarms()}
-            # Map live player alarms to (player_id, condition_slot) pairs so we only
-            # skip DB alarms whose condition slot has an active monitoring thread.
-            # DB "points" with start_quarter=0 → slot "pts_goal"
-            # DB "points" with start_quarter>0  → slot "pts_early"
-            # DB "triple_double"                → slot "triple_double"
-            def _alarm_slot(alarm_obj) -> str:
-                if alarm_obj.condition_type == "points":
-                    return "pts_early" if (alarm_obj.start_quarter or 0) > 0 else "pts_goal"
-                return alarm_obj.condition_type
-            active_player_keys = {
-                (a["player_id"], a["condition"])
-                for a in get_active_player_alarms()
-            }
-
             for alarm in alarms:
                 try:
-                    # Skip if a monitoring thread is already watching this target —
-                    # that thread will deactivate the DB record when it fires.
-                    if alarm.condition_type == "score_diff" and alarm.target_id in active_game_ids:
-                        continue
-                    if alarm.condition_type in ("points", "triple_double") and \
-                            (alarm.target_id, _alarm_slot(alarm)) in active_player_keys:
-                        continue
-
                     result = _check_and_fire(alarm, events)
                     if isinstance(result, dict):
                         log.info(
@@ -761,102 +734,19 @@ def _find_token_from_db() -> str:
 
 def _restart_alarm_threads_from_db() -> None:
     """
-    On server startup, restart a dedicated monitoring thread for every alarm
-    that was active when the server last shut down.
-
-    This ensures users never miss an alarm because the server restarted
-    mid-game (e.g. a Railway redeploy at midnight).
-
-    Player alarms without a stored game_id are skipped here — the async
-    _alarm_poller picks them up within 60 s as a safety net (old DB rows
-    created before this column was added).
+    No-op since thread-based monitoring was removed.
+    All active DB alarms are now handled exclusively by the async _alarm_poller,
+    which picks them up within 60 s of startup.
     """
     if engine is None:
         return
     try:
         with Session(engine) as session:
-            rows = session.query(Alarm).filter(Alarm.is_active.is_(True)).all()
-            # Snapshot inside session — ORM objects detach once session closes
-            snapshot = [
-                {
-                    "condition_type": r.condition_type,
-                    "target_id":      r.target_id,
-                    "target_name":    r.target_name or "",
-                    "game_id":        r.game_id,        # None for old rows
-                    "game_name":      r.game_name or r.target_name or "",
-                    "threshold":      r.threshold,
-                    "start_quarter":  r.start_quarter or 0,
-                    "user_token":     r.user_token,
-                    "alert_type":     r.alert_type or "alarm",
-                }
-                for r in rows
-            ]
+            count = session.query(Alarm).filter(Alarm.is_active.is_(True)).count()
+        if count:
+            log.info("STARTUP: %d active DB alarm(s) will be handled by the poller.", count)
     except Exception as exc:
-        log.error("STARTUP: failed to read active alarms from DB – %s", exc)
-        return
-
-    started = 0
-    for alarm in snapshot:
-        try:
-            if alarm["condition_type"] == "score_diff":
-                # game_id == target_id for game alarms — always restartable
-                threading.Thread(
-                    target=start_monitoring_job,
-                    args=(
-                        alarm["target_id"],
-                        alarm["game_name"],
-                        alarm["threshold"],
-                        alarm["start_quarter"],
-                        alarm["user_token"],
-                        "classic_alarm",
-                        alarm["alert_type"],
-                    ),
-                    daemon=True,
-                ).start()
-                started += 1
-
-            elif alarm["condition_type"] in ("points", "triple_double"):
-                game_id = alarm["game_id"]
-                if not game_id:
-                    # Old row without game_id — _alarm_poller handles it
-                    log.info(
-                        "STARTUP: player alarm for %s has no game_id – poller will cover.",
-                        alarm["target_name"] or alarm["target_id"],
-                    )
-                    continue
-                # Derive the exact condition string from condition_type + start_quarter
-                if alarm["condition_type"] == "triple_double":
-                    condition = "triple_double"
-                elif alarm["start_quarter"] > 0:
-                    condition = "pts_early"
-                else:
-                    condition = "pts_goal"
-                threading.Thread(
-                    target=start_player_monitoring_job,
-                    kwargs=dict(
-                        game_id=game_id,
-                        game_name=alarm["game_name"],
-                        player_id=alarm["target_id"],
-                        player_name=alarm["target_name"],
-                        push_token=alarm["user_token"],
-                        sound_channel="classic_alarm",
-                        condition=condition,
-                        pts_threshold=alarm["threshold"],
-                        quarter_deadline=alarm["start_quarter"],
-                        alert_type=alarm["alert_type"],
-                    ),
-                    daemon=True,
-                ).start()
-                started += 1
-
-        except Exception as exc:
-            log.error(
-                "STARTUP: failed to restart thread for %s – %s",
-                alarm["target_name"] or alarm["target_id"], exc,
-            )
-
-    if started:
-        log.info("STARTUP: restarted %d monitoring thread(s) from DB.", started)
+        log.error("STARTUP: failed to count active alarms – %s", exc)
 
 
 @asynccontextmanager
@@ -1018,24 +908,8 @@ class AlarmRequest(BaseModel):
 
 @app.post("/start-alarm")
 async def start_alarm(req: AlarmRequest):
-    """Kick off a background thread monitoring a game's point differential."""
+    """Register intent to monitor a game. Actual polling is done by _alarm_poller."""
     save_push_token(req.push_token, req.sound_channel)
-    # Dedup: one monitoring thread per game_id — prevents thread exhaustion
-    # if the client retries or a bad actor hammers this endpoint.
-    if _has_manual_alarm(req.game_id):
-        log.info("ALARM: duplicate request for game %s – already monitoring.", req.game_id)
-        return {
-            "status":        "already_monitoring",
-            "game":          req.game_name,
-            "max_diff":      req.max_diff,
-            "start_quarter": req.start_quarter,
-        }
-    threading.Thread(
-        target=start_monitoring_job,
-        args=(req.game_id, req.game_name, req.max_diff, req.start_quarter,
-              req.push_token, req.sound_channel, req.alert_type),
-        daemon=True,
-    ).start()
     threading.Thread(target=start_radar_job, daemon=True).start()
     return {
         "status":        "monitoring_started",
@@ -1062,23 +936,8 @@ class PlayerAlarmRequest(BaseModel):
 
 @app.post("/start-player-alarm")
 async def start_player_alarm(req: PlayerAlarmRequest):
-    """Kick off a background thread monitoring a specific player's stats."""
+    """Register intent to monitor a player. Actual polling is done by _alarm_poller."""
     save_push_token(req.push_token, req.sound_channel)
-    # Note: no game-level dedup here. _register_player_alarm keys by (player_id, condition)
-    # so pts_goal + triple_double for the same player are two separate valid threads.
-    # Duplicate (player_id, condition) requests are handled inside _register_player_alarm
-    # by cancelling the existing thread before starting a new one — safe by design.
-    threading.Thread(
-        target=start_player_monitoring_job,
-        kwargs=dict(
-            game_id=req.game_id, game_name=req.game_name,
-            player_id=req.player_id, player_name=req.player_name,
-            push_token=req.push_token, sound_channel=req.sound_channel,
-            condition=req.condition, pts_threshold=req.pts_threshold,
-            quarter_deadline=req.quarter_deadline, alert_type=req.alert_type,
-        ),
-        daemon=True,
-    ).start()
     threading.Thread(target=start_radar_job, daemon=True).start()
     return {
         "status":    "player_monitoring_started",
@@ -1638,12 +1497,38 @@ def active_monitors(user_token: str = ""):
 @app.delete("/active-monitors/game/{game_id}")
 def cancel_game(game_id: str, user_token: str = ""):
     cancelled = cancel_game_alarm(game_id)
+    # Also deactivate any matching DB alarm so the poller doesn't re-fire it
+    if engine is not None and user_token:
+        try:
+            with Session(engine) as session:
+                session.query(Alarm).filter(
+                    Alarm.user_token == user_token,
+                    Alarm.target_id  == game_id,
+                    Alarm.condition_type == "score_diff",
+                    Alarm.is_active.is_(True),
+                ).update({"is_active": False})
+                session.commit()
+        except Exception as exc:
+            log.error("cancel_game DB deactivation failed: %s", exc)
     return {"cancelled": cancelled, "game_id": game_id}
 
 
 @app.delete("/active-monitors/player/{player_id}")
 def cancel_player(player_id: str, user_token: str = ""):
     cancelled = cancel_player_alarm(player_id)
+    # Also deactivate any matching DB alarm so the poller doesn't re-fire it
+    if engine is not None and user_token:
+        try:
+            with Session(engine) as session:
+                session.query(Alarm).filter(
+                    Alarm.user_token == user_token,
+                    Alarm.target_id  == player_id,
+                    Alarm.condition_type.in_(["points", "triple_double"]),
+                    Alarm.is_active.is_(True),
+                ).update({"is_active": False}, synchronize_session=False)
+                session.commit()
+        except Exception as exc:
+            log.error("cancel_player DB deactivation failed: %s", exc)
     return {"cancelled": cancelled, "player_id": player_id}
 
 
