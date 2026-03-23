@@ -51,6 +51,8 @@ from monitor import (
     # Fired-alert persistence (survives server restarts)
     register_db_persist_fired,
     hydrate_fired_alerts,
+    # Dedup (shared with radar so poller and radar never double-fire)
+    _fire_once,
     # Test-only: direct player monitoring thread
     start_player_monitoring_job,
 )
@@ -667,6 +669,28 @@ async def _alarm_poller() -> None:
                 try:
                     result = _check_and_fire(alarm, events)
                     if isinstance(result, dict):
+                        # Build dedup key using same format as the radar so
+                        # poller and radar share one dedup set and never both fire.
+                        gid = alarm.game_id or alarm.target_id
+                        pid = alarm.target_id
+                        if alarm.condition_type == "score_diff":
+                            dedup_key = f"{gid}_game"
+                        elif alarm.condition_type == "points" and (alarm.start_quarter or 0) > 0:
+                            dedup_key = f"{gid}_{pid}_early_pts_q{alarm.start_quarter}"
+                        elif alarm.condition_type == "points":
+                            dedup_key = f"{gid}_{pid}_total_pts"
+                        else:  # triple_double
+                            dedup_key = f"{gid}_{pid}_triple_double"
+
+                        if not _fire_once(dedup_key, alarm.user_token):
+                            # Already fired by radar or a previous poller tick — skip
+                            with Session(engine) as session:
+                                db_row = session.get(Alarm, alarm.id)
+                                if db_row:
+                                    db_row.is_active = False
+                                    session.commit()
+                            continue
+
                         log.info(
                             "POLLER ALARM fire   | alarm_id=%d | %s | %s",
                             alarm.id,
