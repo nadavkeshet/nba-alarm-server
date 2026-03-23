@@ -608,6 +608,8 @@ def _check_and_fire(alarm: Alarm, events: list[dict]) -> dict | None | bool:
     elif alarm.condition_type == "points":
         quarter_limit = alarm.start_quarter or 0
         for event in events:
+            if alarm.game_id and str(event.get("id")) != str(alarm.game_id):
+                continue  # only check the specific game this alarm was set for
             state  = _get_event_state(event)
             period = _get_event_period(event)
             if quarter_limit > 0 and period > quarter_limit:
@@ -630,6 +632,8 @@ def _check_and_fire(alarm: Alarm, events: list[dict]) -> dict | None | bool:
 
     elif alarm.condition_type == "triple_double":
         for event in events:
+            if alarm.game_id and str(event.get("id")) != str(alarm.game_id):
+                continue  # only check the specific game this alarm was set for
             stats = _extract_player_stats(event, alarm.target_id)
             if stats:
                 near_double = sum(1 for v in stats.values() if v >= 8)
@@ -802,6 +806,8 @@ async def lifespan(_app: FastAPI):
             log.info("STARTUP: no JSON token – found token from DB ...%s", token[-10:])
             save_push_token(token, channel)
             _restore_prefs_from_db(token)
+    # Pre-warm ESPN cache so /games is ready immediately after startup
+    threading.Thread(target=get_today_games, daemon=True).start()
     if token:
         threading.Thread(target=start_radar_job, daemon=True).start()
     # Start the async DB poller
@@ -932,8 +938,32 @@ class AlarmRequest(BaseModel):
 
 @app.post("/start-alarm")
 async def start_alarm(req: AlarmRequest):
-    """Register intent to monitor a game. Actual polling is done by _alarm_poller."""
+    """Register game alarm in DB; _alarm_poller handles the monitoring."""
     save_push_token(req.push_token, req.sound_channel)
+    if engine is not None:
+        try:
+            with Session(engine) as session:
+                # Dedup: replace any existing active alarm for same user+game
+                session.query(Alarm).filter(
+                    Alarm.user_token     == req.push_token,
+                    Alarm.target_id      == req.game_id,
+                    Alarm.condition_type == "score_diff",
+                    Alarm.is_active.is_(True),
+                ).update({"is_active": False}, synchronize_session=False)
+                session.add(Alarm(
+                    user_token     = req.push_token,
+                    target_id      = req.game_id,
+                    target_name    = req.game_name,
+                    condition_type = "score_diff",
+                    threshold      = req.max_diff,
+                    start_quarter  = req.start_quarter,
+                    game_id        = req.game_id,
+                    game_name      = req.game_name,
+                    alert_type     = req.alert_type,
+                ))
+                session.commit()
+        except Exception as exc:
+            log.error("start_alarm DB write failed: %s", exc)
     threading.Thread(target=start_radar_job, daemon=True).start()
     return {
         "status":        "monitoring_started",
@@ -960,8 +990,42 @@ class PlayerAlarmRequest(BaseModel):
 
 @app.post("/start-player-alarm")
 async def start_player_alarm(req: PlayerAlarmRequest):
-    """Register intent to monitor a player. Actual polling is done by _alarm_poller."""
+    """Register player alarm in DB; _alarm_poller handles the monitoring."""
     save_push_token(req.push_token, req.sound_channel)
+    if engine is not None:
+        try:
+            if req.condition == "triple_double":
+                condition_type = "triple_double"
+                start_q = None
+            elif req.condition == "pts_early":
+                condition_type = "points"
+                start_q = req.quarter_deadline
+            else:  # pts_goal
+                condition_type = "points"
+                start_q = None
+            with Session(engine) as session:
+                # Dedup: replace any existing active alarm for same user+player+condition
+                session.query(Alarm).filter(
+                    Alarm.user_token     == req.push_token,
+                    Alarm.target_id      == req.player_id,
+                    Alarm.condition_type == condition_type,
+                    Alarm.start_quarter  == start_q,
+                    Alarm.is_active.is_(True),
+                ).update({"is_active": False}, synchronize_session=False)
+                session.add(Alarm(
+                    user_token     = req.push_token,
+                    target_id      = req.player_id,
+                    target_name    = req.player_name,
+                    condition_type = condition_type,
+                    threshold      = req.pts_threshold,
+                    start_quarter  = start_q,
+                    game_id        = req.game_id,
+                    game_name      = req.game_name,
+                    alert_type     = req.alert_type,
+                ))
+                session.commit()
+        except Exception as exc:
+            log.error("start_player_alarm DB write failed: %s", exc)
     threading.Thread(target=start_radar_job, daemon=True).start()
     return {
         "status":    "player_monitoring_started",
