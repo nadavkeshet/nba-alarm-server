@@ -571,7 +571,7 @@ export default function SettingsScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>FAVORITE TEAMS</Text>
           <Text style={styles.sectionDesc}>
-            Get alerted when a favorite team's game gets close. You can also tap ★ on the Home screen.
+            Get alerted when a favorite team's game gets close.
           </Text>
 
           <TouchableOpacity style={styles.addRowBtn} onPress={openTeamModal}>
