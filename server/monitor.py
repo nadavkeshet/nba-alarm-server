@@ -1030,7 +1030,8 @@ def start_player_monitoring_job(
             elif condition == "pts_early" and pts >= pts_threshold:
                 triggered  = True
                 notif_body = f"{player_name} already has {pts} pts in {_period_label(quarter)} — on fire early!"
-            elif condition == "triple_double" and _check_triple_double(pts, reb, ast, stl, blk):
+            elif condition == "triple_double" and _check_triple_double(pts, reb, ast, stl, blk) \
+                    and not (quarter >= 4 and _clock_minutes_remaining(event) <= 3):
                 hot        = [f"{n} {v}" for n, v in zip(["PTS","REB","AST","STL","BLK"], [pts,reb,ast,stl,blk]) if v >= 9]
                 triggered  = True
                 notif_body = f"{player_name}: {' / '.join(hot)} in {game_name}!"
@@ -1218,7 +1219,9 @@ def _run_radar_tick_for_user(
                                         sound_channel=sound_channel, alert_type=p_alert,
                                     )
 
-                        if td_watch and _check_triple_double(pts, reb, ast, stl, blk):
+                        clock_mins_td = _clock_minutes_remaining(event)
+                        if td_watch and _check_triple_double(pts, reb, ast, stl, blk) \
+                                and not (quarter >= 4 and clock_mins_td <= 3):
                             hot = [f"{n} {v}" for n, v in zip(["PTS","REB","AST","STL","BLK"], [pts,reb,ast,stl,blk]) if v >= 9]
                             if _fire_once(f"{game_id}_{player_id}_triple_double", token):
                                 _send_push_notification(
@@ -1251,8 +1254,9 @@ def _run_radar_tick_for_user(
                                 )
 
                     if hist_cats.get("quad_double_threat"):
+                        clock_mins_quad = _clock_minutes_remaining(event)
                         cats_at_8 = sum(1 for v in [pts, reb, ast, stl, blk] if v >= 8)
-                        if cats_at_8 >= 4:
+                        if cats_at_8 >= 4 and not (quarter >= 4 and clock_mins_quad <= 3):
                             hot = [f"{n} {v}" for n, v in zip(["PTS","REB","AST","STL","BLK"], [pts,reb,ast,stl,blk]) if v >= 8]
                             if _fire_once(f"{game_id}_{player_id}_quad", token):
                                 _send_push_notification(

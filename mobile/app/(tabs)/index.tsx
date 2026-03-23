@@ -804,7 +804,7 @@ export default function HomeScreen() {
                           <View style={styles.earlyField}>
                             <Text style={styles.inputLabel}>Before Q</Text>
                             <View style={styles.miniQuarterRow}>
-                              {['2', '3', '4'].map(q => (
+                              {['1', '2', '3'].map(q => (
                                 <TouchableOpacity
                                   key={q}
                                   style={[styles.miniQBtn, earlyQuarter === q && styles.quarterButtonActive]}
@@ -826,7 +826,7 @@ export default function HomeScreen() {
                       <View style={styles.conditionCardHeader}>
                         <View style={{ flex: 1 }}>
                           <Text style={styles.conditionCardTitle}>Triple-Double Watch</Text>
-                          <Text style={styles.conditionCardSub}>Alert when approaching 9+ in 3 stats</Text>
+                          <Text style={styles.conditionCardSub}>Alert when approaching 9+ in 3 stats (with 3+ min left)</Text>
                         </View>
                         <BasketballToggle
                           value={tdWatchEnabled}

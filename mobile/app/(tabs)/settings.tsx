@@ -78,10 +78,10 @@ const C = {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const QRow = React.memo(function QRow({ value, onChange }: { value: string; onChange: (q: string) => void }) {
+const QRow = React.memo(function QRow({ value, onChange, quarters = ['1', '2', '3', '4'] }: { value: string; onChange: (q: string) => void; quarters?: string[] }) {
   return (
     <View style={styles.quarterRow}>
-      {['1', '2', '3', '4'].map(q => (
+      {quarters.map(q => (
         <TouchableOpacity
           key={q}
           style={[styles.qBtn, value === q && styles.qBtnActive]}
@@ -714,7 +714,7 @@ export default function SettingsScreen() {
                           <Text style={styles.numDisplayText}>{edit.early_pts || '—'}</Text>
                         </TouchableOpacity>
                         <Text style={styles.inputLabel}>BY END OF QUARTER</Text>
-                        <QRow value={edit.early_pts_q} onChange={q => setEdit({ early_pts_q: q })} />
+                        <QRow value={edit.early_pts_q} onChange={q => setEdit({ early_pts_q: q })} quarters={['1', '2', '3']} />
                       </>
                     )}
                   </View>
@@ -866,7 +866,7 @@ export default function SettingsScreen() {
               {([
                 { key: 'scoring_40_half'    as const, label: 'Historic Scoring Pace',  sub: '40+ pts by halftime (end of Q2)' },
                 { key: 'threes_11'          as const, label: '3-Point Record Pace',     sub: '12+ threes in a single game (with 3+ min remaining)' },
-                { key: 'quad_double_threat' as const, label: 'Quad-Double Threat',      sub: '8+ in any 4 of PTS/REB/AST/STL/BLK' },
+                { key: 'quad_double_threat' as const, label: 'Quad-Double Threat',      sub: '8+ in any 4 of PTS/REB/AST/STL/BLK (with 3+ min left)' },
               ] as const).map(({ key, label, sub }) => (
                 <View key={key} style={styles.categoryRow}>
                   <View style={{ flex: 1 }}>
@@ -939,6 +939,10 @@ export default function SettingsScreen() {
           onPress={() => Linking.openURL('https://sites.google.com/view/nba-smart-alarm-privacy/%D7%91%D7%99%D7%AA')}
         >
           <Text style={styles.privacyBtnText}>Privacy Policy</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity onPress={() => Linking.openURL('mailto:nbasmartalarm@gmail.com')}>
+          <Text style={styles.contactText}>nbasmartalarm@gmail.com</Text>
         </TouchableOpacity>
 
       </ScrollView>
@@ -1208,7 +1212,7 @@ export default function SettingsScreen() {
                           <Text style={styles.numDisplayText}>{newHotStartPts || '—'}</Text>
                         </TouchableOpacity>
                         <Text style={styles.inputLabel}>BY END OF QUARTER</Text>
-                        <QRow value={newHotStartQ} onChange={setNewHotStartQ} />
+                        <QRow value={newHotStartQ} onChange={setNewHotStartQ} quarters={['1', '2', '3']} />
                       </>
                     )}
                   </View>
@@ -1218,7 +1222,7 @@ export default function SettingsScreen() {
                     <View style={styles.condCardHeader}>
                       <View style={{ flex: 1 }}>
                         <Text style={styles.condCardTitle}>Triple-Double Watch</Text>
-                        <Text style={styles.condCardSub}>Alert when approaching 9+ in 3 stats</Text>
+                        <Text style={styles.condCardSub}>Alert when approaching 9+ in 3 stats (with 3+ min left)</Text>
                       </View>
                       <BasketballToggle
                         value={newTdWatch}
@@ -1500,6 +1504,9 @@ const styles = StyleSheet.create({
   },
   privacyBtnText: {
     color: C.textMuted, fontSize: 12, textDecorationLine: 'underline',
+  },
+  contactText: {
+    color: C.textMuted, fontSize: 12, textAlign: 'center', marginBottom: 16,
   },
 
   infoOverlay: {
