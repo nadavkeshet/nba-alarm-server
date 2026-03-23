@@ -2,6 +2,7 @@ import os
 import asyncio
 import logging
 import threading
+import requests
 import requests as http
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -574,11 +575,61 @@ def _extract_player_stats(event: dict, target_id: str) -> dict[str, int]:
     return stats
 
 
+ESPN_SUMMARY_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary"
+
+_summary_cache: dict[str, dict] = {}   # game_id → summary JSON (shared across poller ticks)
+
+
+def _fetch_game_summary(game_id: str) -> dict | None:
+    """Fetch (and cache) the ESPN game summary boxscore for a specific game."""
+    if game_id in _summary_cache:
+        return _summary_cache[game_id]
+    try:
+        resp = requests.get(ESPN_SUMMARY_URL, params={"event": game_id}, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        _summary_cache[game_id] = data
+        return data
+    except Exception as exc:
+        log.warning("_fetch_game_summary failed for %s: %s", game_id, exc)
+        return None
+
+
+def _player_pts_from_summary(summary: dict, player_id: str) -> int | None:
+    """Extract current points for a player from the ESPN boxscore summary."""
+    try:
+        for section in summary.get("boxscore", {}).get("players", []):
+            for stats_group in section.get("statistics", []):
+                names = stats_group.get("names", [])
+                for entry in stats_group.get("athletes", []):
+                    if str(entry.get("athlete", {}).get("id")) == str(player_id):
+                        raw = dict(zip(names, entry.get("stats", [])))
+                        return int(raw.get("PTS", 0) or 0)
+    except Exception:
+        pass
+    return None
+
+
+def _player_stats_from_summary(summary: dict, player_id: str) -> dict[str, int]:
+    """Extract PTS/REB/AST/STL/BLK for a player from the ESPN boxscore summary."""
+    try:
+        for section in summary.get("boxscore", {}).get("players", []):
+            for stats_group in section.get("statistics", []):
+                names = stats_group.get("names", [])
+                for entry in stats_group.get("athletes", []):
+                    if str(entry.get("athlete", {}).get("id")) == str(player_id):
+                        raw = dict(zip(names, entry.get("stats", [])))
+                        return {k: int(raw.get(k, 0) or 0) for k in ("PTS", "REB", "AST", "STL", "BLK")}
+    except Exception:
+        pass
+    return {}
+
+
 def _period_str(period: int) -> str:
     return f"Q{period}" if period <= 4 else f"OT{period - 4}"
 
 
-def _check_and_fire(alarm: Alarm, events: list[dict]) -> dict | None | bool:
+def _check_and_fire(alarm: Alarm, events: list[dict], summary: dict | None = None) -> dict | None | bool:
     """
     Return a dict {"title": ..., "body": ...} if the alarm condition is met.
     Return None if the alarm has expired and should be deactivated without firing.
@@ -614,11 +665,13 @@ def _check_and_fire(alarm: Alarm, events: list[dict]) -> dict | None | bool:
             period = _get_event_period(event)
             if quarter_limit > 0 and period > quarter_limit:
                 return None
-            if state == "post":
+            # Use full boxscore if available; fall back to leaders block
+            pts = (_player_pts_from_summary(summary, alarm.target_id)
+                   if summary else None)
+            if pts is None:
                 pts = _extract_player_pts(event, alarm.target_id)
-                if pts is None or pts < alarm.threshold:
-                    return None
-            pts = _extract_player_pts(event, alarm.target_id)
+            if state == "post" and (pts is None or pts < alarm.threshold):
+                return None
             if pts is not None and pts >= alarm.threshold:
                 if quarter_limit > 0:
                     return {
@@ -634,7 +687,10 @@ def _check_and_fire(alarm: Alarm, events: list[dict]) -> dict | None | bool:
         for event in events:
             if alarm.game_id and str(event.get("id")) != str(alarm.game_id):
                 continue  # only check the specific game this alarm was set for
-            stats = _extract_player_stats(event, alarm.target_id)
+            stats = (_player_stats_from_summary(summary, alarm.target_id)
+                     if summary else {})
+            if not stats:
+                stats = _extract_player_stats(event, alarm.target_id)
             if stats:
                 near_double = sum(1 for v in stats.values() if v >= 8)
                 if near_double >= 3:
@@ -669,9 +725,21 @@ async def _alarm_poller() -> None:
                            .all()
                 )
 
+            # Pre-fetch boxscore summaries for all player alarms (grouped by game)
+            # Clear the per-process cache first so each tick gets fresh stats
+            _summary_cache.clear()
+            player_game_ids = {
+                alarm.game_id for alarm in alarms
+                if alarm.condition_type in ("points", "triple_double") and alarm.game_id
+            }
+            summaries: dict[str, dict | None] = {}
+            for gid in player_game_ids:
+                summaries[gid] = await asyncio.to_thread(_fetch_game_summary, gid)
+
             for alarm in alarms:
                 try:
-                    result = _check_and_fire(alarm, events)
+                    summary = summaries.get(alarm.game_id) if alarm.game_id else None
+                    result = _check_and_fire(alarm, events, summary)
                     if isinstance(result, dict):
                         # Build dedup key using same format as the radar so
                         # poller and radar share one dedup set and never both fire.
