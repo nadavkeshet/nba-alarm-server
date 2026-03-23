@@ -19,7 +19,8 @@
         "WAKE_LOCK",
         "DISABLE_KEYGUARD",
         "VIBRATE",
-        "USE_FULL_SCREEN_INTENT"
+        "USE_FULL_SCREEN_INTENT",
+        "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
       ],
       "adaptiveIcon": {
         "backgroundColor": "#0B1623",
