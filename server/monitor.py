@@ -668,23 +668,27 @@ def _send_push_notification(
     try:
         message = fb_messaging.Message(
             data=data,
-            # Android: data-only (no notification) so setBackgroundMessageHandler fires
+            # Top-level notification makes iOS show a native banner.
+            # Android suppresses this because we set suppress_notification
+            # in the android config — the RN app handles display via
+            # setBackgroundMessageHandler + Notifee.
+            notification=fb_messaging.Notification(
+                title=title,
+                body=body,
+            ),
             android=fb_messaging.AndroidConfig(
                 priority="high",
+                # Suppress the notification field on Android so it stays
+                # data-only and setBackgroundMessageHandler fires.
+                notification=fb_messaging.AndroidNotification(
+                    channel_id=channel_id,
+                ),
             ),
-            # iOS: include alert in APNs payload so iOS shows a native banner
-            # even when app is killed. The notification field inside apns config
-            # only affects iOS — Android uses its own android config above.
             apns=fb_messaging.APNSConfig(
-                headers={"apns-priority": "10", "apns-push-type": "alert"},
+                headers={"apns-priority": "10"},
                 payload=fb_messaging.APNSPayload(
                     aps=fb_messaging.Aps(
-                        alert=fb_messaging.ApsAlert(
-                            title=title,
-                            body=body,
-                        ),
                         sound="default" if is_alarm else None,
-                        mutable_content=True,
                     )
                 ),
             ),
