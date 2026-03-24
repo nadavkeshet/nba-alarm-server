@@ -33,7 +33,6 @@ interface Slide {
   body?:    string;
   bullets?: string[];
   where?:   string;
-  route?:   string;
 }
 
 const SLIDES: Slide[] = [
@@ -44,7 +43,6 @@ const SLIDES: Slide[] = [
     title:   'Game & Player Alarms',
     body:    'Tap any live or upcoming game to set a one-shot alert. Choose a score gap threshold for the game itself, or pick a specific player and configure independent conditions — Points Goal, Early Scorer, or Triple-Double Watch.',
     where:   'Home Tab → tap any game',
-    route:   '/(tabs)/index',
   },
   {
     icon:    'person-circle' as const,
@@ -53,7 +51,6 @@ const SLIDES: Slide[] = [
     title:   'Favorite Players',
     body:    'Track players across every game, automatically. Configure Early Points thresholds (e.g. 15 pts by Q1), scoring milestones, and Triple-Double watches — each condition fires independently.',
     where:   'Settings → Favorite Players',
-    route:   '/(tabs)/settings',
   },
   {
     icon:    'shield' as const,
@@ -62,7 +59,6 @@ const SLIDES: Slide[] = [
     title:   'Favorite Teams',
     body:    'Add your squad and we\'ll monitor every game they play. Set your own score gap — never miss a nail-biter from your team again.',
     where:   'Settings → Favorite Teams',
-    route:   '/(tabs)/settings',
   },
   {
     icon:    'radio' as const,
@@ -71,7 +67,6 @@ const SLIDES: Slide[] = [
     title:   'Global Radar',
     body:    'Sit back while the app scans the entire league automatically. You set your own score gap and starting quarter — any game that meets your criteria will trigger an alert, no matter who\'s playing.',
     where:   'Settings → Global Radar',
-    route:   '/(tabs)/settings',
   },
   {
     icon:    'time' as const,
@@ -80,7 +75,6 @@ const SLIDES: Slide[] = [
     title:   'Historical Mode',
     body:    'Get alerted for once-in-a-generation stat lines: 40+ points before halftime, 12+ three-pointers made in a game (with 3+ minutes remaining), or a Quad-Double threat quietly developing.',
     where:   'Settings → Historical Mode',
-    route:   '/(tabs)/settings',
   },
   {
     icon:    'notifications-circle' as const,
@@ -124,15 +118,14 @@ const SLIDES: Slide[] = [
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface Props {
-  visible:      boolean;
-  onClose:      () => void;
-  closeLabel?:  string;   // "Get Started" on first launch, "Close" from settings
-  onNavigate?:  (route: string) => void;
+  visible:     boolean;
+  onClose:     () => void;
+  closeLabel?: string;   // "Get Started" on first launch, "Close" from settings
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function WelcomeGuide({ visible, onClose, closeLabel = 'Get Started', onNavigate }: Props) {
+export function WelcomeGuide({ visible, onClose, closeLabel = 'Get Started' }: Props) {
   const [index, setIndex] = useState(0);
   const fade              = useRef(new Animated.Value(1)).current;
 
@@ -193,22 +186,10 @@ export function WelcomeGuide({ visible, onClose, closeLabel = 'Get Started', onN
 
           {/* WHERE tag — only when provided */}
           {slide.where && (
-            <TouchableOpacity
-              style={styles.whereTag}
-              activeOpacity={slide.route && onNavigate ? 0.6 : 1}
-              onPress={() => {
-                if (slide.route && onNavigate) {
-                  handleClose();
-                  onNavigate(slide.route);
-                }
-              }}
-            >
+            <View style={styles.whereTag}>
               <Ionicons name="compass-outline" size={12} color={C.muted} style={{ marginRight: 5 }} />
               <Text style={styles.whereText}>{slide.where}</Text>
-              {slide.route && onNavigate && (
-                <Ionicons name="arrow-forward-circle-outline" size={14} color={C.muted} style={{ marginLeft: 5 }} />
-              )}
-            </TouchableOpacity>
+            </View>
           )}
 
           </ScrollView>
