@@ -291,9 +291,18 @@ export default function HomeScreen() {
       if (!silent) LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setGames(data.games || []);
       setFetchError(false);
+      // Server recovered — stop auto-retry if running
+      if (gamesRetryRef.current) {
+        clearInterval(gamesRetryRef.current);
+        gamesRetryRef.current = null;
+      }
     } catch (error) {
       console.error('Games fetch error:', error);
       if (!silent) setFetchError(true);
+      // Auto-retry every 15s until the server responds
+      if (!gamesRetryRef.current) {
+        gamesRetryRef.current = setInterval(() => fetchGames(true), 15_000);
+      }
     } finally {
       clearTimeout(timer);
       if (!silent) setLoading(false);
@@ -334,7 +343,8 @@ export default function HomeScreen() {
   };
 
   // ── Startup effect ────────────────────────────────────────────────
-  const retryIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const retryIntervalRef   = useRef<ReturnType<typeof setInterval> | null>(null);
+  const gamesRetryRef      = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     // Set up Notifee channels + get FCM token, then register with server
@@ -405,6 +415,7 @@ export default function HomeScreen() {
       unsubMessage();
       clearInterval(refreshInterval);
       if (retryIntervalRef.current) clearInterval(retryIntervalRef.current);
+      if (gamesRetryRef.current) clearInterval(gamesRetryRef.current);
     };
   }, []);
 
