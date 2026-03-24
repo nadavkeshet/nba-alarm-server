@@ -733,7 +733,7 @@ export default function HomeScreen() {
                             <TouchableOpacity
                               key={player.id}
                               style={[styles.playerRow, isSelected && styles.playerRowSelected]}
-                              onPress={() => setSelectedPlayer(player)}
+                              onPress={() => setSelectedPlayer(isSelected ? null : player)}
                             >
                               <Text style={styles.playerJersey}>
                                 {player.jersey ? `#${player.jersey}` : '  '}
@@ -763,7 +763,7 @@ export default function HomeScreen() {
                     </View>
 
                     <Text style={styles.inputLabel}>Alarm Conditions</Text>
-                    <Text style={styles.conditionHint}>Enable one or more — each fires independently</Text>
+                    <Text style={[styles.conditionHint, { marginTop: 4 }]}>Enable one or more — each fires independently</Text>
 
                     {/* ── Points Goal ── */}
                     <View style={styles.conditionCard}>
