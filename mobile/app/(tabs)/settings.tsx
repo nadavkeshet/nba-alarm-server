@@ -7,6 +7,7 @@ import notifee, { AndroidImportance, AndroidVisibility } from '@notifee/react-na
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Clipboard,
   FlatList,
   Linking,
   Modal,
@@ -969,6 +970,19 @@ export default function SettingsScreen() {
           <Text style={styles.contactText}>nbasmartalarm@gmail.com</Text>
         </TouchableOpacity>
 
+        {userToken ? (
+          <TouchableOpacity
+            style={styles.copyTokenBtn}
+            onPress={() => {
+              Clipboard.setString(userToken);
+              showInfo('Copied', 'Device token copied to clipboard.');
+            }}
+          >
+            <Ionicons name="copy-outline" size={13} color={C.textMuted} />
+            <Text style={styles.copyTokenText}>Copy device token (for support)</Text>
+          </TouchableOpacity>
+        ) : null}
+
       </ScrollView>
 
       {/* ── Welcome Guide Modal ───────────────────────────────────── */}
@@ -1549,7 +1563,14 @@ const styles = StyleSheet.create({
     color: C.textMuted, fontSize: 12, textDecorationLine: 'underline',
   },
   contactText: {
-    color: C.textMuted, fontSize: 12, textAlign: 'center', marginBottom: 16,
+    color: C.textMuted, fontSize: 12, textAlign: 'center', marginBottom: 8,
+  },
+  copyTokenBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 5, marginBottom: 16,
+  },
+  copyTokenText: {
+    color: C.textMuted, fontSize: 11,
   },
 
   infoOverlay: {

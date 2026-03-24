@@ -372,6 +372,7 @@ def _fire_once(key: str, token: str = "") -> bool:
     full_key = f"{today}_{token}_{key}" if token else f"{today}_{key}"
     with _FIRED_LOCK:
         if full_key in _FIRED_ALERTS:
+            log.info("DEDUP BLOCKED  (memory) | %s | ...%s", key, token[-8:] if token else "")
             return False
         # DB fallback: if startup hydration failed after a server restart,
         # the in-memory set may be empty even though the key exists in DB.
@@ -380,6 +381,7 @@ def _fire_once(key: str, token: str = "") -> bool:
             try:
                 if _DB_CHECK_FIRED_FN(full_key):
                     _FIRED_ALERTS.add(full_key)   # re-hydrate for future calls
+                    log.info("DEDUP BLOCKED  (db)     | %s | ...%s", key, token[-8:] if token else "")
                     return False
             except Exception:
                 pass  # DB unavailable — proceed cautiously

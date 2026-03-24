@@ -797,6 +797,8 @@ async def _alarm_poller() -> None:
                                 db_row.is_active = False
                                 session.commit()
                     elif result is None:
+                        log.info("ALARM EXPIRED   | alarm_id=%d | %s | condition never met | ...%s",
+                                 alarm.id, alarm.target_name or alarm.target_id, alarm.user_token[-8:])
                         with Session(engine) as session:
                             db_row = session.get(Alarm, alarm.id)
                             if db_row:
@@ -1047,6 +1049,8 @@ async def start_alarm(req: AlarmRequest):
                 session.commit()
         except Exception as exc:
             log.error("start_alarm DB write failed: %s", exc)
+    log.info("ALARM REGISTERED | game=%s | diff<=%d Q%d+ | ...%s",
+             req.game_name, req.max_diff, req.start_quarter, req.push_token[-8:])
     threading.Thread(target=start_radar_job, daemon=True).start()
     return {
         "status":        "monitoring_started",
@@ -1109,6 +1113,8 @@ async def start_player_alarm(req: PlayerAlarmRequest):
                 session.commit()
         except Exception as exc:
             log.error("start_player_alarm DB write failed: %s", exc)
+    log.info("ALARM REGISTERED | player=%s | %s threshold=%d | ...%s",
+             req.player_name, req.condition, req.pts_threshold, req.push_token[-8:])
     threading.Thread(target=start_radar_job, daemon=True).start()
     return {
         "status":    "player_monitoring_started",
