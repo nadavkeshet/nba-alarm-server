@@ -440,22 +440,6 @@ export default function HomeScreen() {
       sendTokenToServer(freshToken);
     }
     try {
-      // Persist to DB FIRST so the record exists if the monitoring thread
-      // fires immediately (condition already met → deactivation race).
-      fetch(`${SERVER_URL}/set_alarm`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_token:     freshToken,
-          target_id:      selectedGame.id,
-          target_name:    selectedGame.name,
-          condition_type: 'score_diff',
-          threshold:      maxDiff,
-          start_quarter:  parseInt(startQuarter, 10),
-          alert_type:     alertType,
-        }),
-      }).catch(() => {});
-
       const response = await fetch(`${SERVER_URL}/start-alarm`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -517,24 +501,6 @@ export default function HomeScreen() {
     try {
       let successCount = 0;
       for (const cond of conditions) {
-        // Persist to DB FIRST so the record exists if the monitoring thread
-        // fires immediately (condition already met → deactivation race).
-        fetch(`${SERVER_URL}/set_alarm`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            user_token:     freshToken,
-            target_id:      selectedPlayer.id,
-            target_name:    selectedPlayer.name,
-            condition_type: cond.condition_type,
-            threshold:      cond.threshold,
-            start_quarter:  cond.start_quarter,
-            game_id:        selectedGame.id,
-            game_name:      selectedGame.name,
-            alert_type:     alertType,
-          }),
-        }).catch(() => {});
-
         const response = await fetch(`${SERVER_URL}/start-player-alarm`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
