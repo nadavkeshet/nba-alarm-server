@@ -111,6 +111,7 @@ class FavoritePlayerDB(_Base):
     early_pts_q   = Column(Integer, nullable=True)
     td_watch      = Column(Boolean, default=False, nullable=False)
     alert_type    = Column(String,  nullable=True, default='silent')
+    created_at    = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class FavoriteTeamDB(_Base):
@@ -124,6 +125,7 @@ class FavoriteTeamDB(_Base):
     score_gap     = Column(Integer, nullable=True)    # max_diff
     start_quarter = Column(Integer, nullable=True)
     alert_type    = Column(String,  nullable=True, default='silent')
+    created_at    = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class FiredAlertDB(_Base):
@@ -152,6 +154,7 @@ class UserPreferenceDB(_Base):
     hist_scoring_40_half    = Column(Boolean, default=False,   nullable=False)
     hist_threes_11          = Column(Boolean, default=False,   nullable=False)
     hist_quad_double        = Column(Boolean, default=False,   nullable=False)
+    created_at              = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 def _init_db() -> None:

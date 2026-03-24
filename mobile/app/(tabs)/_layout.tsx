@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import { Tabs } from 'expo-router';
+import { Tabs, useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 
 import { HapticTab } from '../../components/haptic-tab';
@@ -13,6 +13,7 @@ const ONBOARDED_KEY = 'nba_alarm_onboarded';
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
+  const router = useRouter();
   const [showGuide, setShowGuide] = useState(false);
 
   useEffect(() => {
@@ -68,6 +69,7 @@ export default function TabLayout() {
         visible={showGuide}
         onClose={handleGuideClose}
         closeLabel="Get Started"
+        onNavigate={(route) => router.push(route as any)}
       />
     </>
   );

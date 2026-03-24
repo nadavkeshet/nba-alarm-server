@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import messaging from '@react-native-firebase/messaging';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -99,6 +100,7 @@ const QRow = React.memo(function QRow({ value, onChange, quarters = ['1', '2', '
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const [userToken, setUserToken]       = useState('');
   const [tokenLoaded, setTokenLoaded]   = useState(false);
   const [settings, setSettings]         = useState<AppSettings | null>(null);
@@ -990,6 +992,7 @@ export default function SettingsScreen() {
         visible={guideVisible}
         onClose={() => setGuideVisible(false)}
         closeLabel="Close"
+        onNavigate={(route) => router.push(route as any)}
       />
 
       {/* ═══════════════════════════════════════════════════════════════
