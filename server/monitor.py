@@ -672,11 +672,15 @@ def _send_push_notification(
                 priority="high",
             ),
             apns=fb_messaging.APNSConfig(
-                headers={"apns-priority": "10"},
+                headers={"apns-priority": "10", "apns-push-type": "alert"},
                 payload=fb_messaging.APNSPayload(
                     aps=fb_messaging.Aps(
-                        content_available=True,
+                        alert=fb_messaging.ApsAlert(
+                            title=title,
+                            body=body,
+                        ),
                         sound="default" if is_alarm else None,
+                        content_available=True,
                     )
                 ),
             ),
