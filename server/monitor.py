@@ -675,21 +675,17 @@ def _send_push_notification(
             notification=fb_messaging.Notification(
                 title=title,
                 body=body,
-                sound="default" if is_alarm else None,
             ),
             android=fb_messaging.AndroidConfig(
                 priority="high",
-                # Suppress the notification field on Android so it stays
-                # data-only and setBackgroundMessageHandler fires.
                 notification=fb_messaging.AndroidNotification(
                     channel_id=channel_id,
                 ),
             ),
             apns=fb_messaging.APNSConfig(
-                headers={"apns-priority": "10"},
                 payload=fb_messaging.APNSPayload(
                     aps=fb_messaging.Aps(
-                        sound="default" if is_alarm else None,
+                        sound="default",
                     )
                 ),
             ),
