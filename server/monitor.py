@@ -671,6 +671,15 @@ def _send_push_notification(
             android=fb_messaging.AndroidConfig(
                 priority="high",
             ),
+            apns=fb_messaging.APNSConfig(
+                headers={"apns-priority": "10"},
+                payload=fb_messaging.APNSPayload(
+                    aps=fb_messaging.Aps(
+                        content_available=True,
+                        sound="default" if is_alarm else None,
+                    )
+                ),
+            ),
             token=push_token,
         )
         response = fb_messaging.send(message)
