@@ -876,7 +876,7 @@ def start_player_monitoring_job(
             triggered  = True
             notif_body = f"[TEST] {player_name} already has {pts} pts in {_period_label(quarter)} — on fire early!"
         elif condition == "triple_double" and _check_triple_double(pts, reb, ast, stl, blk):
-            hot        = [c for c, v in zip(["PTS","REB","AST","STL","BLK"], [pts,reb,ast,stl,blk]) if v >= 9]
+            hot        = [f"{c} {v}" for c, v in zip(["PTS","REB","AST","STL","BLK"], [pts,reb,ast,stl,blk]) if v >= 9]
             triggered  = True
             notif_body = f"[TEST] {player_name}: {' / '.join(hot)} in {game_name}!"
 
