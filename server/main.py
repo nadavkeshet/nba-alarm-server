@@ -51,6 +51,7 @@ from monitor import (
     register_db_invalidate_token,
     # Fired-alert persistence (survives server restarts)
     register_db_persist_fired,
+    register_db_check_fired,
     hydrate_fired_alerts,
     # Dedup (shared with radar so poller and radar never double-fire)
     _fire_once,
@@ -307,6 +308,20 @@ def _persist_fired_alert(key: str) -> None:
 
 
 register_db_persist_fired(_persist_fired_alert)
+
+
+def _check_fired_alert_in_db(key: str) -> bool:
+    """Return True if this key was already fired today (exists in FiredAlertDB)."""
+    if engine is None:
+        return False
+    try:
+        with Session(engine) as session:
+            return session.get(FiredAlertDB, key) is not None
+    except Exception:
+        return False
+
+
+register_db_check_fired(_check_fired_alert_in_db)
 
 
 def _load_fired_alerts_from_db() -> None:

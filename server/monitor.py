@@ -317,6 +317,7 @@ def register_db_invalidate_token(fn) -> None:
 # ---------------------------------------------------------------------------
 
 _DB_PERSIST_FIRED_FN = None
+_DB_CHECK_FIRED_FN   = None
 
 
 def register_db_persist_fired(fn) -> None:
@@ -326,6 +327,15 @@ def register_db_persist_fired(fn) -> None:
     """
     global _DB_PERSIST_FIRED_FN
     _DB_PERSIST_FIRED_FN = fn
+
+
+def register_db_check_fired(fn) -> None:
+    """
+    Register a callable(key: str) -> bool that checks if a key exists in DB.
+    Used by _fire_once as a fallback when startup hydration may have failed.
+    """
+    global _DB_CHECK_FIRED_FN
+    _DB_CHECK_FIRED_FN = fn
 
 
 def hydrate_fired_alerts(keys: set[str]) -> None:
@@ -363,6 +373,16 @@ def _fire_once(key: str, token: str = "") -> bool:
     with _FIRED_LOCK:
         if full_key in _FIRED_ALERTS:
             return False
+        # DB fallback: if startup hydration failed after a server restart,
+        # the in-memory set may be empty even though the key exists in DB.
+        # A quick DB check here prevents double-notifications after redeploys.
+        if _DB_CHECK_FIRED_FN is not None:
+            try:
+                if _DB_CHECK_FIRED_FN(full_key):
+                    _FIRED_ALERTS.add(full_key)   # re-hydrate for future calls
+                    return False
+            except Exception:
+                pass  # DB unavailable — proceed cautiously
         _FIRED_ALERTS.add(full_key)
     # Persist outside the lock — DB write is slow, shouldn't block concurrent checks
     if _DB_PERSIST_FIRED_FN is not None:
