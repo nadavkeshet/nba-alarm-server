@@ -92,6 +92,7 @@ class Alarm(_Base):
     game_name      = Column(String,  nullable=True)
     alert_type     = Column(String,  nullable=True, default="alarm")
     is_active      = Column(Boolean, default=True, nullable=False)
+    created_at     = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class FavoritePlayerDB(_Base):
@@ -179,6 +180,7 @@ def _init_db() -> None:
         "ALTER TABLE alarms ADD COLUMN game_id    VARCHAR",
         "ALTER TABLE alarms ADD COLUMN game_name  VARCHAR",
         "ALTER TABLE alarms ADD COLUMN alert_type VARCHAR DEFAULT 'alarm'",
+        "ALTER TABLE alarms ADD COLUMN created_at TIMESTAMPTZ",
     ]
     for sql in migrations:
         try:
