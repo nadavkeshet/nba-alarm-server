@@ -1609,6 +1609,8 @@ def active_monitors(user_token: str = ""):
                     player_rows = session.query(FavoritePlayerDB).filter_by(user_token=user_token).all()
                     team_rows   = session.query(FavoriteTeamDB).filter_by(user_token=user_token).all()
                     pref        = session.get(UserPreferenceDB, user_token)
+                    log.info("ACTIVE-MONITORS | token=...%s | alarms=%d players=%d teams=%d pref=%s",
+                             user_token[-8:], len(alarm_rows), len(player_rows), len(team_rows), pref is not None)
 
                     # Build all dicts INSIDE the session so ORM attributes are never detached
                     db_alarms = [
