@@ -32,9 +32,7 @@ from monitor import (
     # Radar
     start_radar_job,
     get_radar_status,
-    # Settings
-    get_preferences,
-    save_preferences,
+    # Token (in-memory only)
     save_push_token,
     get_saved_push_token,
     # Notifications
@@ -353,70 +351,6 @@ def _load_fired_alerts_from_db() -> None:
     except Exception as exc:
         log.error("DB: _load_fired_alerts_from_db failed – %s", exc)
 
-
-# ── Startup Restore ────────────────────────────────────────────────────────────
-
-def _restore_prefs_from_db(user_token: str) -> None:
-    """
-    Read all 3 PostgreSQL tables and rebuild the local JSON cache so that
-    monitor.py's radar starts with the correct favorites after a cold restart.
-    """
-    if engine is None or not user_token:
-        return
-    try:
-        with Session(engine) as session:
-            players = session.query(FavoritePlayerDB).filter_by(user_token=user_token).all()
-            teams   = session.query(FavoriteTeamDB).filter_by(user_token=user_token).all()
-            pref    = session.get(UserPreferenceDB, user_token)
-
-            fav_players = {
-                p.target_id: {
-                    "name":          p.target_name or "",
-                    "total_pts":     p.total_pts,
-                    "early_pts_q":   p.early_pts_q,
-                    "early_pts": p.early_pts,
-                    "td_watch":      bool(p.td_watch),
-                    "alert_type":    p.alert_type or "silent",
-                }
-                for p in players
-            }
-            fav_teams = [
-                {
-                    "team_id":       t.team_id,
-                    "team_name":     t.team_name or "",
-                    "max_diff":      t.score_gap or 5,
-                    "start_quarter": t.start_quarter or 4,
-                    "alert_type":    t.alert_type or "silent",
-                }
-                for t in teams
-            ]
-
-        prefs = get_preferences()
-        prefs["FavoritePlayers"] = fav_players
-        prefs["FavoriteTeams"]   = fav_teams
-        if pref:
-            prefs["GlobalGameRadar"] = {
-                "enabled":       pref.radar_enabled,
-                "max_diff":      pref.radar_gap,
-                "start_quarter": pref.radar_start_q,
-                "alert_type":    pref.alert_type,
-            }
-            prefs["HistoricalMode"] = {
-                "enabled":    pref.historical_mode_enabled,
-                "alert_type": pref.hist_alert_type,
-                "categories": {
-                    "scoring_40_half":    pref.hist_scoring_40_half,
-                    "threes_11":          pref.hist_threes_11,
-                    "quad_double_threat": pref.hist_quad_double,
-                },
-            }
-        save_preferences(prefs)
-        log.info(
-            "DB restore  | %d teams  %d players  for ...%s",
-            len(fav_teams), len(fav_players), user_token[-8:],
-        )
-    except Exception as exc:
-        log.error("DB: _restore_prefs_from_db failed – %s", exc)
 
 
 # ── Multi-user radar feed ─────────────────────────────────────────────────────
@@ -821,32 +755,6 @@ async def _alarm_poller() -> None:
 
 # ── App Lifespan ───────────────────────────────────────────────────────────────
 
-def _find_token_from_db() -> str:
-    """
-    Fallback: if the JSON push token is missing or doesn't match any DB records,
-    scan the DB tables for any token that has favorites configured and return it.
-    This handles the case where Railway wiped the ephemeral JSON file and the
-    cached token no longer matches the token used to register favorites.
-    """
-    if engine is None:
-        return ""
-    try:
-        with Session(engine) as session:
-            # Prefer a token that has favorite teams or players
-            row = session.query(FavoriteTeamDB).first()
-            if row:
-                return row.user_token
-            row = session.query(FavoritePlayerDB).first()
-            if row:
-                return row.user_token
-            # Fall back to any token registered in user_preferences
-            pref = session.query(UserPreferenceDB).first()
-            if pref:
-                return pref.user_token
-    except Exception as exc:
-        log.error("DB: _find_token_from_db failed – %s", exc)
-    return ""
-
 
 def _restart_alarm_threads_from_db() -> None:
     """
@@ -871,33 +779,12 @@ async def lifespan(_app: FastAPI):
     _init_db()
     _load_fired_alerts_from_db()   # hydrate dedup set before radar starts
     clear_stale_state()
-    _restart_alarm_threads_from_db()   # resume monitoring for alarms active at shutdown
+    _restart_alarm_threads_from_db()
     threading.Thread(target=update_all_rosters, daemon=True).start()
-    token, channel = get_saved_push_token()
-    if token:
-        _restore_prefs_from_db(token)   # rebuild JSON cache from PostgreSQL
-        # If restore found nothing (token mismatch after ephemeral FS wipe),
-        # try to find the correct token directly from the DB.
-        from monitor import get_preferences as _gp
-        prefs = _gp()
-        if not prefs.get("FavoriteTeams") and not prefs.get("FavoritePlayers"):
-            fallback_token = _find_token_from_db()
-            if fallback_token and fallback_token != token:
-                log.info("STARTUP: token mismatch – retrying restore with DB token ...%s", fallback_token[-10:])
-                save_push_token(fallback_token, channel)
-                token = fallback_token
-                _restore_prefs_from_db(token)
-    else:
-        # No token in JSON at all — scan DB for any registered token
-        token = _find_token_from_db()
-        if token:
-            log.info("STARTUP: no JSON token – found token from DB ...%s", token[-10:])
-            save_push_token(token, channel)
-            _restore_prefs_from_db(token)
     # Pre-warm ESPN cache so /games is ready immediately after startup
     threading.Thread(target=get_today_games, daemon=True).start()
-    if token:
-        threading.Thread(target=start_radar_job, daemon=True).start()
+    # Radar reads all users directly from DB — always start it
+    threading.Thread(target=start_radar_job, daemon=True).start()
     # Start the async DB poller
     poller_task = asyncio.create_task(_alarm_poller())
 
@@ -1202,11 +1089,22 @@ def radar_status():
 
 # ── Settings ───────────────────────────────────────────────────────────────────
 
+_SETTINGS_DEFAULTS = {
+    "GlobalGameRadar": {"enabled": False, "max_diff": 5, "start_quarter": 4, "alert_type": "silent"},
+    "FavoriteTeams":   [],
+    "FavoritePlayers": {},
+    "HistoricalMode":  {
+        "enabled": False,
+        "alert_type": "silent",
+        "categories": {"scoring_40_half": False, "threes_11": False, "quad_double_threat": False},
+    },
+}
+
+
 @app.get("/settings")
 def get_settings(user_token: str = ""):
-    json_prefs = get_preferences()
     if engine is None or not user_token:
-        return json_prefs
+        return dict(_SETTINGS_DEFAULTS)
     try:
         with Session(engine) as session:
             players = session.query(FavoritePlayerDB).filter_by(user_token=user_token).all()
@@ -1218,7 +1116,7 @@ def get_settings(user_token: str = ""):
                     "name":          p.target_name or "",
                     "total_pts":     p.total_pts,
                     "early_pts_q":   p.early_pts_q,
-                    "early_pts": p.early_pts,
+                    "early_pts":     p.early_pts,
                     "td_watch":      bool(p.td_watch),
                     "alert_type":    p.alert_type or "silent",
                 }
@@ -1234,8 +1132,11 @@ def get_settings(user_token: str = ""):
                 }
                 for t in teams
             ]
-            radar_cfg = json_prefs.get("GlobalGameRadar", {})
-            hist_cfg  = json_prefs.get("HistoricalMode",  {})
+            radar_cfg = _SETTINGS_DEFAULTS["GlobalGameRadar"].copy()
+            hist_cfg  = {
+                "enabled": False, "alert_type": "silent",
+                "categories": {"scoring_40_half": False, "threes_11": False, "quad_double_threat": False},
+            }
             if pref:
                 radar_cfg = {
                     "enabled":       pref.radar_enabled,
@@ -1253,7 +1154,6 @@ def get_settings(user_token: str = ""):
                     },
                 }
         return {
-            **json_prefs,
             "FavoritePlayers": fav_players,
             "FavoriteTeams":   fav_teams,
             "GlobalGameRadar": radar_cfg,
@@ -1261,7 +1161,7 @@ def get_settings(user_token: str = ""):
         }
     except Exception as exc:
         log.error("DB: /settings read error – %s", exc)
-        return json_prefs
+        return dict(_SETTINGS_DEFAULTS)
 
 
 class GlobalRadarSettings(BaseModel):
@@ -1292,15 +1192,12 @@ def update_global_radar(req: GlobalRadarSettings):
                 session.commit()
         except Exception as exc:
             log.error("DB: update_global_radar failed – %s", exc)
-    prefs = get_preferences()
-    prefs["GlobalGameRadar"] = {
-        "enabled": req.enabled, "max_diff": req.max_diff,
-        "start_quarter": req.start_quarter, "alert_type": req.alert_type,
-    }
-    save_preferences(prefs)
     if req.enabled:
         _maybe_start_radar()
-    return {"status": "updated", "GlobalGameRadar": prefs["GlobalGameRadar"]}
+    return {"status": "updated", "GlobalGameRadar": {
+        "enabled": req.enabled, "max_diff": req.max_diff,
+        "start_quarter": req.start_quarter, "alert_type": req.alert_type,
+    }}
 
 
 class FavoriteTeam(BaseModel):
@@ -1334,15 +1231,6 @@ def upsert_team(req: FavoriteTeam):
                 session.commit()
         except Exception as exc:
             log.error("DB: upsert_team failed – %s", exc)
-    prefs = get_preferences()
-    teams = [t for t in prefs.get("FavoriteTeams", []) if t["team_id"] != req.team_id]
-    teams.append({
-        "team_id": req.team_id, "team_name": req.team_name,
-        "max_diff": req.max_diff, "start_quarter": req.start_quarter,
-        "alert_type": req.alert_type,
-    })
-    prefs["FavoriteTeams"] = teams
-    save_preferences(prefs)
     _maybe_start_radar()
     return {"status": "updated"}
 
@@ -1360,9 +1248,6 @@ def remove_team(team_id: str, user_token: str = ""):
                     session.commit()
         except Exception as exc:
             log.error("DB: remove_team failed – %s", exc)
-    prefs = get_preferences()
-    prefs["FavoriteTeams"] = [t for t in prefs.get("FavoriteTeams", []) if t["team_id"] != team_id]
-    save_preferences(prefs)
     return {"status": "removed"}
 
 
@@ -1386,12 +1271,12 @@ def upsert_player(req: FavoritePlayer):
                     user_token=req.user_token, target_id=req.player_id
                 ).first()
                 if existing:
-                    existing.target_name   = req.name
-                    existing.total_pts     = req.total_pts
-                    existing.early_pts_q   = req.early_pts_q
-                    existing.early_pts = req.early_pts
-                    existing.td_watch      = req.td_watch
-                    existing.alert_type    = req.alert_type
+                    existing.target_name = req.name
+                    existing.total_pts   = req.total_pts
+                    existing.early_pts_q = req.early_pts_q
+                    existing.early_pts   = req.early_pts
+                    existing.td_watch    = req.td_watch
+                    existing.alert_type  = req.alert_type
                 else:
                     session.add(FavoritePlayerDB(
                         user_token=req.user_token, target_id=req.player_id,
@@ -1402,18 +1287,6 @@ def upsert_player(req: FavoritePlayer):
                 session.commit()
         except Exception as exc:
             log.error("DB: upsert_player failed – %s", exc)
-    prefs = get_preferences()
-    players: dict = prefs.get("FavoritePlayers", {})
-    players[req.player_id] = {
-        "name":          req.name,
-        "total_pts":     req.total_pts,
-        "early_pts_q":   req.early_pts_q,
-        "early_pts": req.early_pts,
-        "td_watch":      req.td_watch,
-        "alert_type":    req.alert_type,
-    }
-    prefs["FavoritePlayers"] = players
-    save_preferences(prefs)
     _maybe_start_radar()
     return {"status": "updated"}
 
@@ -1431,11 +1304,6 @@ def remove_player(player_id: str, user_token: str = ""):
                     session.commit()
         except Exception as exc:
             log.error("DB: remove_player failed – %s", exc)
-    prefs = get_preferences()
-    players: dict = prefs.get("FavoritePlayers", {})
-    players.pop(player_id, None)
-    prefs["FavoritePlayers"] = players
-    save_preferences(prefs)
     return {"status": "removed"}
 
 
@@ -1476,8 +1344,7 @@ def update_historical(req: HistoricalSettings):
                 session.commit()
         except Exception as exc:
             log.error("DB: update_historical failed – %s", exc)
-    prefs = get_preferences()
-    prefs["HistoricalMode"] = {
+    hist_mode = {
         "enabled": req.enabled, "alert_type": req.alert_type,
         "categories": {
             "scoring_40_half":    req.categories.scoring_40_half,
@@ -1485,10 +1352,9 @@ def update_historical(req: HistoricalSettings):
             "quad_double_threat": req.categories.quad_double_threat,
         },
     }
-    save_preferences(prefs)
     if req.enabled:
         _maybe_start_radar()
-    return {"status": "updated", "HistoricalMode": prefs["HistoricalMode"]}
+    return {"status": "updated", "HistoricalMode": hist_mode}
 
 
 class GlobalThresholdsRequest(BaseModel):
@@ -1499,14 +1365,11 @@ class GlobalThresholdsRequest(BaseModel):
 
 @app.post("/settings/thresholds")
 def update_thresholds(req: GlobalThresholdsRequest):
-    prefs = get_preferences()
-    prefs["GlobalThresholds"] = {
+    return {"status": "updated", "GlobalThresholds": {
         "pts_threshold":       req.pts_threshold,
         "triple_double_watch": req.triple_double_watch,
         "pts_per_quarter":     req.pts_per_quarter,
-    }
-    save_preferences(prefs)
-    return {"status": "updated", "GlobalThresholds": prefs["GlobalThresholds"]}
+    }}
 
 
 # ── Token Registration ─────────────────────────────────────────────────────────
@@ -1525,9 +1388,6 @@ def register_token(req: RegisterTokenRequest):
     if req.old_token and req.old_token != req.push_token:
         _migrate_token(req.old_token, req.push_token)
     save_push_token(req.push_token, req.sound_channel)
-    # Rebuild JSON prefs from DB so the radar starts with the correct favorites.
-    # This is critical after a Railway restart that wiped the ephemeral JSON file.
-    _restore_prefs_from_db(req.push_token)
     threading.Thread(target=start_radar_job, daemon=True).start()
     return {"status": "token_registered", "push_token": req.push_token}
 

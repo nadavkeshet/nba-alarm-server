@@ -19,7 +19,6 @@ import logging
 import threading
 import requests
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import firebase_admin
 from firebase_admin import credentials, messaging as fb_messaging
@@ -150,133 +149,22 @@ def get_all_teams() -> list[dict]:
     return teams
 
 
-# ---------------------------------------------------------------------------
-# Persistent storage
-# ---------------------------------------------------------------------------
-
-_SERVER_DIR   = Path(os.getcwd())
-_PREFS_FILE   = _SERVER_DIR / "user_preferences.json"
-_FILE_LOCK    = threading.Lock()
-
-_DEFAULT_PREFS: dict = {
-    "GlobalGameRadar": {
-        "enabled":       False,
-        "max_diff":      5,
-        "start_quarter": 4,
-    },
-    "FavoriteTeams":   [],   # [{team_id, team_name, max_diff, start_quarter}]
-    "FavoritePlayers": {},   # {player_id: {name, threshold, alert_type}}
-    "GlobalThresholds": {
-        "pts_threshold":        40,    # alert when fav player hits this many pts
-        "triple_double_watch":  True,  # alert when fav player approaches a triple-double
-        "pts_per_quarter":      15,    # alert when fav player has this many pts in Q1
-    },
-    "HistoricalMode":  {
-        "enabled": False,
-        "categories": {
-            "scoring_40_half":    False,
-            "threes_11":          False,
-            "quad_double_threat": False,
-        },
-    },
-}
-
-
-def _load_json(path: Path, default: dict) -> dict:
-    try:
-        if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        log.warning("Could not load %s: %s", path.name, exc)
-    return json.loads(json.dumps(default))  # deep copy of default
-
-
-def _save_json(path: Path, data: dict) -> None:
-    try:
-        with _FILE_LOCK:
-            path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    except Exception as exc:
-        log.warning("Could not save %s: %s", path.name, exc)
-
-
-def get_preferences() -> dict:
-    prefs = _load_json(_PREFS_FILE, _DEFAULT_PREFS)
-    # Fill in any keys added after the file was first written
-    for key, default_val in _DEFAULT_PREFS.items():
-        if key not in prefs:
-            prefs[key] = default_val
-    # Migrate FavoritePlayers: list → dict (old v1 format)
-    if isinstance(prefs.get("FavoritePlayers"), list):
-        old_list = prefs["FavoritePlayers"]
-        prefs["FavoritePlayers"] = {
-            p["player_id"]: {
-                "name":          p.get("name", "?"),
-                "total_pts":     p.get("threshold", 40),
-                "early_pts_q":   1,
-                "early_pts": 15,
-                "td_watch":      True,
-                "alert_type":    p.get("alert_type", "silent"),
-            }
-            for p in old_list if "player_id" in p
-        }
-        save_preferences(prefs)
-        log.info("Migrated FavoritePlayers list → dict (v2).")
-    else:
-        # Migrate dict entries that still use old "threshold" key (v1 dict format)
-        changed = False
-        for pid, p in prefs.get("FavoritePlayers", {}).items():
-            if "threshold" in p and "total_pts" not in p:
-                p["total_pts"]     = p.pop("threshold")
-                p.setdefault("early_pts_q",   1)
-                p.setdefault("early_pts", 15)
-                p.setdefault("td_watch",      True)
-                changed = True
-        if changed:
-            save_preferences(prefs)
-            log.info("Migrated FavoritePlayers dict entries to v2 schema.")
-    return prefs
-
-
-def save_preferences(prefs: dict) -> None:
-    _save_json(_PREFS_FILE, prefs)
-
 
 def save_push_token(push_token: str, sound_channel: str = "classic_alarm") -> None:
-    """Persist the push token both in-memory and on disk."""
+    """Persist the push token in-memory."""
     global _MEM_PUSH_TOKEN, _MEM_SOUND_CHANNEL
     if not push_token:
         return
     changed = _MEM_PUSH_TOKEN != push_token
     _MEM_PUSH_TOKEN    = push_token
     _MEM_SOUND_CHANNEL = sound_channel
-    try:
-        prefs = get_preferences()
-        prefs["_push_token"]    = push_token
-        prefs["_sound_channel"] = sound_channel
-        save_preferences(prefs)
-    except Exception as exc:
-        log.warning("save_push_token: disk write failed: %s", exc)
     if changed:
         log.info("Token registered %s", _tid(push_token))
 
 
 def get_saved_push_token() -> tuple[str, str]:
-    """Return (push_token, sound_channel) – memory first, disk fallback."""
-    global _MEM_PUSH_TOKEN, _MEM_SOUND_CHANNEL
-    if _MEM_PUSH_TOKEN:
-        return _MEM_PUSH_TOKEN, _MEM_SOUND_CHANNEL
-    # Memory empty (fresh process start) – try disk
-    try:
-        prefs = get_preferences()
-        token   = prefs.get("_push_token", "")
-        channel = prefs.get("_sound_channel", "classic_alarm")
-        if token:
-            # Warm up memory cache from disk
-            _MEM_PUSH_TOKEN    = token
-            _MEM_SOUND_CHANNEL = channel
-        return token, channel
-    except Exception:
-        return "", "classic_alarm"
+    """Return (push_token, sound_channel) from in-memory store."""
+    return _MEM_PUSH_TOKEN, _MEM_SOUND_CHANNEL
 
 
 # ---------------------------------------------------------------------------
