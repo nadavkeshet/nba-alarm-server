@@ -668,9 +668,13 @@ def _send_push_notification(
     try:
         message = fb_messaging.Message(
             data=data,
+            # Android: data-only (no notification) so setBackgroundMessageHandler fires
             android=fb_messaging.AndroidConfig(
                 priority="high",
             ),
+            # iOS: include alert in APNs payload so iOS shows a native banner
+            # even when app is killed. The notification field inside apns config
+            # only affects iOS — Android uses its own android config above.
             apns=fb_messaging.APNSConfig(
                 headers={"apns-priority": "10", "apns-push-type": "alert"},
                 payload=fb_messaging.APNSPayload(
@@ -680,7 +684,7 @@ def _send_push_notification(
                             body=body,
                         ),
                         sound="default" if is_alarm else None,
-                        content_available=True,
+                        mutable_content=True,
                     )
                 ),
             ),
