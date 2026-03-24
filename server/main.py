@@ -3,7 +3,6 @@ import asyncio
 import logging
 import threading
 import requests
-import requests as http
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
@@ -461,7 +460,7 @@ ESPN_SCOREBOARD = (
 
 def _fetch_scoreboard() -> dict:
     """Blocking ESPN fetch – called from a thread executor."""
-    resp = http.get(ESPN_SCOREBOARD, timeout=10)
+    resp = requests.get(ESPN_SCOREBOARD, timeout=10)
     resp.raise_for_status()
     return resp.json()
 
