@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, text
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, text, or_
 from sqlalchemy.orm import DeclarativeBase, Session
 
 from monitor import (
@@ -1095,13 +1095,18 @@ async def start_player_alarm(req: PlayerAlarmRequest):
                 start_q = None
             with Session(engine) as session:
                 # Dedup: replace any existing active alarm for same user+player+condition
-                session.query(Alarm).filter(
+                q = session.query(Alarm).filter(
                     Alarm.user_token     == req.push_token,
                     Alarm.target_id      == req.player_id,
                     Alarm.condition_type == condition_type,
-                    Alarm.start_quarter  == start_q,
                     Alarm.is_active.is_(True),
-                ).update({"is_active": False}, synchronize_session=False)
+                )
+                if start_q is None:
+                    # pts_goal: dedup rows stored with either NULL or 0 (legacy /set_alarm used 0)
+                    q = q.filter(or_(Alarm.start_quarter.is_(None), Alarm.start_quarter == 0))
+                else:
+                    q = q.filter(Alarm.start_quarter == start_q)
+                q.update({"is_active": False}, synchronize_session=False)
                 session.add(Alarm(
                     user_token     = req.push_token,
                     target_id      = req.player_id,
