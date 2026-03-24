@@ -675,6 +675,7 @@ def _send_push_notification(
             notification=fb_messaging.Notification(
                 title=title,
                 body=body,
+                sound="default" if is_alarm else None,
             ),
             android=fb_messaging.AndroidConfig(
                 priority="high",
