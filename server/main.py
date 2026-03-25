@@ -9,6 +9,8 @@ from typing import Optional
 
 log = logging.getLogger("nba_monitor")
 
+from epg import get_broadcasts_for_game, get_all_broadcasts
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -1398,6 +1400,57 @@ def register_token(req: RegisterTokenRequest):
 @app.get("/games")
 def games():
     return {"games": get_today_games()}
+
+
+# ── EPG (TV Broadcast Guide) ─────────────────────────────────────────────────
+
+@app.get("/epg")
+def epg_for_game(game_id: str = "", country: str = "il"):
+    """
+    Get TV broadcast channels for a specific game.
+    Query params: game_id, country (ISO 2-letter code, default: il)
+    """
+    event = None
+    for g in get_today_games():
+        if str(g.get("id")) == game_id:
+            event = g
+            break
+    if event is None:
+        return {"broadcasts": [], "error": "game not found"}
+
+    # Extract team abbreviations from ESPN event
+    comp = (event.get("competitions") or [{}])[0]
+    competitors = comp.get("competitors", [])
+    home_abbr = ""
+    away_abbr = ""
+    game_name = event.get("shortName", event.get("name", ""))
+    game_date = event.get("date", "")
+    for c in competitors:
+        team = c.get("team", {})
+        abbr = team.get("abbreviation", "")
+        if c.get("homeAway") == "home":
+            home_abbr = abbr
+        else:
+            away_abbr = abbr
+
+    broadcasts = get_broadcasts_for_game(
+        game_id=game_id,
+        game_name=game_name,
+        home_abbr=home_abbr,
+        away_abbr=away_abbr,
+        game_date_utc=game_date,
+        country=country,
+    )
+    return {"game_id": game_id, "broadcasts": broadcasts}
+
+
+@app.get("/epg/all")
+def epg_all_games(country: str = "il"):
+    """
+    Get all NBA TV broadcasts for today, grouped by team pair.
+    Returns: { "broadcasts": { "ATL_DET": [...], "BOS_OKC": [...] } }
+    """
+    return {"broadcasts": get_all_broadcasts(country=country)}
 
 
 @app.get("/roster")
