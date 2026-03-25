@@ -174,6 +174,8 @@ def _fetch_epg(country: str) -> dict:
         is_live = "ישיר" in title or "live" in title.lower() or "שידור ישיר" in desc
 
         # Parse start time
+        start_dt = None
+        start_utc = ""
         try:
             # Format: "20260325230000 +0000"
             dt_str = start_str.split()[0]
@@ -181,9 +183,10 @@ def _fetch_epg(country: str) -> dict:
             dt = datetime.strptime(dt_str, "%Y%m%d%H%M%S")
             tz_offset = int(tz_str[:3]) * 60 + int(tz_str[0] + tz_str[3:5])
             dt = dt.replace(tzinfo=timezone(timedelta(minutes=tz_offset)))
-            start_utc = dt.astimezone(timezone.utc).isoformat()
+            start_dt = dt.astimezone(timezone.utc)
+            start_utc = start_dt.isoformat()
         except (ValueError, IndexError):
-            start_utc = ""
+            pass
 
         ch_info = channels.get(channel_id, {})
         programmes.append({
@@ -192,6 +195,7 @@ def _fetch_epg(country: str) -> dict:
             "channel_icon": ch_info.get("icon", ""),
             "title": title,
             "start_utc": start_utc,
+            "start_dt": start_dt,  # datetime object for filtering
             "is_live": is_live,
             "teams": teams,
         })
@@ -215,30 +219,50 @@ def get_epg(country: str) -> dict:
     return data
 
 
+def _parse_game_date(game_date_utc: str) -> datetime | None:
+    """Parse ESPN's game date (ISO format) to a timezone-aware datetime."""
+    if not game_date_utc:
+        return None
+    try:
+        # "2026-03-25T23:00Z" or "2026-03-25T23:00:00Z"
+        dt_str = game_date_utc.replace("Z", "+00:00")
+        return datetime.fromisoformat(dt_str)
+    except ValueError:
+        return None
+
+
 def get_broadcasts_for_game(game_id: str, game_name: str, home_abbr: str, away_abbr: str,
                             game_date_utc: str, country: str = "il") -> list[dict]:
     """
     Find TV broadcasts for a specific NBA game.
-
-    Returns a list of channels showing the game:
-    [{"channel_name": "5sport HD", "channel_icon": "https://...", "is_live": true, "title": "..."}]
+    Matches by team names AND time window (broadcast must start within
+    1 hour before to 3 hours after game start).
     """
     epg = get_epg(country)
     programmes = epg.get("programmes", [])
 
-    # Match by team abbreviations
     target_teams = {home_abbr.upper(), away_abbr.upper()}
+    game_dt = _parse_game_date(game_date_utc)
+
     matches = []
     seen_channels = set()
 
     for prog in programmes:
         prog_teams = set(prog.get("teams", []))
-        # At least one team must match (both is better)
+        # At least one team must match
         if not prog_teams.intersection(target_teams):
             continue
 
+        # Time filter: broadcast must be near the game time
+        prog_dt = prog.get("start_dt")
+        if game_dt and prog_dt:
+            diff = (prog_dt - game_dt).total_seconds()
+            # Allow: 1 hour before game to 3 hours after game start
+            # This covers pre-game shows and the full game duration
+            if diff < -3600 or diff > 10800:
+                continue
+
         channel_name = prog.get("channel_name", "")
-        # Deduplicate by channel (show the first/live broadcast per channel)
         if channel_name in seen_channels:
             continue
         seen_channels.add(channel_name)
@@ -251,27 +275,38 @@ def get_broadcasts_for_game(game_id: str, game_name: str, home_abbr: str, away_a
             "start_utc": prog.get("start_utc", ""),
         })
 
-    # Sort: live broadcasts first, then by channel name
-    matches.sort(key=lambda x: (not x["is_live"], x["channel_name"]))
+    # Sort: live broadcasts first, then by start time
+    matches.sort(key=lambda x: (not x["is_live"], x.get("start_utc", "")))
     return matches
 
 
-def get_all_broadcasts(country: str = "il") -> dict[str, list[dict]]:
+def get_all_broadcasts(country: str = "il", games: list[dict] | None = None) -> dict[str, list[dict]]:
     """
-    Get all NBA broadcasts grouped by team pair.
-    Returns: { "ATL_DET": [{"channel_name": ..., ...}], ... }
+    Get NBA broadcasts matched to today's actual games.
+    If `games` is provided (ESPN game list), matches precisely by teams + time.
+    Returns: { "game_id": [{"channel_name": ..., ...}], ... }
     """
+    if games:
+        return _match_broadcasts_to_games(games, country)
+
+    # Fallback: group by team pair without game-specific matching
     epg = get_epg(country)
     programmes = epg.get("programmes", [])
 
-    by_game: dict[str, list[dict]] = {}
-    seen: dict[str, set] = {}  # game_key → set of channel names
+    # Only include programmes from today (UTC date)
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today_programmes = [
+        p for p in programmes
+        if p.get("start_utc", "").startswith(today_str)
+    ]
 
-    for prog in programmes:
+    by_game: dict[str, list[dict]] = {}
+    seen: dict[str, set] = {}
+
+    for prog in today_programmes:
         teams = prog.get("teams", [])
         if len(teams) < 1:
             continue
-        # Use sorted team abbreviations as key
         game_key = "_".join(sorted(teams[:2])) if len(teams) >= 2 else teams[0]
 
         if game_key not in by_game:
@@ -291,8 +326,40 @@ def get_all_broadcasts(country: str = "il") -> dict[str, list[dict]]:
             "start_utc": prog.get("start_utc", ""),
         })
 
-    # Sort each game's broadcasts: live first
     for key in by_game:
-        by_game[key].sort(key=lambda x: (not x["is_live"], x["channel_name"]))
+        by_game[key].sort(key=lambda x: (not x["is_live"], x.get("start_utc", "")))
 
     return by_game
+
+
+def _match_broadcasts_to_games(games: list[dict], country: str) -> dict[str, list[dict]]:
+    """Match EPG programmes to actual ESPN games by teams + time window."""
+    result: dict[str, list[dict]] = {}
+
+    for game in games:
+        game_id = str(game.get("id", ""))
+        comp = (game.get("competitions") or [{}])[0]
+        competitors = comp.get("competitors", [])
+        home_abbr = ""
+        away_abbr = ""
+        for c in competitors:
+            team = c.get("team", {})
+            abbr = team.get("abbreviation", "")
+            if c.get("homeAway") == "home":
+                home_abbr = abbr
+            else:
+                away_abbr = abbr
+
+        game_date = game.get("date", "")
+        broadcasts = get_broadcasts_for_game(
+            game_id=game_id,
+            game_name=game.get("shortName", ""),
+            home_abbr=home_abbr,
+            away_abbr=away_abbr,
+            game_date_utc=game_date,
+            country=country,
+        )
+        if broadcasts:
+            result[game_id] = broadcasts
+
+    return result
