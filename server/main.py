@@ -156,6 +156,7 @@ class UserPreferenceDB(_Base):
     hist_scoring_40_half    = Column(Boolean, default=False,   nullable=False)
     hist_threes_11          = Column(Boolean, default=False,   nullable=False)
     hist_quad_double        = Column(Boolean, default=False,   nullable=False)
+    sound_channel           = Column(String,  default="classic_alarm", nullable=False)
     created_at              = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
@@ -187,6 +188,7 @@ def _init_db() -> None:
         "ALTER TABLE alarms ADD COLUMN created_at TIMESTAMPTZ",
         "ALTER TABLE favorites ADD COLUMN broadcast_only BOOLEAN DEFAULT FALSE NOT NULL",
         "ALTER TABLE favorite_teams ADD COLUMN broadcast_only BOOLEAN DEFAULT FALSE NOT NULL",
+        "ALTER TABLE user_preferences ADD COLUMN sound_channel VARCHAR NOT NULL DEFAULT 'classic_alarm'",
     ]
     for sql in migrations:
         try:
@@ -435,11 +437,8 @@ def _get_all_users_for_radar() -> list[dict]:
                 },
             }
 
-            # Sound channel: use persisted value if this is the known push token
-            channel = "classic_alarm"
-            saved_token, saved_channel = get_saved_push_token()
-            if token == saved_token:
-                channel = saved_channel
+            # Sound channel: read from DB per user
+            channel = pref.sound_channel if pref and hasattr(pref, 'sound_channel') and pref.sound_channel else "classic_alarm"
 
             users.append({
                 "token":   token,
@@ -1406,6 +1405,21 @@ def register_token(req: RegisterTokenRequest):
     if req.old_token and req.old_token != req.push_token:
         _migrate_token(req.old_token, req.push_token)
     save_push_token(req.push_token, req.sound_channel)
+    # Persist sound_channel to DB (per-user, survives restarts)
+    if engine is not None:
+        try:
+            with Session(engine) as session:
+                pref = session.get(UserPreferenceDB, req.push_token)
+                if pref:
+                    pref.sound_channel = req.sound_channel
+                else:
+                    session.add(UserPreferenceDB(
+                        user_token=req.push_token,
+                        sound_channel=req.sound_channel,
+                    ))
+                session.commit()
+        except Exception as exc:
+            log.error("DB: register-token sound_channel save failed – %s", exc)
     threading.Thread(target=start_radar_job, daemon=True).start()
     return {"status": "token_registered", "push_token": req.push_token}
 
