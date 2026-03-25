@@ -675,12 +675,18 @@ def _send_push_notification(
             notification=fb_messaging.Notification(
                 title=title,
                 body=body,
-                sound="default",
             ),
             android=fb_messaging.AndroidConfig(
                 priority="high",
                 notification=fb_messaging.AndroidNotification(
                     channel_id=channel_id,
+                ),
+            ),
+            apns=fb_messaging.APNSConfig(
+                payload=fb_messaging.APNSPayload(
+                    aps=fb_messaging.Aps(
+                        sound="default",
+                    )
                 ),
             ),
             token=push_token,

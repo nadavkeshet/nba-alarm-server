@@ -825,7 +825,7 @@ def health():
             db_msg = "connected"
         except Exception as exc:
             db_msg = str(exc)
-    return {"status": "ok", "version": "ios-v3", "db": {"connected": db_ok, "detail": db_msg}}
+    return {"status": "ok", "version": "ios-v4", "db": {"connected": db_ok, "detail": db_msg}}
 
 
 # ── DB Alarm Endpoint ──────────────────────────────────────────────────────────
