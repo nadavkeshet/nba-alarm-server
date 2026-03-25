@@ -1319,3 +1319,4 @@ def get_today_games() -> list[dict]:
     except Exception as exc:
         log.warning("NBA games fetch failed: %s", exc)
         return _games_cache  # return stale cache on error rather than empty list
+
