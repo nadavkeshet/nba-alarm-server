@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Clipboard,
   FlatList,
+  Image,
   Linking,
   Modal,
   NativeModules,
@@ -670,6 +671,10 @@ export default function SettingsScreen() {
               return (
                 <View key={pid} style={styles.favCard}>
                   <View style={styles.favCardHeader}>
+                    <Image
+                      source={{ uri: `https://a.espncdn.com/i/headshots/nba/players/full/${pid}.png` }}
+                      style={styles.favPlayerHeadshot}
+                    />
                     <Text style={styles.favName}>{p.name}</Text>
                     <TouchableOpacity onPress={() => removePlayer(pid)} style={styles.removeBtn}>
                       <Text style={styles.removeBtnText}>Remove</Text>
@@ -1183,6 +1188,10 @@ export default function SettingsScreen() {
                       style={styles.pickerRow}
                       onPress={() => setPickedPlayer(p)}
                     >
+                      <Image
+                        source={{ uri: `https://a.espncdn.com/i/headshots/nba/players/full/${p.id}.png` }}
+                        style={styles.pickerPlayerHeadshot}
+                      />
                       <View style={{ flex: 1 }}>
                         <Text style={styles.pickerRowText}>{p.name}</Text>
                         <Text style={styles.pickerRowSub}>
@@ -1412,6 +1421,7 @@ const styles = StyleSheet.create({
     alignItems: 'center', marginBottom: 6,
   },
   favName: { fontSize: 15, fontWeight: '800', color: C.textPrimary, flex: 1 },
+  favPlayerHeadshot: { width: 36, height: 36, borderRadius: 18, marginRight: 8 },
 
   // Labels & inputs
   inputLabel: {
@@ -1499,8 +1509,9 @@ const styles = StyleSheet.create({
   // Picker list rows
   pickerRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 14,
+    paddingHorizontal: 16, paddingVertical: 10, gap: 10,
   },
+  pickerPlayerHeadshot: { width: 36, height: 36, borderRadius: 18 },
   pickerRowText:  { fontSize: 15, color: C.textPrimary, fontWeight: '600', flex: 1 },
   pickerRowSub:   { fontSize: 12, color: C.textMuted, marginTop: 2 },
   pickerRowRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },

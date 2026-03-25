@@ -712,6 +712,10 @@ export default function HomeScreen() {
                               style={[styles.playerRow, isSelected && styles.playerRowSelected]}
                               onPress={() => setSelectedPlayer(isSelected ? null : player)}
                             >
+                              <Image
+                                source={{ uri: `https://a.espncdn.com/i/headshots/nba/players/full/${player.id}.png` }}
+                                style={styles.playerHeadshot}
+                              />
                               <Text style={styles.playerJersey}>
                                 {player.jersey ? `#${player.jersey}` : '  '}
                               </Text>
@@ -1030,6 +1034,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   playerRowSelected: { backgroundColor: 'rgba(29,66,138,0.25)' },
+  playerHeadshot:    { width: 32, height: 32, borderRadius: 16 },
   playerJersey:      { fontSize: 12, color: C.textMuted, width: 30, textAlign: 'right' },
   playerName:        { flex: 1, fontSize: 14, color: C.textPrimary, fontWeight: '600' },
   playerNameSelected:{ color: C.accentBlue },
