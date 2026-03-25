@@ -109,9 +109,10 @@ class FavoritePlayerDB(_Base):
     total_pts     = Column(Integer, nullable=True)    # None = condition disabled
     early_pts     = Column(Integer, nullable=True)
     early_pts_q   = Column(Integer, nullable=True)
-    td_watch      = Column(Boolean, default=False, nullable=False)
-    alert_type    = Column(String,  nullable=True, default='silent')
-    created_at    = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    td_watch        = Column(Boolean, default=False, nullable=False)
+    alert_type      = Column(String,  nullable=True, default='silent')
+    broadcast_only  = Column(Boolean, default=False, nullable=False)
+    created_at      = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class FavoriteTeamDB(_Base):
@@ -122,10 +123,11 @@ class FavoriteTeamDB(_Base):
     user_token    = Column(String,  nullable=False, index=True)
     team_id       = Column(String,  nullable=False)
     team_name     = Column(String,  nullable=True)
-    score_gap     = Column(Integer, nullable=True)    # max_diff
-    start_quarter = Column(Integer, nullable=True)
-    alert_type    = Column(String,  nullable=True, default='silent')
-    created_at    = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    score_gap       = Column(Integer, nullable=True)    # max_diff
+    start_quarter   = Column(Integer, nullable=True)
+    alert_type      = Column(String,  nullable=True, default='silent')
+    broadcast_only  = Column(Boolean, default=False, nullable=False)
+    created_at      = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class FiredAlertDB(_Base):
@@ -183,6 +185,8 @@ def _init_db() -> None:
         "ALTER TABLE alarms ADD COLUMN game_name  VARCHAR",
         "ALTER TABLE alarms ADD COLUMN alert_type VARCHAR DEFAULT 'alarm'",
         "ALTER TABLE alarms ADD COLUMN created_at TIMESTAMPTZ",
+        "ALTER TABLE favorites ADD COLUMN broadcast_only BOOLEAN DEFAULT FALSE NOT NULL",
+        "ALTER TABLE favorite_teams ADD COLUMN broadcast_only BOOLEAN DEFAULT FALSE NOT NULL",
     ]
     for sql in migrations:
         try:
@@ -398,18 +402,20 @@ def _get_all_users_for_radar() -> list[dict]:
                     "total_pts":   p.total_pts,
                     "early_pts_q": p.early_pts_q,
                     "early_pts":   p.early_pts,
-                    "td_watch":    bool(p.td_watch),
-                    "alert_type":  p.alert_type or "silent",
+                    "td_watch":       bool(p.td_watch),
+                    "alert_type":     p.alert_type or "silent",
+                    "broadcast_only": getattr(p, 'broadcast_only', False),
                 }
                 for p in players
             }
             fav_teams = [
                 {
-                    "team_id":       t.team_id,
-                    "team_name":     t.team_name or "",
-                    "max_diff":      t.score_gap or 5,
-                    "start_quarter": t.start_quarter or 4,
-                    "alert_type":    t.alert_type or "silent",
+                    "team_id":        t.team_id,
+                    "team_name":      t.team_name or "",
+                    "max_diff":       t.score_gap or 5,
+                    "start_quarter":  t.start_quarter or 4,
+                    "alert_type":     t.alert_type or "silent",
+                    "broadcast_only": getattr(t, 'broadcast_only', False),
                 }
                 for t in teams
             ]
@@ -1120,18 +1126,20 @@ def get_settings(user_token: str = ""):
                     "total_pts":     p.total_pts,
                     "early_pts_q":   p.early_pts_q,
                     "early_pts":     p.early_pts,
-                    "td_watch":      bool(p.td_watch),
-                    "alert_type":    p.alert_type or "silent",
+                    "td_watch":       bool(p.td_watch),
+                    "alert_type":     p.alert_type or "silent",
+                    "broadcast_only": getattr(p, 'broadcast_only', False),
                 }
                 for p in players
             }
             fav_teams = [
                 {
-                    "team_id":       t.team_id,
-                    "team_name":     t.team_name or "",
-                    "max_diff":      t.score_gap or 5,
-                    "start_quarter": t.start_quarter or 4,
-                    "alert_type":    t.alert_type or "silent",
+                    "team_id":        t.team_id,
+                    "team_name":      t.team_name or "",
+                    "max_diff":       t.score_gap or 5,
+                    "start_quarter":  t.start_quarter or 4,
+                    "alert_type":     t.alert_type or "silent",
+                    "broadcast_only": getattr(t, 'broadcast_only', False),
                 }
                 for t in teams
             ]
@@ -1204,12 +1212,13 @@ def update_global_radar(req: GlobalRadarSettings):
 
 
 class FavoriteTeam(BaseModel):
-    user_token:    str = ""
-    team_id:       str
-    team_name:     str
-    max_diff:      int = 5
-    start_quarter: int = 4
-    alert_type:    str = "silent"
+    user_token:     str = ""
+    team_id:        str
+    team_name:      str
+    max_diff:       int = 5
+    start_quarter:  int = 4
+    alert_type:     str = "silent"
+    broadcast_only: bool = False
 
 
 @app.post("/settings/teams")
@@ -1221,15 +1230,17 @@ def upsert_team(req: FavoriteTeam):
                     user_token=req.user_token, team_id=req.team_id
                 ).first()
                 if existing:
-                    existing.team_name     = req.team_name
-                    existing.score_gap     = req.max_diff
-                    existing.start_quarter = req.start_quarter
-                    existing.alert_type    = req.alert_type
+                    existing.team_name      = req.team_name
+                    existing.score_gap      = req.max_diff
+                    existing.start_quarter  = req.start_quarter
+                    existing.alert_type     = req.alert_type
+                    existing.broadcast_only = getattr(req, 'broadcast_only', False)
                 else:
                     session.add(FavoriteTeamDB(
                         user_token=req.user_token, team_id=req.team_id,
                         team_name=req.team_name, score_gap=req.max_diff,
                         start_quarter=req.start_quarter, alert_type=req.alert_type,
+                        broadcast_only=getattr(req, 'broadcast_only', False),
                     ))
                 session.commit()
         except Exception as exc:
@@ -1255,14 +1266,15 @@ def remove_team(team_id: str, user_token: str = ""):
 
 
 class FavoritePlayer(BaseModel):
-    user_token:    str = ""
-    player_id:     str
-    name:          str
-    total_pts:     Optional[int]  = None   # None = condition disabled
-    early_pts_q:   Optional[int]  = None
-    early_pts: Optional[int]  = None
-    td_watch:      bool           = False
-    alert_type:    str            = "silent"
+    user_token:     str = ""
+    player_id:      str
+    name:           str
+    total_pts:      Optional[int]  = None
+    early_pts_q:    Optional[int]  = None
+    early_pts:      Optional[int]  = None
+    td_watch:       bool           = False
+    alert_type:     str            = "silent"
+    broadcast_only: bool           = False
 
 
 @app.post("/settings/players")
@@ -1274,18 +1286,20 @@ def upsert_player(req: FavoritePlayer):
                     user_token=req.user_token, target_id=req.player_id
                 ).first()
                 if existing:
-                    existing.target_name = req.name
-                    existing.total_pts   = req.total_pts
-                    existing.early_pts_q = req.early_pts_q
-                    existing.early_pts   = req.early_pts
-                    existing.td_watch    = req.td_watch
-                    existing.alert_type  = req.alert_type
+                    existing.target_name    = req.name
+                    existing.total_pts      = req.total_pts
+                    existing.early_pts_q    = req.early_pts_q
+                    existing.early_pts      = req.early_pts
+                    existing.td_watch       = req.td_watch
+                    existing.alert_type     = req.alert_type
+                    existing.broadcast_only = req.broadcast_only
                 else:
                     session.add(FavoritePlayerDB(
                         user_token=req.user_token, target_id=req.player_id,
                         target_name=req.name, total_pts=req.total_pts,
                         early_pts_q=req.early_pts_q, early_pts=req.early_pts,
                         td_watch=req.td_watch, alert_type=req.alert_type,
+                        broadcast_only=req.broadcast_only,
                     ))
                 session.commit()
         except Exception as exc:

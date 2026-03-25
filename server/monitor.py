@@ -19,6 +19,7 @@ import logging
 import threading
 import requests
 from datetime import datetime, timedelta, timezone
+from epg import get_broadcasts_for_game
 
 import firebase_admin
 from firebase_admin import credentials, messaging as fb_messaging
@@ -1072,7 +1073,25 @@ def _run_radar_tick_for_user(
                 max_d   = int(criteria.get("max_diff", 5))
                 start_q = int(criteria.get("start_quarter", 4))
                 c_alert = criteria.get("alert_type", radar_alert_type)
+                broadcast_only = bool(criteria.get("broadcast_only", False))
                 if quarter >= start_q and diff <= max_d:
+                    # If broadcast_only, skip if no TV broadcast found
+                    if broadcast_only:
+                        home_abbr = ""
+                        away_abbr = ""
+                        for comp_c in competitors:
+                            abbr = comp_c.get("team", {}).get("abbreviation", "")
+                            if comp_c.get("homeAway") == "home":
+                                home_abbr = abbr
+                            else:
+                                away_abbr = abbr
+                        broadcasts = get_broadcasts_for_game(
+                            game_id=game_id, game_name=game_name,
+                            home_abbr=home_abbr, away_abbr=away_abbr,
+                            game_date_utc=event.get("date", ""),
+                        )
+                        if not broadcasts:
+                            continue  # no broadcast → skip alert
                     label = "Favorite Team Alert!" if "team_name" in criteria else "NBA Radar – Close Game!"
                     if _fire_once(f"{game_id}_game", token):
                         log.info("RADAR ALARM  fire   | %s | Q%d diff=%d | %s | %s", game_name, quarter, diff, label, _tid(push_token))
@@ -1121,6 +1140,17 @@ def _run_radar_tick_for_user(
                     # ── Favorite Player Alerts ───────────────────────────────
                     if player_id in fav_players and not _has_manual_player_alarm(player_id):
                         fav_cfg      = fav_players[player_id]
+                        # broadcast_only check for players
+                        if bool(fav_cfg.get("broadcast_only", False)):
+                            home_a = ""
+                            away_a = ""
+                            for comp_c in event.get("competitions", [{}])[0].get("competitors", []):
+                                a = comp_c.get("team", {}).get("abbreviation", "")
+                                if comp_c.get("homeAway") == "home": home_a = a
+                                else: away_a = a
+                            if not get_broadcasts_for_game(game_id=game_id, game_name=game_name,
+                                    home_abbr=home_a, away_abbr=away_a, game_date_utc=event.get("date", "")):
+                                continue  # no broadcast → skip all player alerts for this game
                         p_alert      = fav_cfg.get("alert_type", "silent")
                         total_pts_thr = fav_cfg.get("total_pts")
                         early_pts_q  = fav_cfg.get("early_pts_q")
