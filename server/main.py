@@ -1219,6 +1219,7 @@ class FavoriteTeam(BaseModel):
     start_quarter:  int = 4
     alert_type:     str = "silent"
     broadcast_only: bool = False
+    free_only:      bool = False
 
 
 @app.post("/settings/teams")

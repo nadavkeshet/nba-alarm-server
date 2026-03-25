@@ -126,6 +126,51 @@ def _is_nba_programme(title: str, desc: str) -> bool:
     return True
 
 
+# ── Channel name normalization + free/paid classification ─────────────────────
+
+# Maps raw EPG channel IDs/names to clean display names + free status
+# Israel Sport 5 channels
+_CHANNEL_MAP_IL = {
+    "5sportHD.il":  {"en": "Sport 5",        "he": "ספורט 5",          "free": True},
+    "5PLUSHD.il":   {"en": "Sport 5 Plus",   "he": "ספורט 5 פלוס",    "free": True},
+    "5LIVEHD.il":   {"en": "Sport 5 Live",   "he": "ספורט 5 לייב",    "free": False},
+    "5STARS.il":    {"en": "Sport 5 Stars",  "he": "ספורט 5 סטארס",   "free": False},
+    "5GOLD.il":     {"en": "Sport 5 Gold",   "he": "ספורט 5 גולד",    "free": False},
+    "5SPORT4K.il":  {"en": "Sport 5 4K",     "he": "ספורט 5 4K",      "free": False},
+    "ספורט1HD.il":  {"en": "Sport 1",        "he": "ספורט 1",          "free": False},
+    "ספורט2HD.il":  {"en": "Sport 2",        "he": "ספורט 2",          "free": False},
+    "ספורט3HD.il":  {"en": "Sport 3",        "he": "ספורט 3",          "free": False},
+    "ספורט4HD.il":  {"en": "Sport 4",        "he": "ספורט 4",          "free": False},
+    "ספורט1SD.il":  {"en": "Sport 1",        "he": "ספורט 1",          "free": False},
+}
+
+# Generic name cleaning rules (applied after map lookup)
+_NAME_CLEANUP = [
+    (" HD", ""), (" SD", ""), (" hd", ""), (" sd", ""),
+    ("IL - ", ""), ("US - ", ""), ("GB - ", ""),
+]
+
+
+def _normalize_channel(channel_id: str, raw_name: str, country: str) -> tuple[str, bool]:
+    """
+    Returns (clean_display_name, is_free).
+    Uses channel map for known channels, falls back to generic cleanup.
+    """
+    # Check country-specific map
+    if country == "il" and channel_id in _CHANNEL_MAP_IL:
+        info = _CHANNEL_MAP_IL[channel_id]
+        return info.get("en", raw_name), info.get("free", False)
+
+    # Generic cleanup
+    name = raw_name
+    for old, new in _NAME_CLEANUP:
+        name = name.replace(old, new)
+    name = name.strip()
+
+    # Default: not free
+    return name, False
+
+
 def _fetch_epg(country: str) -> dict:
     """Fetch and parse EPG XML for a country. Returns parsed data."""
     url = EPG_BASE_URL.format(country=country)
@@ -154,7 +199,13 @@ def _fetch_epg(country: str) -> dict:
         # Remove "XX - " country prefix from display name
         if name and " - " in name:
             name = name.split(" - ", 1)[1]
-        channels[cid] = {"name": name, "icon": icon}
+        # Clean and normalize channel name
+        clean_name, is_free = _normalize_channel(cid, name, country)
+        # Get Hebrew name if available
+        he_name = ""
+        if country == "il" and cid in _CHANNEL_MAP_IL:
+            he_name = _CHANNEL_MAP_IL[cid].get("he", "")
+        channels[cid] = {"name": clean_name, "name_he": he_name, "icon": icon, "is_free": is_free}
 
     # Parse NBA programmes
     programmes = []
@@ -192,10 +243,12 @@ def _fetch_epg(country: str) -> dict:
         programmes.append({
             "channel_id": channel_id,
             "channel_name": ch_info.get("name", ""),
+            "channel_name_he": ch_info.get("name_he", ""),
             "channel_icon": ch_info.get("icon", ""),
+            "is_free": ch_info.get("is_free", False),
             "title": title,
             "start_utc": start_utc,
-            "start_dt": start_dt,  # datetime object for filtering
+            "start_dt": start_dt,
             "is_live": is_live,
             "teams": teams,
         })
@@ -269,14 +322,16 @@ def get_broadcasts_for_game(game_id: str, game_name: str, home_abbr: str, away_a
 
         matches.append({
             "channel_name": channel_name,
+            "channel_name_he": prog.get("channel_name_he", ""),
             "channel_icon": prog.get("channel_icon", ""),
+            "is_free": prog.get("is_free", False),
             "is_live": prog.get("is_live", False),
             "title": prog.get("title", ""),
             "start_utc": prog.get("start_utc", ""),
         })
 
-    # Sort: live broadcasts first, then by start time
-    matches.sort(key=lambda x: (not x["is_live"], x.get("start_utc", "")))
+    # Sort: free first, then live, then by start time
+    matches.sort(key=lambda x: (not x["is_free"], not x["is_live"], x.get("start_utc", "")))
     return matches
 
 
@@ -320,14 +375,16 @@ def get_all_broadcasts(country: str = "il", games: list[dict] | None = None) -> 
 
         by_game[game_key].append({
             "channel_name": channel_name,
+            "channel_name_he": prog.get("channel_name_he", ""),
             "channel_icon": prog.get("channel_icon", ""),
+            "is_free": prog.get("is_free", False),
             "is_live": prog.get("is_live", False),
             "title": prog.get("title", ""),
             "start_utc": prog.get("start_utc", ""),
         })
 
     for key in by_game:
-        by_game[key].sort(key=lambda x: (not x["is_live"], x.get("start_utc", "")))
+        by_game[key].sort(key=lambda x: (not x["is_free"], not x["is_live"], x.get("start_utc", "")))
 
     return by_game
 
