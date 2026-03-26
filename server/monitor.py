@@ -676,6 +676,10 @@ def _send_push_notification(
                 priority="high",
             ),
             apns=fb_messaging.APNSConfig(
+                headers={
+                    "apns-push-type": "alert",
+                    "apns-priority": "10",
+                },
                 payload=fb_messaging.APNSPayload(
                     aps=fb_messaging.Aps(
                         sound=f"{sound_channel}.wav" if is_alarm else "default",
