@@ -5,7 +5,8 @@ import notifee, { AndroidImportance, AndroidCategory, AndroidVisibility } from '
 import { registerStopHandler } from '../../alarmSoundHandler';
 import { NativeModules } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useTheme, type AppColors } from '../../context/ThemeContext';
 import {
   ActivityIndicator,
   Animated,
@@ -219,6 +220,8 @@ async function sendTokenToServer(token: string): Promise<boolean> {
 // ─── HomeScreen ───────────────────────────────────────────────────────────────
 
 export default function HomeScreen() {
+  const { colors: C } = useTheme();
+  const styles = useMemo(() => makeStyles(C), [C]);
   // ── Games state ───────────────────────────────────────────────────
   const [games, setGames]       = useState<any[]>([]);
   const [loading, setLoading]   = useState(true);
@@ -873,21 +876,7 @@ export default function HomeScreen() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const C = {
-  bg:          '#0B1623',
-  card:        '#0d1f35',
-  cardAlt:     '#111d2e',
-  border:      '#1a3451',
-  blue:        '#1d428a',
-  red:         '#c9082a',
-  textPrimary: '#e6edf3',
-  textMuted:   '#6b8aad',
-  liveGreen:   '#3fb950',
-  accentBlue:  '#4d8cf5',
-  orange:      '#FF6B00',
-};
-
-const styles = StyleSheet.create({
+const makeStyles = (C: AppColors) => StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
 
   header: {

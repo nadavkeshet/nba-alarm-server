@@ -6,13 +6,12 @@ import React, { useEffect, useState } from 'react';
 import { HapticTab } from '../../components/haptic-tab';
 import { IconSymbol } from '../../components/ui/icon-symbol';
 import { WelcomeGuide } from '../../components/welcome-guide';
-import { Colors } from '../../constants/theme';
-import { useColorScheme } from '../../hooks/use-color-scheme';
+import { ThemeProvider, useTheme } from '../../context/ThemeContext';
 
 const ONBOARDED_KEY = 'nba_alarm_onboarded';
 
-export default function TabLayout() {
-  const colorScheme = useColorScheme();
+function TabLayoutInner() {
+  const { colors } = useTheme();
   const [showGuide, setShowGuide] = useState(false);
 
   useEffect(() => {
@@ -31,10 +30,10 @@ export default function TabLayout() {
       <Tabs
         screenOptions={{
           tabBarActiveTintColor: '#FF6B00',
-          tabBarInactiveTintColor: '#6b8aad',
+          tabBarInactiveTintColor: colors.textMuted,
           tabBarStyle: {
-            backgroundColor: '#0B1623',
-            borderTopColor: '#1a3451',
+            backgroundColor: colors.bg,
+            borderTopColor: colors.border,
             borderTopWidth: 1,
           },
           headerShown: false,
@@ -70,5 +69,13 @@ export default function TabLayout() {
         closeLabel="Get Started"
       />
     </>
+  );
+}
+
+export default function TabLayout() {
+  return (
+    <ThemeProvider>
+      <TabLayoutInner />
+    </ThemeProvider>
   );
 }

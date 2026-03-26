@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import messaging from '@react-native-firebase/messaging';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTheme, type AppColors } from '../../context/ThemeContext';
 import {
   Animated,
   InteractionManager,
@@ -101,22 +102,6 @@ interface TrophyHit {
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 
-const C = {
-  bg:          '#0B1623',
-  card:        '#0d1f35',
-  cardAlt:     '#111d2e',
-  border:      '#1a3451',
-  borderMuted: '#1e2a3d',
-  blue:        '#1d428a',
-  red:         '#c9082a',
-  textPrimary: '#e6edf3',
-  textMuted:   '#6b8aad',
-  liveGreen:   '#3fb950',
-  accentBlue:  '#4d8cf5',
-  gold:        '#f0a500',
-  orange:      '#FF6B00',
-  orangeDim:   'rgba(255,107,0,0.15)',
-};
 
 const CONDITION_LABEL: Record<string, string> = {
   pts_goal:      'Points Goal',
@@ -167,6 +152,8 @@ const LivePill = React.memo(function LivePill({ label, color, bg }: { label: str
 // ─── ActiveScreen ─────────────────────────────────────────────────────────────
 
 export default function ActiveScreen() {
+  const { colors: C } = useTheme();
+  const styles = useMemo(() => makeStyles(C), [C]);
   const [data, setData]           = useState<ActiveMonitors | null>(null);
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState<string | null>(null);
@@ -701,7 +688,7 @@ export default function ActiveScreen() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
+const makeStyles = (C: AppColors) => StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
 
   header: {

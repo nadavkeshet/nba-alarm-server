@@ -4,7 +4,8 @@ import { useFocusEffect } from '@react-navigation/native';
 import messaging from '@react-native-firebase/messaging';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import notifee, { AndroidImportance, AndroidVisibility } from '@notifee/react-native';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTheme, type AppColors } from '../../context/ThemeContext';
 import {
   ActivityIndicator,
   Clipboard,
@@ -15,6 +16,7 @@ import {
   NativeModules,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TouchableOpacity,
   View,
@@ -64,19 +66,6 @@ interface CachedTeam   { id: string; name: string; abbreviation: string; logo: s
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 
-const C = {
-  bg:          '#0B1623',
-  card:        '#0d1f35',
-  border:      '#1a3451',
-  blue:        '#1d428a',
-  red:         '#c9082a',
-  textPrimary: '#e6edf3',
-  textMuted:   '#6b8aad',
-  liveGreen:   '#3fb950',
-  accentBlue:  '#4d8cf5',
-  gold:        '#f0a500',
-  orange:      '#FF6B00',
-};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -99,6 +88,8 @@ const QRow = React.memo(function QRow({ value, onChange, quarters = ['1', '2', '
 // ─── SettingsScreen ───────────────────────────────────────────────────────────
 
 export default function SettingsScreen() {
+  const { colors: C, mode: themeMode, toggleTheme } = useTheme();
+  const styles = useMemo(() => makeStyles(C), [C]);
   const insets = useSafeAreaInsets();
   const [userToken, setUserToken]       = useState('');
   const [tokenLoaded, setTokenLoaded]   = useState(false);
@@ -586,6 +577,10 @@ export default function SettingsScreen() {
               return (
                 <View key={t.team_id} style={styles.favCard}>
                   <View style={styles.favCardHeader}>
+                    <Image
+                      source={{ uri: `https://a.espncdn.com/i/teamlogos/nba/500/${t.team_id}.png` }}
+                      style={styles.favTeamLogo}
+                    />
                     <Text style={styles.favName}>{t.team_name}</Text>
                     <TouchableOpacity onPress={() => removeTeam(t.team_id)} style={styles.removeBtn}>
                       <Text style={styles.removeBtnText}>Remove</Text>
@@ -962,6 +957,28 @@ export default function SettingsScreen() {
           <Ionicons name="information-circle-outline" size={20} color={C.orange} />
           <Text style={styles.guideBtnText}>App Guide</Text>
         </TouchableOpacity>
+
+        {/* ── Appearance ────────────────────────────────────────────── */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>APPEARANCE</Text>
+          <View style={styles.switchRow}>
+            <Ionicons
+              name={themeMode === 'dark' ? 'moon' : 'sunny'}
+              size={18}
+              color={C.accentBlue}
+              style={{ marginRight: 8 }}
+            />
+            <Text style={styles.switchLabel}>
+              {themeMode === 'dark' ? 'Dark Mode' : 'Light Mode'}
+            </Text>
+            <Switch
+              value={themeMode === 'dark'}
+              onValueChange={toggleTheme}
+              trackColor={{ false: C.border, true: C.accentBlue }}
+              thumbColor={themeMode === 'dark' ? C.textPrimary : '#fff'}
+            />
+          </View>
+        </View>
 
         {/* ── Privacy Policy ────────────────────────────────────────── */}
         <TouchableOpacity
@@ -1370,7 +1387,7 @@ export default function SettingsScreen() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
+const makeStyles = (C: AppColors) => StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
 
   header: {
@@ -1421,6 +1438,7 @@ const styles = StyleSheet.create({
     alignItems: 'center', marginBottom: 6,
   },
   favName: { fontSize: 15, fontWeight: '800', color: C.textPrimary, flex: 1 },
+  favTeamLogo:       { width: 36, height: 36, marginRight: 8 },
   favPlayerHeadshot: { width: 36, height: 36, borderRadius: 18, marginRight: 8 },
 
   // Labels & inputs
