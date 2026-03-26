@@ -28,6 +28,7 @@ import Slider from '@react-native-community/slider';
 import { BasketballToggle } from '../../components/basketball-toggle';
 import { WelcomeGuide } from '../../components/welcome-guide';
 import { SERVER_URL } from '../../config';
+import { teamFullToHe } from '../../utils/teamNames';
 
 // ─── Sound definitions ────────────────────────────────────────────────────────
 
@@ -91,7 +92,7 @@ const QRow = React.memo(function QRow({ value, onChange, quarters = ['1', '2', '
 
 export default function SettingsScreen() {
   const { colors: C, mode: themeMode, toggleTheme } = useTheme();
-  const { t, lang, toggleLanguage } = useLanguage();
+  const { t, lang, toggleLanguage, isHebrew } = useLanguage();
   const styles = useMemo(() => makeStyles(C), [C]);
   const insets = useSafeAreaInsets();
   const [userToken, setUserToken]       = useState('');
@@ -594,7 +595,7 @@ export default function SettingsScreen() {
                       source={{ uri: `https://a.espncdn.com/i/teamlogos/nba/500/${team.team_id}.png` }}
                       style={styles.favTeamLogo}
                     />
-                    <Text style={styles.favName}>{team.team_name}</Text>
+                    <Text style={styles.favName}>{isHebrew ? teamFullToHe(team.team_name) : team.team_name}</Text>
                     <TouchableOpacity onPress={() => removeTeam(team.team_id)} style={styles.removeBtn}>
                       <Text style={styles.removeBtnText}>{t('settings.remove')}</Text>
                     </TouchableOpacity>
@@ -1107,7 +1108,7 @@ export default function SettingsScreen() {
                         source={{ uri: team.logo ?? `https://a.espncdn.com/i/teamlogos/nba/500/${team.id}.png` }}
                         style={styles.pickerTeamLogo}
                       />
-                      <Text style={styles.pickerRowText}>{team.name}</Text>
+                      <Text style={styles.pickerRowText}>{isHebrew ? teamFullToHe(team.name) : team.name}</Text>
                       <View style={styles.pickerRowRight}>
                         {isFav && <Text style={styles.savedBadge}>{t('settings.savedBadge')}</Text>}
                         <Text style={styles.pickerRowAbbr}>{team.abbreviation}</Text>
@@ -1130,7 +1131,7 @@ export default function SettingsScreen() {
                       source={{ uri: pickedTeam.logo ?? `https://a.espncdn.com/i/teamlogos/nba/500/${pickedTeam.id}.png` }}
                       style={styles.configTeamLogo}
                     />
-                    <Text style={styles.configTitle}>{pickedTeam.name}</Text>
+                    <Text style={styles.configTitle}>{isHebrew ? teamFullToHe(pickedTeam.name) : pickedTeam.name}</Text>
                   </View>
                   <Text style={styles.configSub}>{t('settings.configSub')}</Text>
 
@@ -1193,7 +1194,7 @@ export default function SettingsScreen() {
                     disabled={saving}
                   >
                     <Text style={styles.confirmBtnText}>
-                      {saving ? t('settings.saving') : t('settings.addTeamBtn', pickedTeam.abbreviation)}
+                      {saving ? t('settings.saving') : t('settings.addTeamBtn', isHebrew ? teamFullToHe(pickedTeam.name) : pickedTeam.abbreviation)}
                     </Text>
                   </TouchableOpacity>
                   <TouchableOpacity style={styles.cancelBtn} onPress={closeTeamModal}>
@@ -1253,7 +1254,7 @@ export default function SettingsScreen() {
                     style={styles.pickerRow}
                     onPress={() => setPickedTeamForPlayer(team)}
                   >
-                    <Text style={styles.pickerRowText}>{team.name}</Text>
+                    <Text style={styles.pickerRowText}>{isHebrew ? teamFullToHe(team.name) : team.name}</Text>
                     <View style={styles.pickerRowRight}>
                       <Text style={styles.pickerRowAbbr}>{t('settings.players', team.players.length)}</Text>
                       <Ionicons name="chevron-forward" size={16} color={C.textMuted} />

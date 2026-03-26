@@ -21,6 +21,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { SkeletonAlarmCard } from '../../components/skeleton-card';
 
 import { SERVER_URL } from '../../config';
+import { translateGameName, teamFullToHe } from '../../utils/teamNames';
 
 const TROPHY_KEY = 'nba_alarm_recent_hits';
 
@@ -172,7 +173,7 @@ const LivePill = React.memo(function LivePill({ label, color, bg }: { label: str
 export default function ActiveScreen() {
   const { colors: C } = useTheme();
   const styles = useMemo(() => makeStyles(C), [C]);
-  const { t } = useLanguage();
+  const { t, isHebrew } = useLanguage();
   const [data, setData]           = useState<ActiveMonitors | null>(null);
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState<string | null>(null);
@@ -422,7 +423,7 @@ export default function ActiveScreen() {
                       color={C.orange}
                       bg={C.orangeDim}
                     />
-                    <Text style={styles.alarmGame}>{alarm.game_name ?? t('active.unknownGame')}</Text>
+                    <Text style={styles.alarmGame}>{isHebrew ? translateGameName(alarm.game_name ?? '') || t('active.unknownGame') : (alarm.game_name ?? t('active.unknownGame'))}</Text>
                     <Text style={styles.alarmSub}>
                       {t('active.alertDiff', alarm.max_diff ?? '?', alarm.start_quarter ?? '?')}
                     </Text>
@@ -455,7 +456,7 @@ export default function ActiveScreen() {
                   )}
                   <View style={styles.alarmCardLeft}>
                     <LivePill label={t('active.saved')} color={C.accentBlue} bg="rgba(77,140,245,0.12)" />
-                    <Text style={styles.alarmGame}>{alarm.target_name || alarm.target_id || t('active.unknownGame')}</Text>
+                    <Text style={styles.alarmGame}>{isHebrew ? translateGameName(alarm.target_name || '') || alarm.target_id || t('active.unknownGame') : (alarm.target_name || alarm.target_id || t('active.unknownGame'))}</Text>
                     <Text style={styles.alarmSub}>
                       {t('active.scoregap', alarm.threshold ?? '?', alarm.start_quarter ?? 4)}
                     </Text>
@@ -500,7 +501,7 @@ export default function ActiveScreen() {
                         {alarm.condition !== 'triple_double' ? ` · ${alarm.pts_threshold ?? '?'} ${t('active.pts')}` : ''}
                       </Text>
                     ))}
-                    <Text style={[styles.alarmSub, { marginTop: 1 }]}>{group[0].game_name ?? ''}</Text>
+                    <Text style={[styles.alarmSub, { marginTop: 1 }]}>{isHebrew ? translateGameName(group[0].game_name ?? '') : (group[0].game_name ?? '')}</Text>
                     <Text style={styles.alarmSub}>
                       {group[0].alert_type === 'alarm' ? t('active.fullAlarm') : t('active.silentMode')}
                     </Text>
@@ -597,7 +598,7 @@ export default function ActiveScreen() {
                 <View key={team.team_id} style={styles.favItem}>
                   <Text style={styles.favIcon}>🏀</Text>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.favName}>{team.team_name}</Text>
+                    <Text style={styles.favName}>{isHebrew ? teamFullToHe(team.team_name) : team.team_name}</Text>
                     <Text style={styles.rowSub}>{t('active.alertDiff', team.max_diff, team.start_quarter)}</Text>
                   </View>
                 </View>

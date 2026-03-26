@@ -33,6 +33,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { SkeletonGameCard } from '../../components/skeleton-card';
 import { SERVER_URL } from '../../config';
+import { teamAbbrToHe } from '../../utils/teamNames';
 
 // Enable LayoutAnimation on Android
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -93,7 +94,7 @@ function GameCard({
 }) {
   const { colors: C } = useTheme();
   const styles = useMemo(() => makeStyles(C), [C]);
-  const { t } = useLanguage();
+  const { t, isHebrew } = useLanguage();
   const { home, away } = getTeams(item);
   const state: string  = item?.status?.type?.state ?? 'pre';
   const isLive       = state === 'in';
@@ -150,7 +151,7 @@ function GameCard({
           {away?.team?.logo
             ? <Image source={{ uri: away.team.logo }} style={styles.teamLogo} resizeMode="contain" />
             : <View style={[styles.teamLogo, styles.logoPlaceholder]} />}
-          <Text style={styles.teamAbbr}>{away?.team?.abbreviation ?? '?'}</Text>
+          <Text style={styles.teamAbbr}>{isHebrew ? teamAbbrToHe(away?.team?.abbreviation ?? '') : (away?.team?.abbreviation ?? '?')}</Text>
           {showScore && <Text style={styles.scoreText}>{away?.score ?? '—'}</Text>}
           {awayStarred ? <Text style={styles.starBtnActive}>★</Text> : null}
         </View>
@@ -163,7 +164,7 @@ function GameCard({
           {home?.team?.logo
             ? <Image source={{ uri: home.team.logo }} style={styles.teamLogo} resizeMode="contain" />
             : <View style={[styles.teamLogo, styles.logoPlaceholder]} />}
-          <Text style={styles.teamAbbr}>{home?.team?.abbreviation ?? '?'}</Text>
+          <Text style={styles.teamAbbr}>{isHebrew ? teamAbbrToHe(home?.team?.abbreviation ?? '') : (home?.team?.abbreviation ?? '?')}</Text>
           {showScore && <Text style={styles.scoreText}>{home?.score ?? '—'}</Text>}
           {homeStarred ? <Text style={styles.starBtnActive}>★</Text> : null}
         </View>
