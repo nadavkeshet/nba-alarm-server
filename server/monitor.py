@@ -663,7 +663,7 @@ def _send_push_notification(
         "body":       body,
         "channel_id": channel_id,
         "alert_type": alert_type,
-        "sound":      "classic_alarm" if is_alarm else "",
+        "sound":      sound_channel if is_alarm else "",
     }
 
     try:
