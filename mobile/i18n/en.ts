@@ -5,7 +5,7 @@ export const en = {
   'tab.settings':'Settings',
 
   // ── Home ────────────────────────────────────────────────────────
-  'home.title':            'NBA Smart Alarm',
+  'home.title':            'NBA Smart Alarm v3',
   'home.todaysGames':      "TODAY'S GAMES",
   'home.connectionError':  'Connection Error',
   'home.connectionErrorSub':'Could not reach the server.',
