@@ -44,15 +44,16 @@ const SOUND_KEY = 'nba_alarm_sound';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface GlobalRadar      { enabled: boolean; max_diff: number; start_quarter: number; alert_type: string }
-interface FavTeam          { team_id: string; team_name: string; max_diff: number; start_quarter: number; alert_type: string }
+interface FavTeam          { team_id: string; team_name: string; max_diff: number; start_quarter: number; alert_type: string; broadcast_only: boolean }
 // Stored on server as { player_id: { name, total_pts, early_pts_q, early_pts, td_watch, alert_type } }
 interface FavPlayerEntry {
-  name:          string;
-  total_pts:     number | null;   // null = condition disabled
-  early_pts_q:   number | null;
-  early_pts: number | null;
-  td_watch:      boolean;
-  alert_type:    string;
+  name:           string;
+  total_pts:      number | null;   // null = condition disabled
+  early_pts_q:    number | null;
+  early_pts:      number | null;
+  td_watch:       boolean;
+  alert_type:     string;
+  broadcast_only: boolean;
 }
 interface HistoricalCats   { scoring_40_half: boolean; threes_11: boolean; quad_double_threat: boolean }
 interface AppSettings {
@@ -117,20 +118,21 @@ export default function SettingsScreen() {
   const [radarStartQ, setRadarStartQ]   = useState('4');
 
   // Per-team in-place edit state for existing favorites
-  const [teamEdits, setTeamEdits] = useState<Record<string, { max_diff: number; start_quarter: string; alert_type: string }>>({});
+  const [teamEdits, setTeamEdits] = useState<Record<string, { max_diff: number; start_quarter: string; alert_type: string; broadcast_only: boolean }>>({});
 
   // ── Add Team Modal state ──────────────────────────────────────────────
   const [teamModalVisible, setTeamModalVisible] = useState(false);
   const [pickedTeam, setPickedTeam]             = useState<CachedTeam | null>(null);
   const [newTeamMaxDiff, setNewTeamMaxDiff]       = useState(5);
   const [newTeamStartQ, setNewTeamStartQ]         = useState('4');
-  const [newTeamAlertType, setNewTeamAlertType]   = useState<'alarm' | 'silent'>('silent');
+  const [newTeamAlertType, setNewTeamAlertType]     = useState<'alarm' | 'silent'>('silent');
+  const [newTeamBroadcastOnly, setNewTeamBroadcastOnly] = useState(false);
 
   // Per-player in-place edit state (all 4 conditions + enabled toggles)
   const [playerEdits, setPlayerEdits] = useState<Record<string, {
     totalPtsEnabled: boolean; total_pts: number;
     hotStartEnabled: boolean; early_pts_q: string; early_pts: number;
-    td_watch: boolean; alert_type: string;
+    td_watch: boolean; alert_type: string; broadcast_only: boolean;
   }>>({});
 
   // ── Add Player Modal state ────────────────────────────────────────────
@@ -144,7 +146,8 @@ export default function SettingsScreen() {
   const [newHotStartQ,        setNewHotStartQ]        = useState('1');
   const [newHotStartPts,      setNewHotStartPts]      = useState(15);
   const [newTdWatch,          setNewTdWatch]          = useState(false);
-  const [newPlayerAlertType, setNewPlayerAlertType]   = useState<'alarm' | 'silent'>('silent');
+  const [newPlayerAlertType, setNewPlayerAlertType]         = useState<'alarm' | 'silent'>('silent');
+  const [newPlayerBroadcastOnly, setNewPlayerBroadcastOnly] = useState(false);
 
   // ── Load push token once ───────────────────────────────────────────────
 
@@ -195,9 +198,9 @@ export default function SettingsScreen() {
       setRadarStartQ(String(s.GlobalGameRadar?.start_quarter ?? 4));
 
       // Init per-team editable fields
-      const edits: Record<string, { max_diff: number; start_quarter: string; alert_type: string }> = {};
+      const edits: Record<string, { max_diff: number; start_quarter: string; alert_type: string; broadcast_only: boolean }> = {};
       for (const ft of s.FavoriteTeams ?? []) {
-        edits[ft.team_id] = { max_diff: ft.max_diff, start_quarter: String(ft.start_quarter), alert_type: ft.alert_type ?? 'silent' };
+        edits[ft.team_id] = { max_diff: ft.max_diff, start_quarter: String(ft.start_quarter), alert_type: ft.alert_type ?? 'silent', broadcast_only: ft.broadcast_only ?? false };
       }
       setTeamEdits(edits);
 
@@ -205,7 +208,7 @@ export default function SettingsScreen() {
       const pEdits: Record<string, {
         totalPtsEnabled: boolean; total_pts: number;
         hotStartEnabled: boolean; early_pts_q: string; early_pts: number;
-        td_watch: boolean; alert_type: string;
+        td_watch: boolean; alert_type: string; broadcast_only: boolean;
       }> = {};
       for (const [pid, p] of Object.entries(s.FavoritePlayers ?? {})) {
         pEdits[pid] = {
@@ -216,6 +219,7 @@ export default function SettingsScreen() {
           early_pts:       p.early_pts ?? 15,
           td_watch:        p.td_watch ?? false,
           alert_type:      p.alert_type ?? 'silent',
+          broadcast_only:  p.broadcast_only ?? false,
         };
       }
       setPlayerEdits(pEdits);
@@ -347,7 +351,7 @@ export default function SettingsScreen() {
       } : s);
       setTeamEdits(prev => ({
         ...prev,
-        [payload.team_id]: { max_diff: payload.max_diff, start_quarter: String(payload.start_quarter), alert_type: payload.alert_type },
+        [payload.team_id]: { max_diff: payload.max_diff, start_quarter: String(payload.start_quarter), alert_type: payload.alert_type, broadcast_only: payload.broadcast_only ?? false },
       }));
     } finally { setSaving(false); }
   };
@@ -365,23 +369,25 @@ export default function SettingsScreen() {
     if (!pickedTeam) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     await saveTeam({
-      team_id:       pickedTeam.id,
-      team_name:     pickedTeam.name,
-      max_diff:      newTeamMaxDiff || 5,
-      start_quarter: parseInt(newTeamStartQ, 10) || 4,
-      alert_type:    newTeamAlertType,
+      team_id:        pickedTeam.id,
+      team_name:      pickedTeam.name,
+      max_diff:       newTeamMaxDiff || 5,
+      start_quarter:  parseInt(newTeamStartQ, 10) || 4,
+      alert_type:     newTeamAlertType,
+      broadcast_only: newTeamBroadcastOnly,
     });
     closeTeamModal();
   };
 
   const updateExistingTeam = async (team: FavTeam) => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    const edit = teamEdits[team.team_id] ?? { max_diff: team.max_diff, start_quarter: String(team.start_quarter), alert_type: team.alert_type };
+    const edit = teamEdits[team.team_id] ?? { max_diff: team.max_diff, start_quarter: String(team.start_quarter), alert_type: team.alert_type, broadcast_only: team.broadcast_only ?? false };
     await saveTeam({
       ...team,
-      max_diff:      edit.max_diff || 5,
-      start_quarter: parseInt(edit.start_quarter, 10) || 4,
-      alert_type:    edit.alert_type,
+      max_diff:       edit.max_diff || 5,
+      start_quarter:  parseInt(edit.start_quarter, 10) || 4,
+      alert_type:     edit.alert_type,
+      broadcast_only: edit.broadcast_only,
     });
     flashSaved(team.team_id);
   };
@@ -397,15 +403,16 @@ export default function SettingsScreen() {
     }
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     const payload = {
-      user_token:    userToken,
-      player_id:     pickedPlayer.id,
-      name:          pickedPlayer.name,
+      user_token:     userToken,
+      player_id:      pickedPlayer.id,
+      name:           pickedPlayer.name,
       // Send null for disabled conditions — server will store as NULL
-      total_pts:     newTotalPtsEnabled  ? (newTotalPts  || 40) : null,
-      early_pts_q:   newHotStartEnabled  ? (parseInt(newHotStartQ, 10) || 1) : null,
-      early_pts:     newHotStartEnabled  ? (newHotStartPts || 15) : null,
-      td_watch:      newTdWatch,
-      alert_type:    newPlayerAlertType,
+      total_pts:      newTotalPtsEnabled  ? (newTotalPts  || 40) : null,
+      early_pts_q:    newHotStartEnabled  ? (parseInt(newHotStartQ, 10) || 1) : null,
+      early_pts:      newHotStartEnabled  ? (newHotStartPts || 15) : null,
+      td_watch:       newTdWatch,
+      alert_type:     newPlayerAlertType,
+      broadcast_only: newPlayerBroadcastOnly,
     };
     setSaving(true);
     try {
@@ -418,12 +425,13 @@ export default function SettingsScreen() {
         FavoritePlayers: {
           ...s.FavoritePlayers,
           [pickedPlayer.id]: {
-            name:          pickedPlayer.name,
-            total_pts:     payload.total_pts,
-            early_pts_q:   payload.early_pts_q,
-            early_pts: payload.early_pts,
-            td_watch:      payload.td_watch,
-            alert_type:    newPlayerAlertType,
+            name:           pickedPlayer.name,
+            total_pts:      payload.total_pts,
+            early_pts_q:    payload.early_pts_q,
+            early_pts:      payload.early_pts,
+            td_watch:       payload.td_watch,
+            alert_type:     newPlayerAlertType,
+            broadcast_only: newPlayerBroadcastOnly,
           },
         },
       } : s);
@@ -437,6 +445,7 @@ export default function SettingsScreen() {
           early_pts:       payload.early_pts ?? 15,
           td_watch:        payload.td_watch,
           alert_type:      newPlayerAlertType,
+          broadcast_only:  newPlayerBroadcastOnly,
         },
       }));
       closePlayerModal();
@@ -449,14 +458,15 @@ export default function SettingsScreen() {
     const edit = playerEdits[player_id];
     if (!edit) return;
     const payload = {
-      user_token:    userToken,
+      user_token:     userToken,
       player_id,
       name,
-      total_pts:     edit.totalPtsEnabled  ? (edit.total_pts || 40) : null,
-      early_pts_q:   edit.hotStartEnabled  ? (parseInt(edit.early_pts_q, 10) || 1) : null,
-      early_pts:     edit.hotStartEnabled  ? (edit.early_pts || 15) : null,
-      td_watch:      edit.td_watch,
+      total_pts:      edit.totalPtsEnabled  ? (edit.total_pts || 40) : null,
+      early_pts_q:    edit.hotStartEnabled  ? (parseInt(edit.early_pts_q, 10) || 1) : null,
+      early_pts:      edit.hotStartEnabled  ? (edit.early_pts || 15) : null,
+      td_watch:       edit.td_watch,
       alert_type,
+      broadcast_only: edit.broadcast_only ?? false,
     };
     setSaving(true);
     try {
@@ -473,8 +483,9 @@ export default function SettingsScreen() {
             total_pts:     payload.total_pts,
             early_pts_q:   payload.early_pts_q,
             early_pts: payload.early_pts,
-            td_watch:      payload.td_watch,
+            td_watch:       payload.td_watch,
             alert_type,
+            broadcast_only: payload.broadcast_only,
           },
         },
       } : s);
@@ -503,6 +514,7 @@ export default function SettingsScreen() {
     setNewTeamMaxDiff(5);
     setNewTeamStartQ('4');
     setNewTeamAlertType('silent');
+    setNewTeamBroadcastOnly(false);
     setTeamModalVisible(true);
   };
   const closeTeamModal = () => { setTeamModalVisible(false); setPickedTeam(null); };
@@ -523,6 +535,7 @@ export default function SettingsScreen() {
     setNewHotStartPts(15);
     setNewTdWatch(false);
     setNewPlayerAlertType('silent');
+    setNewPlayerBroadcastOnly(false);
   };
 
   // ── Derived ───────────────────────────────────────────────────────────
@@ -573,7 +586,7 @@ export default function SettingsScreen() {
             <Text style={styles.emptyHint}>No favorite teams yet.</Text>
           ) : (
             settings!.FavoriteTeams.map(t => {
-              const edit = teamEdits[t.team_id] ?? { max_diff: String(t.max_diff), start_quarter: String(t.start_quarter), alert_type: t.alert_type };
+              const edit = teamEdits[t.team_id] ?? { max_diff: t.max_diff, start_quarter: String(t.start_quarter), alert_type: t.alert_type, broadcast_only: t.broadcast_only ?? false };
               return (
                 <View key={t.team_id} style={styles.favCard}>
                   <View style={styles.favCardHeader}>
@@ -620,6 +633,20 @@ export default function SettingsScreen() {
                         </Text>
                       </TouchableOpacity>
                     ))}
+                  </View>
+
+                  {/* Broadcast Only */}
+                  <View style={[styles.condCard, { marginTop: 8 }]}>
+                    <View style={styles.condCardHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.condCardTitle}>Broadcast Only</Text>
+                        <Text style={styles.condCardSub}>Only alert if the game is on TV</Text>
+                      </View>
+                      <BasketballToggle
+                        value={edit.broadcast_only}
+                        onValueChange={v => setTeamEdits(prev => ({ ...prev, [t.team_id]: { ...edit, broadcast_only: v } }))}
+                      />
+                    </View>
                   </View>
 
                   <TouchableOpacity style={styles.updateBtn} onPress={() => updateExistingTeam(t)} disabled={saving}>
@@ -747,6 +774,20 @@ export default function SettingsScreen() {
                       <BasketballToggle
                         value={edit.td_watch}
                         onValueChange={v => setEdit({ td_watch: v })}
+                      />
+                    </View>
+                  </View>
+
+                  {/* Broadcast Only */}
+                  <View style={styles.condCard}>
+                    <View style={styles.condCardHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.condCardTitle}>Broadcast Only</Text>
+                        <Text style={styles.condCardSub}>Only alert if the game is on TV</Text>
+                      </View>
+                      <BasketballToggle
+                        value={edit.broadcast_only}
+                        onValueChange={v => setEdit({ broadcast_only: v })}
                       />
                     </View>
                   </View>
@@ -1105,6 +1146,20 @@ export default function SettingsScreen() {
                     ))}
                   </View>
 
+                  {/* Broadcast Only */}
+                  <View style={[styles.condCard, { marginTop: 8 }]}>
+                    <View style={styles.condCardHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.condCardTitle}>Broadcast Only</Text>
+                        <Text style={styles.condCardSub}>Only alert if the game is on TV</Text>
+                      </View>
+                      <BasketballToggle
+                        value={newTeamBroadcastOnly}
+                        onValueChange={setNewTeamBroadcastOnly}
+                      />
+                    </View>
+                  </View>
+
                   <View style={styles.configSummary}>
                     <Ionicons name="information-circle-outline" size={14} color={C.textMuted} />
                     <Text style={styles.configSummaryText}>
@@ -1315,6 +1370,20 @@ export default function SettingsScreen() {
                       <BasketballToggle
                         value={newTdWatch}
                         onValueChange={setNewTdWatch}
+                      />
+                    </View>
+                  </View>
+
+                  {/* ── Broadcast Only ── */}
+                  <View style={styles.condCard}>
+                    <View style={styles.condCardHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.condCardTitle}>Broadcast Only</Text>
+                        <Text style={styles.condCardSub}>Only alert if the game is on TV</Text>
+                      </View>
+                      <BasketballToggle
+                        value={newPlayerBroadcastOnly}
+                        onValueChange={setNewPlayerBroadcastOnly}
                       />
                     </View>
                   </View>

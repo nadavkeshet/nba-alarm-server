@@ -68,17 +68,30 @@ function getGameTimes(item: any): { localTime: string; usDetail: string } | null
   }
 }
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface BroadcastInfo {
+  channel_name: string;
+  channel_icon: string;
+  is_free:      boolean;
+  is_live:      boolean;
+}
+
 // ─── GameCard ─────────────────────────────────────────────────────────────────
 
 function GameCard({
   item,
   onPress,
   favoriteTeamIds,
+  broadcasts,
 }: {
   item: any;
   onPress: () => void;
   favoriteTeamIds: Set<string>;
+  broadcasts: BroadcastInfo[];
 }) {
+  const { colors: C } = useTheme();
+  const styles = useMemo(() => makeStyles(C), [C]);
   const { home, away } = getTeams(item);
   const state: string  = item?.status?.type?.state ?? 'pre';
   const isLive       = state === 'in';
@@ -153,6 +166,32 @@ function GameCard({
           {homeStarred ? <Text style={styles.starBtnActive}>★</Text> : null}
         </View>
       </View>
+
+      {broadcasts.length > 0 && (
+        <View style={styles.broadcastRow}>
+          <Ionicons name="tv-outline" size={11} color={C.textMuted} />
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row', gap: 5 }}>
+              {broadcasts.slice(0, 4).map((bc, i) => (
+                <View key={i} style={[styles.broadcastPill, bc.is_free && styles.broadcastPillFree]}>
+                  {!!bc.channel_icon && (
+                    <Image source={{ uri: bc.channel_icon }} style={styles.broadcastChannelIcon} />
+                  )}
+                  <Text
+                    style={[styles.broadcastChannelName, bc.is_live && { color: C.liveGreen }]}
+                    numberOfLines={1}
+                  >
+                    {bc.channel_name}
+                  </Text>
+                  <Text style={bc.is_free ? styles.broadcastBadgeFree : styles.broadcastBadgePaid}>
+                    {bc.is_free ? 'FREE' : '$$'}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+        </View>
+      )}
     </TouchableOpacity>
   );
 }
@@ -232,6 +271,9 @@ export default function HomeScreen() {
   // ── Favorites state ───────────────────────────────────────────────
   const [favoriteTeamIds, setFavoriteTeamIds]     = useState<Set<string>>(new Set());
   const [favoritePlayerIds, setFavoritePlayerIds] = useState<Set<string>>(new Set());
+
+  // ── Broadcast (EPG) state ─────────────────────────────────────────
+  const [broadcasts, setBroadcasts] = useState<Record<string, BroadcastInfo[]>>({});
 
   // ── Info modal (replaces system alert() for confirmations & errors) ─
   const [infoModal, setInfoModal] = useState<{ visible: boolean; title: string; message: string }>(
@@ -371,6 +413,12 @@ export default function HomeScreen() {
     });
 
     fetchGames();
+
+    // Fetch TV broadcast info (non-blocking, best-effort)
+    fetch(`${SERVER_URL}/epg/all`)
+      .then(r => r.json())
+      .then(d => setBroadcasts(d.broadcasts ?? {}))
+      .catch(() => {});
 
     // Foreground: FCM data message arrives while app is open → display via Notifee
     const unsubMessage = messaging().onMessage(async remoteMessage => {
@@ -587,6 +635,7 @@ export default function HomeScreen() {
               item={item}
               onPress={() => setSelectedGame(item)}
               favoriteTeamIds={favoriteTeamIds}
+              broadcasts={broadcasts[item.id] ?? []}
             />
           )}
           contentContainerStyle={{ paddingBottom: 24 }}
@@ -938,6 +987,40 @@ const makeStyles = (C: AppColors) => StyleSheet.create({
 
   starBtn:       { fontSize: 22, color: C.textMuted },
   starBtnActive: { color: '#f5c518' },
+
+  // ── Broadcast row ─────────────────────────────────────────────────
+  broadcastRow: {
+    flexDirection: 'row', alignItems: 'center',
+    marginTop: 10, gap: 6,
+  },
+  broadcastPill: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 7, paddingVertical: 3,
+    backgroundColor: C.cardAlt, borderRadius: 20,
+    gap: 4,
+  },
+  broadcastPillFree: {
+    backgroundColor: 'rgba(63,185,80,0.07)',
+  },
+  broadcastChannelIcon: {
+    width: 14, height: 14, borderRadius: 3,
+  },
+  broadcastChannelName: {
+    fontSize: 10, fontWeight: '600', color: C.textMuted,
+    maxWidth: 80,
+  },
+  broadcastBadgeFree: {
+    fontSize: 7, fontWeight: '900', color: C.liveGreen,
+    paddingHorizontal: 3, paddingVertical: 1,
+    backgroundColor: 'rgba(63,185,80,0.15)',
+    borderRadius: 3, overflow: 'hidden',
+  },
+  broadcastBadgePaid: {
+    fontSize: 7, fontWeight: '900', color: C.gold,
+    paddingHorizontal: 3, paddingVertical: 1,
+    backgroundColor: 'rgba(240,165,0,0.15)',
+    borderRadius: 3, overflow: 'hidden',
+  },
 
   modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.75)' },
   modalContent: {
