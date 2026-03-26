@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useLanguage, type TFunc } from '../context/LanguageContext';
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 
@@ -35,85 +36,63 @@ interface Slide {
   where?:   string;
 }
 
-const SLIDES: Slide[] = [
-  {
-    icon:    'notifications' as const,
-    color:   C.orange,
-    bg:      'rgba(255,107,0,0.12)',
-    title:   'Game & Player Alarms',
-    body:    'Tap any live or upcoming game to set a one-shot alert. Choose a score gap threshold for the game itself, or pick a specific player and configure independent conditions — Points Goal, Early Scorer, or Triple-Double Watch.',
-    where:   'Home Tab → tap any game',
-  },
-  {
-    icon:    'person-circle' as const,
-    color:   C.orange,
-    bg:      'rgba(255,107,0,0.12)',
-    title:   'Favorite Players',
-    body:    'Track players across every game, automatically. Configure Early Points thresholds (e.g. 15 pts by Q1), scoring milestones, and Triple-Double watches — each condition fires independently.',
-    where:   'Settings → Favorite Players',
-  },
-  {
-    icon:    'shield' as const,
-    color:   C.orange,
-    bg:      'rgba(255,107,0,0.12)',
-    title:   'Favorite Teams',
-    body:    'Add your squad and we\'ll monitor every game they play. Set your own score gap — never miss a nail-biter from your team again.',
-    where:   'Settings → Favorite Teams',
-  },
-  {
-    icon:    'radio' as const,
-    color:   C.orange,
-    bg:      'rgba(255,107,0,0.12)',
-    title:   'Global Radar',
-    body:    'Sit back while the app scans the entire league automatically. You set your own score gap and starting quarter — any game that meets your criteria will trigger an alert, no matter who\'s playing.',
-    where:   'Settings → Global Radar',
-  },
-  {
-    icon:    'time' as const,
-    color:   C.gold,
-    bg:      'rgba(240,165,0,0.12)',
-    title:   'Historical Mode',
-    body:    'Get alerted for once-in-a-generation stat lines: 40+ points before halftime, 12+ three-pointers made in a game (with 3+ minutes remaining), or a Quad-Double threat quietly developing.',
-    where:   'Settings → Historical Mode',
-  },
-  {
-    icon:    'notifications-circle' as const,
-    color:   '#4d8cf5',
-    bg:      'rgba(77,140,245,0.12)',
-    title:   'How Notifications Work',
-    bullets: [
-      '🔔  Alarm mode — a looping sound plays even if your phone is on silent or vibrate. The screen wakes up and shows the notification on your lock screen. Tap the notification to open the app and stop the music, or hit DISMISS to silence it without opening the app.',
-      '🔕  Silent mode — a regular notification appears with the game or player details, no sound. Tap it to open the app.',
-      '📵  Do Not Disturb? No problem — Alarm mode routes audio through the system alarm channel, which bypasses DND and the ringer switch.',
-      '⚠️  IMPORTANT: The sound uses your Alarm volume — not media or ringtone volume. If you hear nothing, go to your phone\'s sound settings and turn up the Alarm volume.',
-      '⚠️  IMPORTANT: Android may stop background apps to save battery, which can block notifications. To prevent this, go to Settings → Apps → Nba Smart Alarm → Battery → set to Unrestricted. On Samsung, also make sure the app is not listed under Sleeping Apps.',
-    ],
-  },
-  {
-    icon:    'copy' as const,
-    color:   '#4d8cf5',
-    bg:      'rgba(77,140,245,0.12)',
-    title:   'No Double Alerts',
-    bullets: [
-      'Set a Game Alarm on a match where your Favorite Team is playing? No problem — the app detects the overlap and lets your manual alarm run. The Favorite Team monitor steps aside for that game.',
-      'Same goes for players: if you set a Player Alarm on someone who is also in your Favorite Players list, the manual alarm takes over and the favorite watch pauses for that game.',
-      'In short — manual alarms always take priority. You\'ll never get two alerts for the same event.',
-    ],
-  },
-  {
-    icon:    'information-circle' as const,
-    color:   C.muted,
-    bg:      'rgba(107,138,173,0.12)',
-    title:   'Good to Know',
-    bullets: [
-      'Each alert fires once per game, per night — the same event won\'t wake you up twice.',
-      'Early Points has a deadline: the alert only fires while the game is still in or before your chosen quarter. Once the game passes it, the condition expires silently — even if the player ends up with 40 points.',
-      'Game Alarms only start watching from the quarter you pick — anything that happens before that quarter is ignored.',
-      'You can revisit this guide at any time from the bottom of the Settings tab.',
-      'Questions, requests, or suggestions? Reach us at nbasmartalarm@gmail.com',
-    ],
-  },
-];
+function makeSlides(t: TFunc): Slide[] {
+  return [
+    {
+      icon:  'notifications' as const,
+      color: C.orange, bg: 'rgba(255,107,0,0.12)',
+      title: t('guide.slide1.title'),
+      body:  t('guide.slide1.body'),
+      where: t('guide.slide1.where'),
+    },
+    {
+      icon:  'person-circle' as const,
+      color: C.orange, bg: 'rgba(255,107,0,0.12)',
+      title: t('guide.slide2.title'),
+      body:  t('guide.slide2.body'),
+      where: t('guide.slide2.where'),
+    },
+    {
+      icon:  'shield' as const,
+      color: C.orange, bg: 'rgba(255,107,0,0.12)',
+      title: t('guide.slide3.title'),
+      body:  t('guide.slide3.body'),
+      where: t('guide.slide3.where'),
+    },
+    {
+      icon:  'radio' as const,
+      color: C.orange, bg: 'rgba(255,107,0,0.12)',
+      title: t('guide.slide4.title'),
+      body:  t('guide.slide4.body'),
+      where: t('guide.slide4.where'),
+    },
+    {
+      icon:  'time' as const,
+      color: C.gold, bg: 'rgba(240,165,0,0.12)',
+      title: t('guide.slide5.title'),
+      body:  t('guide.slide5.body'),
+      where: t('guide.slide5.where'),
+    },
+    {
+      icon:    'notifications-circle' as const,
+      color:   '#4d8cf5', bg: 'rgba(77,140,245,0.12)',
+      title:   t('guide.slide6.title'),
+      bullets: [t('guide.slide6.b1'), t('guide.slide6.b2'), t('guide.slide6.b3'), t('guide.slide6.b4'), t('guide.slide6.b5')],
+    },
+    {
+      icon:    'copy' as const,
+      color:   '#4d8cf5', bg: 'rgba(77,140,245,0.12)',
+      title:   t('guide.slide7.title'),
+      bullets: [t('guide.slide7.b1'), t('guide.slide7.b2'), t('guide.slide7.b3')],
+    },
+    {
+      icon:    'information-circle' as const,
+      color:   C.muted, bg: 'rgba(107,138,173,0.12)',
+      title:   t('guide.slide8.title'),
+      bullets: [t('guide.slide8.b1'), t('guide.slide8.b2'), t('guide.slide8.b3'), t('guide.slide8.b4')],
+    },
+  ];
+}
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -125,7 +104,9 @@ interface Props {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function WelcomeGuide({ visible, onClose, closeLabel = 'Get Started' }: Props) {
+export function WelcomeGuide({ visible, onClose, closeLabel }: Props) {
+  const { t } = useLanguage();
+  const slides = makeSlides(t);
   const [index, setIndex] = useState(0);
   const fade              = useRef(new Animated.Value(1)).current;
 
@@ -141,8 +122,8 @@ export function WelcomeGuide({ visible, onClose, closeLabel = 'Get Started' }: P
     onClose();
   };
 
-  const slide      = SLIDES[index];
-  const isLast     = index === SLIDES.length - 1;
+  const slide      = slides[index];
+  const isLast     = index === slides.length - 1;
   const isFirst    = index === 0;
 
   return (
@@ -154,7 +135,7 @@ export function WelcomeGuide({ visible, onClose, closeLabel = 'Get Started' }: P
           <View style={{ flex: 1 }} />
           {!isLast && (
             <TouchableOpacity onPress={handleClose} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-              <Text style={styles.skipText}>Skip</Text>
+              <Text style={styles.skipText}>{t('guide.skip')}</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -197,7 +178,7 @@ export function WelcomeGuide({ visible, onClose, closeLabel = 'Get Started' }: P
 
         {/* ── Dot indicators ─────────────────────────────────────────── */}
         <View style={styles.dots}>
-          {SLIDES.map((_, i) => (
+          {slides.map((_, i) => (
             <TouchableOpacity key={i} onPress={() => goTo(i)}>
               <View style={[styles.dot, i === index && styles.dotActive]} />
             </TouchableOpacity>
@@ -213,25 +194,25 @@ export function WelcomeGuide({ visible, onClose, closeLabel = 'Get Started' }: P
             disabled={isFirst}
           >
             <Ionicons name="arrow-back" size={18} color={C.muted} />
-            <Text style={styles.navBtnSecondaryText}>Back</Text>
+            <Text style={styles.navBtnSecondaryText}>{t('guide.back')}</Text>
           </TouchableOpacity>
 
           {/* Next / Get Started */}
           {isLast ? (
             <TouchableOpacity style={[styles.navBtn, styles.navBtnPrimary]} onPress={handleClose}>
-              <Text style={styles.navBtnPrimaryText}>{closeLabel}</Text>
+              <Text style={styles.navBtnPrimaryText}>{closeLabel ?? t('guide.getStarted')}</Text>
               <Ionicons name="checkmark-circle" size={18} color="#fff" />
             </TouchableOpacity>
           ) : (
             <TouchableOpacity style={[styles.navBtn, styles.navBtnPrimary]} onPress={() => goTo(index + 1)}>
-              <Text style={styles.navBtnPrimaryText}>Next</Text>
+              <Text style={styles.navBtnPrimaryText}>{t('guide.next')}</Text>
               <Ionicons name="arrow-forward" size={18} color="#fff" />
             </TouchableOpacity>
           )}
         </View>
 
         {/* ── Slide counter ──────────────────────────────────────────── */}
-        <Text style={styles.counter}>{index + 1} / {SLIDES.length}</Text>
+        <Text style={styles.counter}>{t('guide.counter', index + 1, slides.length)}</Text>
 
       </SafeAreaView>
     </Modal>

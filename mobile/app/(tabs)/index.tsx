@@ -7,6 +7,7 @@ import { NativeModules } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useTheme, type AppColors } from '../../context/ThemeContext';
+import { useLanguage } from '../../context/LanguageContext';
 import {
   ActivityIndicator,
   Animated,
@@ -92,6 +93,7 @@ function GameCard({
 }) {
   const { colors: C } = useTheme();
   const styles = useMemo(() => makeStyles(C), [C]);
+  const { t } = useLanguage();
   const { home, away } = getTeams(item);
   const state: string  = item?.status?.type?.state ?? 'pre';
   const isLive       = state === 'in';
@@ -125,18 +127,18 @@ function GameCard({
         {isLive ? (
           <View style={styles.liveBadge}>
             <Animated.View style={[styles.liveDot, { opacity: dotOpacity }]} />
-            <Text style={styles.liveText}>LIVE</Text>
+            <Text style={styles.liveText}>{t('status.live')}</Text>
           </View>
         ) : (
           <View style={styles.statusBadge}>
-            <Text style={styles.statusBadgeText}>{isFinal ? 'FINAL' : 'SCHEDULED'}</Text>
+            <Text style={styles.statusBadgeText}>{isFinal ? t('status.final') : t('status.scheduled')}</Text>
           </View>
         )}
 
         {gameTimes ? (
           <View style={styles.timesBlock}>
             <Text style={styles.localTime}>{gameTimes.localTime}</Text>
-            <Text style={styles.usTime}>{gameTimes.usDetail}</Text>
+            <Text style={styles.usTime} numberOfLines={1}>{gameTimes.usDetail}</Text>
           </View>
         ) : (
           <Text style={styles.statusDetail}>{item.status?.type?.detail}</Text>
@@ -184,7 +186,7 @@ function GameCard({
                     {bc.channel_name}
                   </Text>
                   <Text style={bc.is_free ? styles.broadcastBadgeFree : styles.broadcastBadgePaid}>
-                    {bc.is_free ? 'FREE' : '$$'}
+                    {bc.is_free ? 'FREE' : '$'}
                   </Text>
                 </View>
               ))}
@@ -261,6 +263,7 @@ async function sendTokenToServer(token: string): Promise<boolean> {
 export default function HomeScreen() {
   const { colors: C } = useTheme();
   const styles = useMemo(() => makeStyles(C), [C]);
+  const { t } = useLanguage();
   // ── Games state ───────────────────────────────────────────────────
   const [games, setGames]       = useState<any[]>([]);
   const [loading, setLoading]   = useState(true);
@@ -518,12 +521,12 @@ export default function HomeScreen() {
       if (response.ok) {
 
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        showInfo('Alarm Set!', `Now watching ${selectedGame.name}.`);
+        showInfo(t('alarm.alarmSet'), t('alarm.watchingGame', selectedGame.name));
       } else {
-        showInfo('Server Error', 'Make sure the server is running.');
+        showInfo(t('alarm.serverError'), t('alarm.serverErrorMsg'));
       }
     } catch {
-      showInfo('Connection Error', `Could not reach the server at ${SERVER_URL}.`);
+      showInfo(t('alarm.connectionError'), t('alarm.connectionErrorMsg'));
     } finally {
       closeModal();
     }
@@ -533,7 +536,7 @@ export default function HomeScreen() {
   const startPlayerMonitoring = async () => {
     if (!selectedGame || !selectedPlayer) return;
     if (!ptsGoalEnabled && !ptsEarlyEnabled && !tdWatchEnabled) {
-      showInfo('No Condition Selected', 'Please enable at least one alarm condition.');
+      showInfo(t('alarm.noCondition'), t('alarm.noConditionMsg'));
       return;
     }
     const freshToken = expoPushToken || (await messaging().getToken().catch(() => '')) || '';
@@ -585,12 +588,12 @@ export default function HomeScreen() {
 
       if (successCount > 0) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        showInfo('Alarm Set!', `${successCount} condition${successCount > 1 ? 's' : ''} active for ${selectedPlayer.name}.`);
+        showInfo(t('alarm.alarmSet'), t('alarm.conditionsActive', successCount, successCount > 1 ? 's' : '', selectedPlayer.name));
       } else {
-        showInfo('Server Error', 'Make sure the server is running.');
+        showInfo(t('alarm.serverError'), t('alarm.serverErrorMsg'));
       }
     } catch {
-      showInfo('Connection Error', `Could not reach the server at ${SERVER_URL}.`);
+      showInfo(t('alarm.connectionError'), t('alarm.connectionErrorMsg'));
     } finally {
       closeModal();
     }
@@ -600,11 +603,11 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.container}>
       {/* Header */}
-      <Text style={styles.header}>NBA Smart Alarm</Text>
+      <Text style={styles.header}>{t('home.title')}</Text>
 
       {/* Game list */}
       <Text style={[styles.sectionLabel, { paddingHorizontal: 16, marginBottom: 8 }]}>
-        TODAY'S GAMES
+        {t('home.todaysGames')}
       </Text>
 
       {loading ? (
@@ -614,17 +617,17 @@ export default function HomeScreen() {
       ) : fetchError && games.length === 0 ? (
         <View style={styles.centeredMessage}>
           <Ionicons name="wifi-outline" size={56} color="#30363d" style={{ marginBottom: 16 }} />
-          <Text style={styles.emptyTitle}>Connection Error</Text>
-          <Text style={styles.emptyText}>Could not reach the server.</Text>
+          <Text style={styles.emptyTitle}>{t('home.connectionError')}</Text>
+          <Text style={styles.emptyText}>{t('home.connectionErrorSub')}</Text>
           <TouchableOpacity style={styles.retryBtn} onPress={() => fetchGames()}>
-            <Text style={styles.retryBtnText}>Retry</Text>
+            <Text style={styles.retryBtnText}>{t('home.retry')}</Text>
           </TouchableOpacity>
         </View>
       ) : games.length === 0 ? (
         <View style={styles.centeredMessage}>
           <Ionicons name="basketball-outline" size={56} color="#30363d" style={{ marginBottom: 16 }} />
-          <Text style={styles.emptyTitle}>No Games Today</Text>
-          <Text style={styles.emptyText}>Check back tomorrow for the next slate of games.</Text>
+          <Text style={styles.emptyTitle}>{t('home.noGames')}</Text>
+          <Text style={styles.emptyText}>{t('home.noGamesSub')}</Text>
         </View>
       ) : (
         <FlatList
@@ -656,7 +659,7 @@ export default function HomeScreen() {
             {/* Header row with X button */}
             <View style={styles.modalHeaderRow}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.modalSubtitle}>Set Alarm for</Text>
+                <Text style={styles.modalSubtitle}>{t('alarm.setAlarmFor')}</Text>
                 <Text style={styles.modalGameName}>{selectedGame?.name}</Text>
               </View>
               <TouchableOpacity onPress={closeModal} style={styles.modalCloseBtn}>
@@ -674,7 +677,7 @@ export default function HomeScreen() {
                 >
                   <Text style={styles.alertTypeIcon}>{type === 'alarm' ? '🚨' : '🔕'}</Text>
                   <Text style={[styles.alertTypeText, alertType === type && styles.alertTypeTextActive]}>
-                    {type === 'alarm' ? 'Alarm' : 'Silent'}
+                    {type === 'alarm' ? t('alarm.alarm') : t('alarm.silent')}
                   </Text>
                 </TouchableOpacity>
               ))}
@@ -689,7 +692,7 @@ export default function HomeScreen() {
                   onPress={() => setAlarmTab(tab)}
                 >
                   <Text style={[styles.alarmTabText, alarmTab === tab && styles.alarmTabTextActive]}>
-                    {tab === 'game' ? 'Game Alarm' : 'Player Alarm'}
+                    {tab === 'game' ? t('alarm.gameAlarm') : t('alarm.playerAlarm')}
                   </Text>
                 </TouchableOpacity>
               ))}
@@ -699,7 +702,7 @@ export default function HomeScreen() {
             {alarmTab === 'game' && (
               <>
                 <View style={styles.sliderRow}>
-                  <Text style={styles.inputLabel}>Max Point Difference</Text>
+                  <Text style={styles.inputLabel}>{t('alarm.maxPointDiff')}</Text>
                   <Text style={styles.sliderValue}>{maxDiff}</Text>
                 </View>
                 <Slider
@@ -712,7 +715,7 @@ export default function HomeScreen() {
                   thumbTintColor={C.orange}
                 />
 
-                <Text style={styles.inputLabel}>Start Monitoring from Quarter</Text>
+                <Text style={styles.inputLabel}>{t('alarm.startFrom')}</Text>
                 <View style={styles.quarterRow}>
                   {['1', '2', '3', '4'].map(q => (
                     <TouchableOpacity
@@ -728,7 +731,7 @@ export default function HomeScreen() {
                 </View>
 
                 <TouchableOpacity style={styles.startButton} onPress={startGameMonitoring}>
-                  <Text style={styles.startButtonText}>Start Monitoring</Text>
+                  <Text style={styles.startButtonText}>{t('alarm.setAlarm')}</Text>
                 </TouchableOpacity>
               </>
             )}
@@ -739,12 +742,10 @@ export default function HomeScreen() {
                 {rosterLoading ? (
                   <View style={styles.rosterLoading}>
                     <ActivityIndicator color="#4d8cf5" />
-                    <Text style={styles.rosterLoadingText}>Loading roster...</Text>
+                    <Text style={styles.rosterLoadingText}>{t('alarm.selectPlayer')}</Text>
                   </View>
                 ) : teams.length === 0 ? (
-                  <Text style={styles.emptyText}>
-                    Roster currently unavailable. Try again closer to tip-off.
-                  </Text>
+                  <Text style={styles.emptyText}>{t('alarm.noRoster')}</Text>
                 ) : (
                   <ScrollView style={styles.playerList} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 12 }}>
                     {teams.map(team => (
@@ -795,15 +796,15 @@ export default function HomeScreen() {
                       ) : null}
                     </View>
 
-                    <Text style={styles.inputLabel}>Alarm Conditions</Text>
-                    <Text style={[styles.conditionHint, { marginTop: 4 }]}>Enable one or more — each fires independently</Text>
+                    <Text style={styles.inputLabel}>{t('alarm.playerAlarm')}</Text>
+                    <Text style={[styles.conditionHint, { marginTop: 4 }]}>{t('settings.playerCondSub')}</Text>
 
                     {/* ── Points Goal ── */}
                     <View style={styles.conditionCard}>
                       <View style={styles.conditionCardHeader}>
                         <View style={{ flex: 1 }}>
-                          <Text style={styles.conditionCardTitle}>Points Goal</Text>
-                          <Text style={styles.conditionCardSub}>Alert when player hits a point total</Text>
+                          <Text style={styles.conditionCardTitle}>{t('alarm.ptsGoal')}</Text>
+                          <Text style={styles.conditionCardSub}>{t('alarm.ptsGoalSub')}</Text>
                         </View>
                         <BasketballToggle
                           value={ptsGoalEnabled}
@@ -813,7 +814,7 @@ export default function HomeScreen() {
                       {ptsGoalEnabled && (
                         <>
                           <View style={[styles.sliderRow, { marginTop: 10 }]}>
-                            <Text style={styles.inputLabel}>Points threshold</Text>
+                            <Text style={styles.inputLabel}>{t('alarm.ptsThreshold')}</Text>
                             <Text style={styles.sliderValue}>{ptsGoalThreshold}</Text>
                           </View>
                           <Slider
@@ -833,8 +834,8 @@ export default function HomeScreen() {
                     <View style={styles.conditionCard}>
                       <View style={styles.conditionCardHeader}>
                         <View style={{ flex: 1 }}>
-                          <Text style={styles.conditionCardTitle}>Early Points</Text>
-                          <Text style={styles.conditionCardSub}>Alert if threshold is hit before a quarter ends</Text>
+                          <Text style={styles.conditionCardTitle}>{t('alarm.earlyPts')}</Text>
+                          <Text style={styles.conditionCardSub}>{t('alarm.earlyPtsSub')}</Text>
                         </View>
                         <BasketballToggle
                           value={ptsEarlyEnabled}
@@ -844,7 +845,7 @@ export default function HomeScreen() {
                       {ptsEarlyEnabled && (
                         <>
                           <View style={[styles.sliderRow, { marginTop: 10 }]}>
-                            <Text style={styles.inputLabel}>Points threshold</Text>
+                            <Text style={styles.inputLabel}>{t('alarm.ptsThreshold')}</Text>
                             <Text style={styles.sliderValue}>{earlyPtsThreshold}</Text>
                           </View>
                           <Slider
@@ -856,7 +857,7 @@ export default function HomeScreen() {
                             maximumTrackTintColor={C.border}
                             thumbTintColor={C.orange}
                           />
-                          <Text style={[styles.inputLabel, { marginTop: 4 }]}>Before end of quarter</Text>
+                          <Text style={[styles.inputLabel, { marginTop: 4 }]}>{t('alarm.byEndOfQ')}</Text>
                           <View style={styles.miniQuarterRow}>
                             {['1', '2', '3'].map(q => (
                               <TouchableOpacity
@@ -878,8 +879,8 @@ export default function HomeScreen() {
                     <View style={styles.conditionCard}>
                       <View style={styles.conditionCardHeader}>
                         <View style={{ flex: 1 }}>
-                          <Text style={styles.conditionCardTitle}>Triple-Double Watch</Text>
-                          <Text style={styles.conditionCardSub}>Alert when approaching 9+ in 3 stats (with 3+ min left)</Text>
+                          <Text style={styles.conditionCardTitle}>{t('alarm.tripleDouble')}</Text>
+                          <Text style={styles.conditionCardSub}>{t('alarm.tripleDoubleSub')}</Text>
                         </View>
                         <BasketballToggle
                           value={tdWatchEnabled}
@@ -889,7 +890,7 @@ export default function HomeScreen() {
                     </View>
 
                     <TouchableOpacity style={styles.startButton} onPress={startPlayerMonitoring}>
-                      <Text style={styles.startButtonText}>Start Monitoring</Text>
+                      <Text style={styles.startButtonText}>{t('alarm.setAlarm')}</Text>
                     </TouchableOpacity>
                   </>
                 )}
@@ -898,7 +899,7 @@ export default function HomeScreen() {
 
             {/* Cancel */}
             <TouchableOpacity style={styles.cancelButton} onPress={closeModal}>
-              <Text style={styles.cancelButtonText}>Cancel</Text>
+              <Text style={styles.cancelButtonText}>{t('settings.cancel')}</Text>
             </TouchableOpacity>
 
           </ScrollView>
@@ -972,7 +973,7 @@ const makeStyles = (C: AppColors) => StyleSheet.create({
   statusBadgeText: { fontSize: 11, color: C.accentBlue, fontWeight: '700', letterSpacing: 1 },
   statusDetail:    { fontSize: 12, color: C.textMuted },
 
-  timesBlock: { alignItems: 'flex-end' },
+  timesBlock: { alignItems: 'flex-end', flexShrink: 1 },
   localTime:  { fontSize: 15, fontWeight: '800', color: C.textPrimary },
   usTime:     { fontSize: 11, color: C.textMuted, marginTop: 1 },
 

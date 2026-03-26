@@ -6,6 +6,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import notifee, { AndroidImportance, AndroidVisibility } from '@notifee/react-native';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTheme, type AppColors } from '../../context/ThemeContext';
+import { useLanguage } from '../../context/LanguageContext';
 import {
   ActivityIndicator,
   Clipboard,
@@ -90,6 +91,7 @@ const QRow = React.memo(function QRow({ value, onChange, quarters = ['1', '2', '
 
 export default function SettingsScreen() {
   const { colors: C, mode: themeMode, toggleTheme } = useTheme();
+  const { t, lang, toggleLanguage } = useLanguage();
   const styles = useMemo(() => makeStyles(C), [C]);
   const insets = useSafeAreaInsets();
   const [userToken, setUserToken]       = useState('');
@@ -153,7 +155,7 @@ export default function SettingsScreen() {
 
   useEffect(() => {
     messaging().getToken()
-      .then(t => setUserToken(t))
+      .then(tok => setUserToken(tok))
       .catch(() => {})
       .finally(() => setTokenLoaded(true));
   }, []);
@@ -172,7 +174,7 @@ export default function SettingsScreen() {
   useEffect(() => {
     fetch(`${SERVER_URL}/all-teams-and-players`)
       .then(r => r.json())
-      .then(t => setAllTeams(t.teams ?? []))
+      .then(resp => setAllTeams(resp.teams ?? []))
       .catch(() => {});
   }, []);
 
@@ -290,7 +292,7 @@ export default function SettingsScreen() {
   // user somehow triggers a save before the async token fetch completes.
   const requireToken = (): boolean => {
     if (userToken) return true;
-    showInfo('Not ready', 'Your device token is still loading. Please try again in a moment.');
+    showInfo(t('settings.notReady'), t('settings.notReadyMsg'));
     return false;
   };
 
@@ -347,7 +349,7 @@ export default function SettingsScreen() {
       });
       setSettings(s => s ? {
         ...s,
-        FavoriteTeams: [...s.FavoriteTeams.filter(t => t.team_id !== payload.team_id), payload],
+        FavoriteTeams: [...s.FavoriteTeams.filter(ft => ft.team_id !== payload.team_id), payload],
       } : s);
       setTeamEdits(prev => ({
         ...prev,
@@ -361,7 +363,7 @@ export default function SettingsScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const q = `?user_token=${encodeURIComponent(userToken)}`;
     await fetch(`${SERVER_URL}/settings/teams/${team_id}${q}`, { method: 'DELETE' });
-    setSettings(s => s ? { ...s, FavoriteTeams: s.FavoriteTeams.filter(t => t.team_id !== team_id) } : s);
+    setSettings(s => s ? { ...s, FavoriteTeams: s.FavoriteTeams.filter(ft => ft.team_id !== team_id) } : s);
     setTeamEdits(prev => { const n = { ...prev }; delete n[team_id]; return n; });
   };
 
@@ -398,7 +400,7 @@ export default function SettingsScreen() {
     if (!requireToken() || !pickedPlayer) return;
     if (!newTotalPtsEnabled && !newHotStartEnabled && !newTdWatch) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      showInfo('No Condition Selected', 'Please enable at least one alarm condition before adding the player.');
+      showInfo(t('alarm.noCondition'), t('alarm.noConditionMsg'));
       return;
     }
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -540,7 +542,7 @@ export default function SettingsScreen() {
 
   // ── Derived ───────────────────────────────────────────────────────────
 
-  const favTeamIds   = new Set(settings?.FavoriteTeams?.map(t => t.team_id) ?? []);
+  const favTeamIds   = new Set(settings?.FavoriteTeams?.map(ft => ft.team_id) ?? []);
   const favPlayerIds = new Set(Object.keys(settings?.FavoritePlayers ?? {}));
 
   // ── Loading ───────────────────────────────────────────────────────────
@@ -560,7 +562,7 @@ export default function SettingsScreen() {
   // ─── Render ────────────────────────────────────────────────────────────
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.header}>Settings</Text>
+      <Text style={styles.header}>{t('settings.title')}</Text>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
@@ -572,52 +574,50 @@ export default function SettingsScreen() {
             FAVORITE TEAMS
         ═══════════════════════════════════════════════════════════════ */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>FAVORITE TEAMS</Text>
-          <Text style={styles.sectionDesc}>
-            Get alerted when a favorite team's game gets close.
-          </Text>
+          <Text style={styles.sectionTitle}>{t('settings.favTeams')}</Text>
+          <Text style={styles.sectionDesc}>{t('settings.favTeamsSub')}</Text>
 
           <TouchableOpacity style={styles.addRowBtn} onPress={openTeamModal}>
             <Ionicons name="add-circle-outline" size={20} color={C.accentBlue} />
-            <Text style={styles.addRowBtnText}>Add New Favorite Team</Text>
+            <Text style={styles.addRowBtnText}>{t('settings.addTeam')}</Text>
           </TouchableOpacity>
 
           {(settings?.FavoriteTeams ?? []).length === 0 ? (
-            <Text style={styles.emptyHint}>No favorite teams yet.</Text>
+            <Text style={styles.emptyHint}>{t('settings.noFavTeams')}</Text>
           ) : (
-            settings!.FavoriteTeams.map(t => {
-              const edit = teamEdits[t.team_id] ?? { max_diff: t.max_diff, start_quarter: String(t.start_quarter), alert_type: t.alert_type, broadcast_only: t.broadcast_only ?? false };
+            settings!.FavoriteTeams.map(team => {
+              const edit = teamEdits[team.team_id] ?? { max_diff: team.max_diff, start_quarter: String(team.start_quarter), alert_type: team.alert_type, broadcast_only: team.broadcast_only ?? false };
               return (
-                <View key={t.team_id} style={styles.favCard}>
+                <View key={team.team_id} style={styles.favCard}>
                   <View style={styles.favCardHeader}>
                     <Image
-                      source={{ uri: `https://a.espncdn.com/i/teamlogos/nba/500/${t.team_id}.png` }}
+                      source={{ uri: `https://a.espncdn.com/i/teamlogos/nba/500/${team.team_id}.png` }}
                       style={styles.favTeamLogo}
                     />
-                    <Text style={styles.favName}>{t.team_name}</Text>
-                    <TouchableOpacity onPress={() => removeTeam(t.team_id)} style={styles.removeBtn}>
-                      <Text style={styles.removeBtnText}>Remove</Text>
+                    <Text style={styles.favName}>{team.team_name}</Text>
+                    <TouchableOpacity onPress={() => removeTeam(team.team_id)} style={styles.removeBtn}>
+                      <Text style={styles.removeBtnText}>{t('settings.remove')}</Text>
                     </TouchableOpacity>
                   </View>
 
                   <View style={styles.sliderRow}>
-                    <Text style={styles.inputLabel}>MAX POINT DIFF</Text>
+                    <Text style={styles.inputLabel}>{t('settings.maxDiff')}</Text>
                     <Text style={styles.sliderValue}>{edit.max_diff}</Text>
                   </View>
                   <Slider
                     style={styles.slider}
                     minimumValue={1} maximumValue={25} step={1}
                     value={edit.max_diff}
-                    onValueChange={v => setTeamEdits(prev => ({ ...prev, [t.team_id]: { ...edit, max_diff: v } }))}
+                    onValueChange={v => setTeamEdits(prev => ({ ...prev, [team.team_id]: { ...edit, max_diff: v } }))}
                     minimumTrackTintColor={C.orange}
                     maximumTrackTintColor={C.border}
                     thumbTintColor={C.orange}
                   />
 
-                  <Text style={styles.inputLabel}>START MONITORING FROM</Text>
+                  <Text style={styles.inputLabel}>{t('settings.startFrom')}</Text>
                   <QRow
                     value={edit.start_quarter}
-                    onChange={q => setTeamEdits(prev => ({ ...prev, [t.team_id]: { ...edit, start_quarter: q } }))}
+                    onChange={q => setTeamEdits(prev => ({ ...prev, [team.team_id]: { ...edit, start_quarter: q } }))}
                   />
 
                   <View style={styles.alertTypeRow}>
@@ -625,11 +625,11 @@ export default function SettingsScreen() {
                       <TouchableOpacity
                         key={type}
                         style={[styles.alertTypeBtn, (edit.alert_type ?? 'silent') === type && styles.alertTypeBtnActive]}
-                        onPress={() => setTeamEdits(prev => ({ ...prev, [t.team_id]: { ...edit, alert_type: type } }))}
+                        onPress={() => setTeamEdits(prev => ({ ...prev, [team.team_id]: { ...edit, alert_type: type } }))}
                       >
                         <Text style={styles.alertTypeIcon}>{type === 'alarm' ? '🚨' : '🔕'}</Text>
                         <Text style={[styles.alertTypeText, (edit.alert_type ?? 'silent') === type && styles.alertTypeTextActive]}>
-                          {type === 'alarm' ? 'Alarm' : 'Silent'}
+                          {type === 'alarm' ? t('settings.alarm') : t('settings.silent')}
                         </Text>
                       </TouchableOpacity>
                     ))}
@@ -639,19 +639,19 @@ export default function SettingsScreen() {
                   <View style={[styles.condCard, { marginTop: 8 }]}>
                     <View style={styles.condCardHeader}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.condCardTitle}>Broadcast Only</Text>
-                        <Text style={styles.condCardSub}>Only alert if the game is on TV</Text>
+                        <Text style={styles.condCardTitle}>{t('settings.broadcastOnly')}</Text>
+                        <Text style={styles.condCardSub}>{t('settings.broadcastOnlySub')}</Text>
                       </View>
                       <BasketballToggle
                         value={edit.broadcast_only}
-                        onValueChange={v => setTeamEdits(prev => ({ ...prev, [t.team_id]: { ...edit, broadcast_only: v } }))}
+                        onValueChange={v => setTeamEdits(prev => ({ ...prev, [team.team_id]: { ...edit, broadcast_only: v } }))}
                       />
                     </View>
                   </View>
 
-                  <TouchableOpacity style={styles.updateBtn} onPress={() => updateExistingTeam(t)} disabled={saving}>
-                    <Text style={[styles.updateBtnText, savedId === t.team_id && styles.savedBtnText]}>
-                      {savedId === t.team_id ? 'Saved ✓' : 'Update'}
+                  <TouchableOpacity style={styles.updateBtn} onPress={() => updateExistingTeam(team)} disabled={saving}>
+                    <Text style={[styles.updateBtnText, savedId === team.team_id && styles.savedBtnText]}>
+                      {savedId === team.team_id ? t('settings.saved') : t('settings.update')}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -664,18 +664,16 @@ export default function SettingsScreen() {
             FAVORITE PLAYERS
         ═══════════════════════════════════════════════════════════════ */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>FAVORITE PLAYERS</Text>
-          <Text style={styles.sectionDesc}>
-            Add players to watch automatically during live games using the thresholds below.
-          </Text>
+          <Text style={styles.sectionTitle}>{t('settings.favPlayers')}</Text>
+          <Text style={styles.sectionDesc}>{t('settings.favPlayersSub')}</Text>
 
           <TouchableOpacity style={styles.addRowBtn} onPress={openPlayerModal}>
             <Ionicons name="add-circle-outline" size={20} color={C.accentBlue} />
-            <Text style={styles.addRowBtnText}>Add New Favorite Player</Text>
+            <Text style={styles.addRowBtnText}>{t('settings.addPlayer')}</Text>
           </TouchableOpacity>
 
           {Object.keys(settings?.FavoritePlayers ?? {}).length === 0 ? (
-            <Text style={styles.emptyHint}>No favorite players yet.</Text>
+            <Text style={styles.emptyHint}>{t('settings.noFavPlayers')}</Text>
           ) : (
             Object.entries(settings!.FavoritePlayers).map(([pid, p]) => {
               const edit = playerEdits[pid] ?? {
@@ -699,7 +697,7 @@ export default function SettingsScreen() {
                     />
                     <Text style={styles.favName}>{p.name}</Text>
                     <TouchableOpacity onPress={() => removePlayer(pid)} style={styles.removeBtn}>
-                      <Text style={styles.removeBtnText}>Remove</Text>
+                      <Text style={styles.removeBtnText}>{t('settings.remove')}</Text>
                     </TouchableOpacity>
                   </View>
 
@@ -707,7 +705,7 @@ export default function SettingsScreen() {
                   <View style={styles.condCard}>
                     <View style={styles.condCardHeader}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.condCardTitle}>Total Points Alert</Text>
+                        <Text style={styles.condCardTitle}>{t('settings.totalPtsAlert')}</Text>
                       </View>
                       <BasketballToggle
                         value={edit.totalPtsEnabled}
@@ -717,7 +715,7 @@ export default function SettingsScreen() {
                     {edit.totalPtsEnabled && (
                       <>
                         <View style={[styles.sliderRow, { marginTop: 10 }]}>
-                          <Text style={styles.inputLabel}>POINTS THRESHOLD</Text>
+                          <Text style={styles.inputLabel}>{t('settings.ptsThreshold')}</Text>
                           <Text style={styles.sliderValue}>{edit.total_pts}</Text>
                         </View>
                         <Slider
@@ -737,7 +735,7 @@ export default function SettingsScreen() {
                   <View style={styles.condCard}>
                     <View style={styles.condCardHeader}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.condCardTitle}>Early Points Alert</Text>
+                        <Text style={styles.condCardTitle}>{t('settings.earlyPtsAlert')}</Text>
                       </View>
                       <BasketballToggle
                         value={edit.hotStartEnabled}
@@ -747,7 +745,7 @@ export default function SettingsScreen() {
                     {edit.hotStartEnabled && (
                       <>
                         <View style={[styles.sliderRow, { marginTop: 10 }]}>
-                          <Text style={styles.inputLabel}>POINTS THRESHOLD</Text>
+                          <Text style={styles.inputLabel}>{t('settings.ptsThreshold')}</Text>
                           <Text style={styles.sliderValue}>{edit.early_pts}</Text>
                         </View>
                         <Slider
@@ -759,7 +757,7 @@ export default function SettingsScreen() {
                           maximumTrackTintColor={C.border}
                           thumbTintColor={C.orange}
                         />
-                        <Text style={styles.inputLabel}>BY END OF QUARTER</Text>
+                        <Text style={styles.inputLabel}>{t('settings.byEndOfQ')}</Text>
                         <QRow value={edit.early_pts_q} onChange={q => setEdit({ early_pts_q: q })} quarters={['1', '2', '3']} />
                       </>
                     )}
@@ -769,7 +767,7 @@ export default function SettingsScreen() {
                   <View style={styles.condCard}>
                     <View style={styles.condCardHeader}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.condCardTitle}>Triple-Double Watch</Text>
+                        <Text style={styles.condCardTitle}>{t('settings.tripleDouble')}</Text>
                       </View>
                       <BasketballToggle
                         value={edit.td_watch}
@@ -782,8 +780,8 @@ export default function SettingsScreen() {
                   <View style={styles.condCard}>
                     <View style={styles.condCardHeader}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.condCardTitle}>Broadcast Only</Text>
-                        <Text style={styles.condCardSub}>Only alert if the game is on TV</Text>
+                        <Text style={styles.condCardTitle}>{t('settings.broadcastOnly')}</Text>
+                        <Text style={styles.condCardSub}>{t('settings.broadcastOnlySub')}</Text>
                       </View>
                       <BasketballToggle
                         value={edit.broadcast_only}
@@ -801,7 +799,7 @@ export default function SettingsScreen() {
                       >
                         <Text style={styles.alertTypeIcon}>{type === 'alarm' ? '🚨' : '🔕'}</Text>
                         <Text style={[styles.alertTypeText, (edit.alert_type ?? 'silent') === type && styles.alertTypeTextActive]}>
-                          {type === 'alarm' ? 'Alarm' : 'Silent'}
+                          {type === 'alarm' ? t('settings.alarm') : t('settings.silent')}
                         </Text>
                       </TouchableOpacity>
                     ))}
@@ -813,7 +811,7 @@ export default function SettingsScreen() {
                     disabled={saving}
                   >
                     <Text style={[styles.updateBtnText, savedId === pid && styles.savedBtnText]}>
-                      {savedId === pid ? 'Saved ✓' : 'Update'}
+                      {savedId === pid ? t('settings.saved') : t('settings.update')}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -826,13 +824,11 @@ export default function SettingsScreen() {
             GLOBAL GAME RADAR
         ═══════════════════════════════════════════════════════════════ */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>GLOBAL GAME RADAR</Text>
-          <Text style={styles.sectionDesc}>
-            Automatically detect any close NBA game — even without a manual alarm.
-          </Text>
+          <Text style={styles.sectionTitle}>{t('settings.radar')}</Text>
+          <Text style={styles.sectionDesc}>{t('settings.radarSub')}</Text>
 
           <View style={styles.switchRow}>
-            <Text style={styles.rowLabel}>Enable Radar</Text>
+            <Text style={styles.rowLabel}>{t('settings.enableRadar')}</Text>
             <BasketballToggle
               value={radar?.enabled ?? false}
               onValueChange={v => patchGlobalRadar({ enabled: v })}
@@ -848,7 +844,7 @@ export default function SettingsScreen() {
               >
                 <Text style={styles.alertTypeIcon}>{type === 'alarm' ? '🚨' : '🔕'}</Text>
                 <Text style={[styles.alertTypeText, (radar?.alert_type ?? 'silent') === type && styles.alertTypeTextActive]}>
-                  {type === 'alarm' ? 'Alarm' : 'Silent'}
+                  {type === 'alarm' ? t('settings.alarm') : t('settings.silent')}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -857,7 +853,7 @@ export default function SettingsScreen() {
           {radar?.enabled && (
             <>
               <View style={styles.sliderRow}>
-                <Text style={styles.inputLabel}>MAX POINT DIFF TO ALERT</Text>
+                <Text style={styles.inputLabel}>{t('settings.maxDiff')}</Text>
                 <Text style={styles.sliderValue}>{radarMaxDiff}</Text>
               </View>
               <Slider
@@ -869,7 +865,7 @@ export default function SettingsScreen() {
                 maximumTrackTintColor={C.border}
                 thumbTintColor={C.orange}
               />
-              <Text style={styles.inputLabel}>START MONITORING FROM</Text>
+              <Text style={styles.inputLabel}>{t('settings.startFrom')}</Text>
               <QRow value={radarStartQ} onChange={setRadarStartQ} />
               <TouchableOpacity
                 style={styles.updateBtn}
@@ -880,7 +876,7 @@ export default function SettingsScreen() {
                 disabled={saving}
               >
                 <Text style={[styles.updateBtnText, savedId === 'radar' && styles.savedBtnText]}>
-                  {saving ? 'Saving…' : savedId === 'radar' ? 'Saved ✓' : 'Save Radar Settings'}
+                  {saving ? t('settings.saving') : savedId === 'radar' ? t('settings.saved') : t('settings.saveRadar')}
                 </Text>
               </TouchableOpacity>
             </>
@@ -888,8 +884,8 @@ export default function SettingsScreen() {
 
           <View style={[styles.switchRow, { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderColor: C.border }]}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rowLabel}>Radar Status</Text>
-              <Text style={styles.rowSub}>{radarRunning ? 'Running in background' : 'Stopped'}</Text>
+              <Text style={styles.rowLabel}>{t('settings.radarStatus')}</Text>
+              <Text style={styles.rowSub}>{radarRunning ? t('settings.radarRunning') : t('settings.radarStopped')}</Text>
             </View>
             <View style={[styles.statusDot, { backgroundColor: radarRunning ? C.liveGreen : C.border }]} />
           </View>
@@ -899,13 +895,11 @@ export default function SettingsScreen() {
             HISTORICAL ALERTS
         ═══════════════════════════════════════════════════════════════ */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>HISTORICAL ALERTS</Text>
-          <Text style={styles.sectionDesc}>
-            Get notified when any player is approaching an all-time record in a live game.
-          </Text>
+          <Text style={styles.sectionTitle}>{t('settings.historical')}</Text>
+          <Text style={styles.sectionDesc}>{t('settings.historicalSub')}</Text>
 
           <View style={styles.switchRow}>
-            <Text style={styles.rowLabel}>Enable Historical Mode</Text>
+            <Text style={styles.rowLabel}>{t('settings.enableHistorical')}</Text>
             <BasketballToggle
               value={hist?.enabled ?? false}
               onValueChange={v => patchHistorical({ enabled: v })}
@@ -921,7 +915,7 @@ export default function SettingsScreen() {
               >
                 <Text style={styles.alertTypeIcon}>{type === 'alarm' ? '🚨' : '🔕'}</Text>
                 <Text style={[styles.alertTypeText, ((hist as any)?.alert_type ?? 'silent') === type && styles.alertTypeTextActive]}>
-                  {type === 'alarm' ? 'Alarm' : 'Silent'}
+                  {type === 'alarm' ? t('settings.alarm') : t('settings.silent')}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -930,9 +924,9 @@ export default function SettingsScreen() {
           {hist?.enabled && (
             <>
               {([
-                { key: 'scoring_40_half'    as const, label: 'Historic Scoring Pace',  sub: '40+ pts by halftime (end of Q2)' },
-                { key: 'threes_11'          as const, label: '3-Point Record Pace',     sub: '12+ threes in a single game (with 3+ min remaining)' },
-                { key: 'quad_double_threat' as const, label: 'Quad-Double Threat',      sub: '8+ in any 4 of PTS/REB/AST/STL/BLK (with 3+ min left)' },
+                { key: 'scoring_40_half'    as const, label: t('settings.scoring40'),  sub: t('settings.scoring40Sub') },
+                { key: 'threes_11'          as const, label: t('settings.threes11'),    sub: t('settings.threes11Sub') },
+                { key: 'quad_double_threat' as const, label: t('settings.quadDouble'),  sub: t('settings.quadDoubleSub') },
               ] as const).map(({ key, label, sub }) => (
                 <View key={key} style={styles.categoryRow}>
                   <View style={{ flex: 1 }}>
@@ -953,10 +947,8 @@ export default function SettingsScreen() {
             ALARM SOUND
         ═══════════════════════════════════════════════════════════════ */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>ALARM SOUND</Text>
-          <Text style={styles.sectionDesc}>
-            Tap a sound to preview it. Select one and press Save.
-          </Text>
+          <Text style={styles.sectionTitle}>{t('settings.alarmSound')}</Text>
+          <Text style={styles.sectionDesc}>{t('settings.alarmSoundSub')}</Text>
 
           {ALARM_SOUNDS.map(s => (
             <TouchableOpacity
@@ -985,7 +977,7 @@ export default function SettingsScreen() {
             disabled={saving}
           >
             <Text style={[styles.updateBtnText, savedId === 'sound' && styles.savedBtnText]}>
-              {savedId === 'sound' ? 'Saved ✓' : 'Save Sound'}
+              {savedId === 'sound' ? t('settings.saved') : t('settings.saveSound')}
             </Text>
           </TouchableOpacity>
         </View>
@@ -996,12 +988,12 @@ export default function SettingsScreen() {
           onPress={() => setGuideVisible(true)}
         >
           <Ionicons name="information-circle-outline" size={20} color={C.orange} />
-          <Text style={styles.guideBtnText}>App Guide</Text>
+          <Text style={styles.guideBtnText}>{t('settings.appGuide')}</Text>
         </TouchableOpacity>
 
         {/* ── Appearance ────────────────────────────────────────────── */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>APPEARANCE</Text>
+          <Text style={styles.sectionTitle}>{t('settings.appearance')}</Text>
           <View style={styles.switchRow}>
             <Ionicons
               name={themeMode === 'dark' ? 'moon' : 'sunny'}
@@ -1010,13 +1002,30 @@ export default function SettingsScreen() {
               style={{ marginRight: 8 }}
             />
             <Text style={styles.switchLabel}>
-              {themeMode === 'dark' ? 'Dark Mode' : 'Light Mode'}
+              {themeMode === 'dark' ? t('settings.darkMode') : t('settings.lightMode')}
             </Text>
             <Switch
               value={themeMode === 'dark'}
               onValueChange={toggleTheme}
               trackColor={{ false: C.border, true: C.accentBlue }}
               thumbColor={themeMode === 'dark' ? C.textPrimary : '#fff'}
+            />
+          </View>
+          <View style={[styles.switchRow, { marginTop: 4 }]}>
+            <Ionicons
+              name="language-outline"
+              size={18}
+              color={C.accentBlue}
+              style={{ marginRight: 8 }}
+            />
+            <Text style={styles.switchLabel}>
+              {lang === 'he' ? t('settings.hebrew') : t('settings.english')}
+            </Text>
+            <Switch
+              value={lang === 'he'}
+              onValueChange={toggleLanguage}
+              trackColor={{ false: C.border, true: C.accentBlue }}
+              thumbColor={lang === 'he' ? C.textPrimary : '#fff'}
             />
           </View>
         </View>
@@ -1038,11 +1047,11 @@ export default function SettingsScreen() {
             style={styles.copyTokenBtn}
             onPress={() => {
               Clipboard.setString(userToken);
-              showInfo('Copied', 'Device token copied to clipboard.');
+              showInfo(t('settings.copied'), t('settings.copiedMsg'));
             }}
           >
             <Ionicons name="copy-outline" size={13} color={C.textMuted} />
-            <Text style={styles.copyTokenText}>Copy device token (for support)</Text>
+            <Text style={styles.copyTokenText}>{t('settings.copyToken')}</Text>
           </TouchableOpacity>
         ) : null}
 
@@ -1052,7 +1061,7 @@ export default function SettingsScreen() {
       <WelcomeGuide
         visible={guideVisible}
         onClose={() => setGuideVisible(false)}
-        closeLabel="Close"
+        closeLabel={t('guide.close')}
       />
 
       {/* ═══════════════════════════════════════════════════════════════
@@ -1071,7 +1080,7 @@ export default function SettingsScreen() {
                 </TouchableOpacity>
               ) : <View style={{ width: 70 }} />}
               <Text style={styles.modalTitle}>
-                {pickedTeam ? pickedTeam.abbreviation : 'Select Team'}
+                {pickedTeam ? pickedTeam.abbreviation : t('settings.selectTeam')}
               </Text>
               <TouchableOpacity onPress={closeTeamModal} style={styles.closeBtn}>
                 <Ionicons name="close" size={22} color={C.textMuted} />
@@ -1082,21 +1091,21 @@ export default function SettingsScreen() {
             {!pickedTeam && (
               <FlatList
                 data={allTeams}
-                keyExtractor={t => t.id}
+                keyExtractor={item => item.id}
                 initialNumToRender={15}
                 maxToRenderPerBatch={10}
                 windowSize={5}
-                renderItem={({ item: t }) => {
-                  const isFav = favTeamIds.has(t.id);
+                renderItem={({ item: team }) => {
+                  const isFav = favTeamIds.has(team.id);
                   return (
                     <TouchableOpacity
                       style={styles.pickerRow}
-                      onPress={() => setPickedTeam(t)}
+                      onPress={() => setPickedTeam(team)}
                     >
-                      <Text style={styles.pickerRowText}>{t.name}</Text>
+                      <Text style={styles.pickerRowText}>{team.name}</Text>
                       <View style={styles.pickerRowRight}>
-                        {isFav && <Text style={styles.savedBadge}>★ saved</Text>}
-                        <Text style={styles.pickerRowAbbr}>{t.abbreviation}</Text>
+                        {isFav && <Text style={styles.savedBadge}>{t('settings.savedBadge')}</Text>}
+                        <Text style={styles.pickerRowAbbr}>{team.abbreviation}</Text>
                         <Ionicons name="chevron-forward" size={16} color={C.textMuted} />
                       </View>
                     </TouchableOpacity>
@@ -1112,10 +1121,10 @@ export default function SettingsScreen() {
               <ScrollView keyboardShouldPersistTaps="handled" style={{ flex: 1 }}>
                 <View style={styles.configArea}>
                   <Text style={styles.configTitle}>{pickedTeam.name}</Text>
-                  <Text style={styles.configSub}>Set alert criteria for this team's games.</Text>
+                  <Text style={styles.configSub}>{t('settings.configSub')}</Text>
 
                   <View style={styles.sliderRow}>
-                    <Text style={styles.inputLabel}>MAX POINT DIFF TO ALERT</Text>
+                    <Text style={styles.inputLabel}>{t('settings.maxDiff')}</Text>
                     <Text style={styles.sliderValue}>{newTeamMaxDiff}</Text>
                   </View>
                   <Slider
@@ -1128,7 +1137,7 @@ export default function SettingsScreen() {
                     thumbTintColor={C.orange}
                   />
 
-                  <Text style={styles.inputLabel}>START MONITORING FROM QUARTER</Text>
+                  <Text style={styles.inputLabel}>{t('settings.startFrom')}</Text>
                   <QRow value={newTeamStartQ} onChange={setNewTeamStartQ} />
 
                   <View style={styles.alertTypeRow}>
@@ -1140,7 +1149,7 @@ export default function SettingsScreen() {
                       >
                         <Text style={styles.alertTypeIcon}>{type === 'alarm' ? '🚨' : '🔕'}</Text>
                         <Text style={[styles.alertTypeText, newTeamAlertType === type && styles.alertTypeTextActive]}>
-                          {type === 'alarm' ? 'Alarm' : 'Silent'}
+                          {type === 'alarm' ? t('settings.alarm') : t('settings.silent')}
                         </Text>
                       </TouchableOpacity>
                     ))}
@@ -1150,8 +1159,8 @@ export default function SettingsScreen() {
                   <View style={[styles.condCard, { marginTop: 8 }]}>
                     <View style={styles.condCardHeader}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.condCardTitle}>Broadcast Only</Text>
-                        <Text style={styles.condCardSub}>Only alert if the game is on TV</Text>
+                        <Text style={styles.condCardTitle}>{t('settings.broadcastOnly')}</Text>
+                        <Text style={styles.condCardSub}>{t('settings.broadcastOnlySub')}</Text>
                       </View>
                       <BasketballToggle
                         value={newTeamBroadcastOnly}
@@ -1163,7 +1172,7 @@ export default function SettingsScreen() {
                   <View style={styles.configSummary}>
                     <Ionicons name="information-circle-outline" size={14} color={C.textMuted} />
                     <Text style={styles.configSummaryText}>
-                      Alert fires when diff ≤ {newTeamMaxDiff || 5} pts from Q{newTeamStartQ}
+                      {t('settings.alertDiff', newTeamMaxDiff || 5, newTeamStartQ)}
                     </Text>
                   </View>
 
@@ -1173,11 +1182,11 @@ export default function SettingsScreen() {
                     disabled={saving}
                   >
                     <Text style={styles.confirmBtnText}>
-                      {saving ? 'Saving…' : `Add ${pickedTeam.abbreviation} to Favorites`}
+                      {saving ? t('settings.saving') : t('settings.addTeamBtn', pickedTeam.abbreviation)}
                     </Text>
                   </TouchableOpacity>
                   <TouchableOpacity style={styles.cancelBtn} onPress={closeTeamModal}>
-                    <Text style={styles.cancelBtnText}>Cancel</Text>
+                    <Text style={styles.cancelBtnText}>{t('settings.cancel')}</Text>
                   </TouchableOpacity>
                 </View>
               </ScrollView>
@@ -1210,10 +1219,10 @@ export default function SettingsScreen() {
 
               <Text style={styles.modalTitle}>
                 {pickedPlayer
-                  ? 'Configure Alert'
+                  ? t('settings.configureAlert')
                   : pickedTeamForPlayer
                     ? `${pickedTeamForPlayer.abbreviation} Roster`
-                    : 'Select Team'}
+                    : t('settings.selectTeam')}
               </Text>
               <TouchableOpacity onPress={closePlayerModal} style={styles.closeBtn}>
                 <Ionicons name="close" size={22} color={C.textMuted} />
@@ -1224,18 +1233,18 @@ export default function SettingsScreen() {
             {!pickedTeamForPlayer && (
               <FlatList
                 data={allTeams}
-                keyExtractor={t => t.id}
+                keyExtractor={item => item.id}
                 initialNumToRender={15}
                 maxToRenderPerBatch={10}
                 windowSize={5}
-                renderItem={({ item: t }) => (
+                renderItem={({ item: team }) => (
                   <TouchableOpacity
                     style={styles.pickerRow}
-                    onPress={() => setPickedTeamForPlayer(t)}
+                    onPress={() => setPickedTeamForPlayer(team)}
                   >
-                    <Text style={styles.pickerRowText}>{t.name}</Text>
+                    <Text style={styles.pickerRowText}>{team.name}</Text>
                     <View style={styles.pickerRowRight}>
-                      <Text style={styles.pickerRowAbbr}>{t.players.length} players</Text>
+                      <Text style={styles.pickerRowAbbr}>{t('settings.players', team.players.length)}</Text>
                       <Ionicons name="chevron-forward" size={16} color={C.textMuted} />
                     </View>
                   </TouchableOpacity>
@@ -1293,15 +1302,15 @@ export default function SettingsScreen() {
                     {pickedPlayer.position ? `  ·  ${pickedPlayer.position}` : ''}
                   </Text>
                   <Text style={[styles.configSub, { marginBottom: 16 }]}>
-                    Toggle on the alerts you want. All others will be ignored.
+                    {t('settings.playerCondSub')}
                   </Text>
 
                   {/* ── Total Points Alert ── */}
                   <View style={styles.condCard}>
                     <View style={styles.condCardHeader}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.condCardTitle}>Total Points Alert</Text>
-                        <Text style={styles.condCardSub}>Alert when he reaches a scoring total</Text>
+                        <Text style={styles.condCardTitle}>{t('settings.totalPtsAlert')}</Text>
+                        <Text style={styles.condCardSub}>{t('alarm.ptsGoalSub')}</Text>
                       </View>
                       <BasketballToggle
                         value={newTotalPtsEnabled}
@@ -1311,7 +1320,7 @@ export default function SettingsScreen() {
                     {newTotalPtsEnabled && (
                       <>
                         <View style={[styles.sliderRow, { marginTop: 10 }]}>
-                          <Text style={styles.inputLabel}>POINTS THRESHOLD</Text>
+                          <Text style={styles.inputLabel}>{t('settings.ptsThreshold')}</Text>
                           <Text style={styles.sliderValue}>{newTotalPts}</Text>
                         </View>
                         <Slider
@@ -1331,8 +1340,8 @@ export default function SettingsScreen() {
                   <View style={styles.condCard}>
                     <View style={styles.condCardHeader}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.condCardTitle}>Early Points Alert</Text>
-                        <Text style={styles.condCardSub}>Alert if he reaches a points threshold by a set quarter</Text>
+                        <Text style={styles.condCardTitle}>{t('settings.earlyPtsAlert')}</Text>
+                        <Text style={styles.condCardSub}>{t('alarm.earlyPtsSub')}</Text>
                       </View>
                       <BasketballToggle
                         value={newHotStartEnabled}
@@ -1342,7 +1351,7 @@ export default function SettingsScreen() {
                     {newHotStartEnabled && (
                       <>
                         <View style={[styles.sliderRow, { marginTop: 10 }]}>
-                          <Text style={styles.inputLabel}>POINTS THRESHOLD</Text>
+                          <Text style={styles.inputLabel}>{t('settings.ptsThreshold')}</Text>
                           <Text style={styles.sliderValue}>{newHotStartPts}</Text>
                         </View>
                         <Slider
@@ -1354,7 +1363,7 @@ export default function SettingsScreen() {
                           maximumTrackTintColor={C.border}
                           thumbTintColor={C.orange}
                         />
-                        <Text style={styles.inputLabel}>BY END OF QUARTER</Text>
+                        <Text style={styles.inputLabel}>{t('settings.byEndOfQ')}</Text>
                         <QRow value={newHotStartQ} onChange={setNewHotStartQ} quarters={['1', '2', '3']} />
                       </>
                     )}
@@ -1364,8 +1373,8 @@ export default function SettingsScreen() {
                   <View style={styles.condCard}>
                     <View style={styles.condCardHeader}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.condCardTitle}>Triple-Double Watch</Text>
-                        <Text style={styles.condCardSub}>Alert when approaching 9+ in 3 stats (with 3+ min left)</Text>
+                        <Text style={styles.condCardTitle}>{t('settings.tripleDouble')}</Text>
+                        <Text style={styles.condCardSub}>{t('alarm.tripleDoubleSub')}</Text>
                       </View>
                       <BasketballToggle
                         value={newTdWatch}
@@ -1378,8 +1387,8 @@ export default function SettingsScreen() {
                   <View style={styles.condCard}>
                     <View style={styles.condCardHeader}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.condCardTitle}>Broadcast Only</Text>
-                        <Text style={styles.condCardSub}>Only alert if the game is on TV</Text>
+                        <Text style={styles.condCardTitle}>{t('settings.broadcastOnly')}</Text>
+                        <Text style={styles.condCardSub}>{t('settings.broadcastOnlySub')}</Text>
                       </View>
                       <BasketballToggle
                         value={newPlayerBroadcastOnly}
@@ -1398,7 +1407,7 @@ export default function SettingsScreen() {
                       >
                         <Text style={styles.alertTypeIcon}>{type === 'alarm' ? '🚨' : '🔕'}</Text>
                         <Text style={[styles.alertTypeText, newPlayerAlertType === type && styles.alertTypeTextActive]}>
-                          {type === 'alarm' ? 'Alarm' : 'Silent'}
+                          {type === 'alarm' ? t('settings.alarm') : t('settings.silent')}
                         </Text>
                       </TouchableOpacity>
                     ))}
@@ -1412,7 +1421,7 @@ export default function SettingsScreen() {
                         {[
                           newTotalPtsEnabled  && `${newTotalPts || 40}+ pts`,
                           newHotStartEnabled  && `${newHotStartPts || 15} pts by Q${newHotStartQ}`,
-                          newTdWatch          && 'Triple-Double watch',
+                          newTdWatch          && t('active.tdWatch'),
                         ].filter(Boolean).join('  ·  ')}
                       </Text>
                     </View>
@@ -1424,11 +1433,11 @@ export default function SettingsScreen() {
                     disabled={saving}
                   >
                     <Text style={styles.confirmBtnText}>
-                      {saving ? 'Saving…' : `Add ${pickedPlayer.name} to Favorites`}
+                      {saving ? t('settings.saving') : t('settings.addPlayerBtn', pickedPlayer.name)}
                     </Text>
                   </TouchableOpacity>
                   <TouchableOpacity style={styles.cancelBtn} onPress={closePlayerModal}>
-                    <Text style={styles.cancelBtnText}>Cancel</Text>
+                    <Text style={styles.cancelBtnText}>{t('settings.cancel')}</Text>
                   </TouchableOpacity>
                 </View>
               </ScrollView>

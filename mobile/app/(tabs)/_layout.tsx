@@ -7,11 +7,13 @@ import { HapticTab } from '../../components/haptic-tab';
 import { IconSymbol } from '../../components/ui/icon-symbol';
 import { WelcomeGuide } from '../../components/welcome-guide';
 import { ThemeProvider, useTheme } from '../../context/ThemeContext';
+import { LanguageProvider, useLanguage } from '../../context/LanguageContext';
 
 const ONBOARDED_KEY = 'nba_alarm_onboarded';
 
 function TabLayoutInner() {
   const { colors } = useTheme();
+  const { t } = useLanguage();
   const [showGuide, setShowGuide] = useState(false);
 
   useEffect(() => {
@@ -43,21 +45,21 @@ function TabLayoutInner() {
         <Tabs.Screen
           name="index"
           options={{
-            title: 'Home',
+            title: t('tab.home'),
             tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
           }}
         />
         <Tabs.Screen
           name="active"
           options={{
-            title: 'Active',
+            title: t('tab.active'),
             tabBarIcon: ({ color }) => <Ionicons name="pulse" size={26} color={color} />,
           }}
         />
         <Tabs.Screen
           name="settings"
           options={{
-            title: 'Settings',
+            title: t('tab.settings'),
             tabBarIcon: ({ color }) => <Ionicons name="settings-sharp" size={26} color={color} />,
           }}
         />
@@ -66,7 +68,7 @@ function TabLayoutInner() {
       <WelcomeGuide
         visible={showGuide}
         onClose={handleGuideClose}
-        closeLabel="Get Started"
+        closeLabel={t('guide.getStarted')}
       />
     </>
   );
@@ -75,7 +77,9 @@ function TabLayoutInner() {
 export default function TabLayout() {
   return (
     <ThemeProvider>
-      <TabLayoutInner />
+      <LanguageProvider>
+        <TabLayoutInner />
+      </LanguageProvider>
     </ThemeProvider>
   );
 }

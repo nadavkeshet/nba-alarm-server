@@ -4,6 +4,7 @@ import messaging from '@react-native-firebase/messaging';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTheme, type AppColors } from '../../context/ThemeContext';
+import { useLanguage } from '../../context/LanguageContext';
 import {
   Animated,
   InteractionManager,
@@ -104,9 +105,9 @@ interface TrophyHit {
 
 
 const CONDITION_LABEL: Record<string, string> = {
-  pts_goal:      'Points Goal',
-  pts_early:     'Early Scorer',
-  triple_double: 'Triple-Double Threat',
+  pts_goal:      'active.condPtsGoal',
+  pts_early:     'active.condEarly',
+  triple_double: 'active.condTriple',
 };
 
 // ─── Pulsing Card (for LIVE alarms) ───────────────────────────────────────────
@@ -154,6 +155,7 @@ const LivePill = React.memo(function LivePill({ label, color, bg }: { label: str
 export default function ActiveScreen() {
   const { colors: C } = useTheme();
   const styles = useMemo(() => makeStyles(C), [C]);
+  const { t } = useLanguage();
   const [data, setData]           = useState<ActiveMonitors | null>(null);
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState<string | null>(null);
@@ -288,15 +290,15 @@ export default function ActiveScreen() {
 
     const histCats = data?.historical_mode?.categories;
     const activeCategories = histCats ? [
-      histCats.scoring_40_half    && '40+ pts before halftime',
-      histCats.threes_11          && '12+ three-pointers',
-      histCats.quad_double_threat && 'Quad-double threat',
+      histCats.scoring_40_half    && 'settings.scoring40',
+      histCats.threes_11          && 'settings.threes11',
+      histCats.quad_double_threat && 'settings.quadDouble',
     ].filter(Boolean) as string[] : [];
     return { dbGameAlarms, liveGameAlarms, livePlayerAlarmGroups, dbPlayerAlarmGroups, activeCategories };
   }, [data]);
 
   const cancelGameAlarm = (alarm: GameAlarm) => {
-    showConfirm(`Stop watching "${alarm.game_name}"?`, () => {
+    showConfirm(t('active.deleteConfirm'), () => {
       const t = tokenRef.current;
       const param = t ? `?user_token=${encodeURIComponent(t)}` : '';
       fetch(`${SERVER_URL}/active-monitors/game/${alarm.game_id}${param}`, { method: 'DELETE' })
@@ -307,7 +309,7 @@ export default function ActiveScreen() {
 
   const cancelPlayerAlarm = (alarms: PlayerAlarm[]) => {
     const first = alarms[0];
-    showConfirm(`Stop watching ${first.player_name}?`, () => {
+    showConfirm(t('active.deleteConfirm'), () => {
       const t = tokenRef.current;
       const param = t ? `?user_token=${encodeURIComponent(t)}` : '';
       // A single DELETE cancels all condition threads for this player on the server
@@ -318,7 +320,7 @@ export default function ActiveScreen() {
   };
 
   const cancelDbAlarm = (alarm: DbAlarm) => {
-    showConfirm('Are you sure you want to delete this alarm?', async () => {
+    showConfirm(t('active.deleteConfirm'), async () => {
       const t = tokenRef.current;
       if (!t) return;
       const url = `${SERVER_URL}/active-monitors/db/${alarm.alarm_id}?user_token=${encodeURIComponent(t)}`;
@@ -338,7 +340,7 @@ export default function ActiveScreen() {
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
-        <Text style={styles.header}>MISSION CONTROL</Text>
+        <Text style={styles.header}>{t('active.title')}</Text>
         <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
           {[0, 1, 2].map(i => (
             <View key={i} style={styles.section}>
@@ -354,12 +356,12 @@ export default function ActiveScreen() {
   if (error) {
     return (
       <SafeAreaView style={styles.container}>
-        <Text style={styles.header}>MISSION CONTROL</Text>
+        <Text style={styles.header}>{t('active.title')}</Text>
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 }}>
           <Ionicons name="cloud-offline-outline" size={48} color={C.border} />
           <Text style={[styles.emptyHint, { marginTop: 12 }]}>{error}</Text>
           <TouchableOpacity style={[styles.refreshBtn, { marginTop: 24 }]} onPress={() => load()}>
-            <Text style={styles.refreshBtnText}>Try Again</Text>
+            <Text style={styles.refreshBtnText}>{t('active.tryAgain')}</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -375,14 +377,14 @@ export default function ActiveScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.header}>MISSION CONTROL</Text>
+      <Text style={styles.header}>{t('active.title')}</Text>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
 
         {/* ── Game Alarms ─────────────────────────────────────────────────── */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>GAME ALARMS</Text>
+            <Text style={styles.sectionTitle}>{t('active.gameAlarms')}</Text>
             <View style={[styles.badge, { backgroundColor: totalGameAlarms ? C.red : C.border }]}>
               <Text style={styles.badgeText}>{totalGameAlarms}</Text>
             </View>
@@ -391,7 +393,7 @@ export default function ActiveScreen() {
           {totalGameAlarms === 0 ? (
             <View style={styles.emptyState}>
               <Ionicons name="notifications-off-outline" size={28} color={C.border} />
-              <Text style={styles.emptyHint}>No game alarms set. Tap a game on the Home tab to create one.</Text>
+              <Text style={styles.emptyHint}>{t('active.noGameAlarms')}</Text>
             </View>
           ) : (
             <View style={{ gap: 8 }}>
@@ -399,34 +401,34 @@ export default function ActiveScreen() {
                 <PulsingCard key={`live-${alarm.game_id}`}>
                   <View style={styles.alarmCardLeft}>
                     <LivePill
-                      label="WATCHING"
+                      label={t('active.watching')}
                       color={C.orange}
                       bg={C.orangeDim}
                     />
-                    <Text style={styles.alarmGame}>{alarm.game_name ?? 'Unknown Game'}</Text>
+                    <Text style={styles.alarmGame}>{alarm.game_name ?? t('active.unknownGame')}</Text>
                     <Text style={styles.alarmSub}>
-                      Alert if diff ≤ {alarm.max_diff ?? '?'} pts from Q{alarm.start_quarter ?? '?'}
+                      {t('active.alertDiff', alarm.max_diff ?? '?', alarm.start_quarter ?? '?')}
                     </Text>
                     <Text style={styles.alarmSub}>
-                      {alarm.alert_type === 'alarm' ? '🚨 Full Alarm' : '🔕 Silent'}
+                      {alarm.alert_type === 'alarm' ? t('active.fullAlarm') : t('active.silentMode')}
                     </Text>
                   </View>
                   <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelGameAlarm(alarm)}>
-                    <Text style={styles.cancelBtnText}>Cancel</Text>
+                    <Text style={styles.cancelBtnText}>{t('active.cancel')}</Text>
                   </TouchableOpacity>
                 </PulsingCard>
               ))}
               {dbGameAlarms.map(alarm => (
                 <View key={`db-${alarm.alarm_id ?? alarm.target_id}`} style={styles.alarmCard}>
                   <View style={styles.alarmCardLeft}>
-                    <LivePill label="SAVED" color={C.accentBlue} bg="rgba(77,140,245,0.12)" />
-                    <Text style={styles.alarmGame}>{alarm.target_name || alarm.target_id || 'Unknown Game'}</Text>
+                    <LivePill label={t('active.saved')} color={C.accentBlue} bg="rgba(77,140,245,0.12)" />
+                    <Text style={styles.alarmGame}>{alarm.target_name || alarm.target_id || t('active.unknownGame')}</Text>
                     <Text style={styles.alarmSub}>
-                      Score gap ≤ {alarm.threshold ?? '?'} pts · From Q{alarm.start_quarter ?? 4}
+                      {t('active.scoregap', alarm.threshold ?? '?', alarm.start_quarter ?? 4)}
                     </Text>
                   </View>
                   <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelDbAlarm(alarm)}>
-                    <Text style={styles.cancelBtnText}>Delete</Text>
+                    <Text style={styles.cancelBtnText}>{t('active.delete')}</Text>
                   </TouchableOpacity>
                 </View>
               ))}
@@ -437,7 +439,7 @@ export default function ActiveScreen() {
         {/* ── Player Alarms ────────────────────────────────────────────────── */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>PLAYER ALARMS</Text>
+            <Text style={styles.sectionTitle}>{t('active.playerAlarms')}</Text>
             <View style={[styles.badge, { backgroundColor: totalPlayerAlarms ? C.orange : C.border }]}>
               <Text style={styles.badgeText}>{totalPlayerAlarms}</Text>
             </View>
@@ -446,48 +448,48 @@ export default function ActiveScreen() {
           {totalPlayerAlarms === 0 ? (
             <View style={styles.emptyState}>
               <Ionicons name="person-outline" size={28} color={C.border} />
-              <Text style={styles.emptyHint}>No player alarms set. Open a game and choose "Player Alarm".</Text>
+              <Text style={styles.emptyHint}>{t('active.noPlayerAlarms')}</Text>
             </View>
           ) : (
             <View style={{ gap: 8 }}>
               {livePlayerAlarmGroups.map(group => (
                 <PulsingCard key={`live-${group[0].player_id}`}>
                   <View style={styles.alarmCardLeft}>
-                    <LivePill label="WATCHING" color={C.orange} bg={C.orangeDim} />
-                    <Text style={styles.alarmGame}>{group[0].player_name ?? 'Unknown Player'}</Text>
+                    <LivePill label={t('active.watching')} color={C.orange} bg={C.orangeDim} />
+                    <Text style={styles.alarmGame}>{group[0].player_name ?? t('active.unknownPlayer')}</Text>
                     {group.map((alarm, i) => (
                       <Text key={i} style={styles.alarmSub}>
-                        {CONDITION_LABEL[alarm.condition] ?? alarm.condition}
-                        {alarm.condition !== 'triple_double' ? ` · ${alarm.pts_threshold ?? '?'} pts` : ''}
+                        {t(CONDITION_LABEL[alarm.condition] ?? alarm.condition)}
+                        {alarm.condition !== 'triple_double' ? ` · ${alarm.pts_threshold ?? '?'} ${t('active.pts')}` : ''}
                       </Text>
                     ))}
                     <Text style={[styles.alarmSub, { marginTop: 1 }]}>{group[0].game_name ?? ''}</Text>
                     <Text style={styles.alarmSub}>
-                      {group[0].alert_type === 'alarm' ? '🚨 Full Alarm' : '🔕 Silent'}
+                      {group[0].alert_type === 'alarm' ? t('active.fullAlarm') : t('active.silentMode')}
                     </Text>
                   </View>
                   <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelPlayerAlarm(group)}>
-                    <Text style={styles.cancelBtnText}>Cancel</Text>
+                    <Text style={styles.cancelBtnText}>{t('active.cancel')}</Text>
                   </TouchableOpacity>
                 </PulsingCard>
               ))}
               {dbPlayerAlarmGroups.map(group => (
                 <View key={`db-${group[0].target_id}`} style={styles.alarmCard}>
                   <View style={styles.alarmCardLeft}>
-                    <LivePill label="SAVED" color={C.orange} bg={C.orangeDim} />
-                    <Text style={styles.alarmGame}>{group[0].target_name || group[0].target_id || 'Unknown Player'}</Text>
+                    <LivePill label={t('active.saved')} color={C.orange} bg={C.orangeDim} />
+                    <Text style={styles.alarmGame}>{group[0].target_name || group[0].target_id || t('active.unknownPlayer')}</Text>
                     {group.map((alarm, i) => (
                       <Text key={i} style={styles.alarmSub}>
                         {(alarm.condition_type ?? '').toLowerCase() === 'triple_double'
-                          ? 'Triple-Double Watch'
+                          ? t('active.tripleDoubleWatch')
                           : alarm.start_quarter && alarm.start_quarter > 0
-                            ? `${alarm.threshold ?? '?'}+ pts (Before Q${alarm.start_quarter})`
-                            : `${alarm.threshold ?? '?'}+ pts (Any Quarter)`}
+                            ? t('active.ptsBeforeQ', alarm.threshold ?? '?', alarm.start_quarter)
+                            : t('active.ptsAnyQ', alarm.threshold ?? '?')}
                       </Text>
                     ))}
                   </View>
                   <TouchableOpacity style={styles.cancelBtn} onPress={() => {
-                    showConfirm(`Delete all alarms for ${group[0].target_name || 'this player'}?`, async () => {
+                    showConfirm(t('active.deletePlayer', group[0].target_name || ''), async () => {
                       const t = tokenRef.current;
                       if (!t) return;
                       await Promise.all(group.map(alarm =>
@@ -499,7 +501,7 @@ export default function ActiveScreen() {
                       } : prev);
                     });
                   }}>
-                    <Text style={styles.cancelBtnText}>Delete</Text>
+                    <Text style={styles.cancelBtnText}>{t('active.delete')}</Text>
                   </TouchableOpacity>
                 </View>
               ))}
@@ -509,13 +511,13 @@ export default function ActiveScreen() {
 
         {/* ── Global Radar Status ──────────────────────────────────────────── */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>GLOBAL RADAR STATUS</Text>
+          <Text style={styles.sectionTitle}>{t('active.globalRadar')}</Text>
 
           <View style={styles.statusRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rowLabel}>Background Radar</Text>
+              <Text style={styles.rowLabel}>{t('active.bgRadar')}</Text>
               <Text style={styles.rowSub}>
-                {radar?.running ? 'Scanning all live games' : 'Stopped — will start with next alarm'}
+                {radar?.running ? t('active.radarRunning') : t('active.radarStopped')}
               </Text>
             </View>
             <View style={[styles.statusDot, { backgroundColor: radar?.running ? C.liveGreen : C.border }]} />
@@ -523,9 +525,9 @@ export default function ActiveScreen() {
 
           <View style={styles.statusRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rowLabel}>Global Radar Alerts</Text>
+              <Text style={styles.rowLabel}>{t('active.radarAlerts')}</Text>
               <Text style={styles.rowSub}>
-                {radar?.enabled ? `≤ ${radar.max_diff} pts diff from Q${radar.start_quarter}` : 'Disabled'}
+                {radar?.enabled ? t('active.alertDiff', radar.max_diff, radar.start_quarter) : t('active.radarDisabled')}
               </Text>
             </View>
             <View style={[styles.statusDot, { backgroundColor: radar?.enabled ? C.accentBlue : C.border }]} />
@@ -535,7 +537,7 @@ export default function ActiveScreen() {
         {/* ── Favorites Summary ────────────────────────────────────────────── */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>FAVORITES BEING TRACKED</Text>
+            <Text style={styles.sectionTitle}>{t('active.favTracked')}</Text>
             <View style={[styles.badge, { backgroundColor: C.blue }]}>
               <Text style={styles.badgeText}>
                 {(data?.favorite_teams.length ?? 0) + Object.keys(data?.favorite_players ?? {}).length}
@@ -546,16 +548,16 @@ export default function ActiveScreen() {
           {(data?.favorite_teams ?? []).length === 0 && Object.keys(data?.favorite_players ?? {}).length === 0 ? (
             <View style={styles.emptyState}>
               <Ionicons name="star-outline" size={28} color={C.border} />
-              <Text style={styles.emptyHint}>No favorites set. Add teams and players in Settings.</Text>
+              <Text style={styles.emptyHint}>{t('active.noFavorites')}</Text>
             </View>
           ) : (
             <>
-              {(data?.favorite_teams ?? []).map(t => (
-                <View key={t.team_id} style={styles.favItem}>
+              {(data?.favorite_teams ?? []).map(team => (
+                <View key={team.team_id} style={styles.favItem}>
                   <Text style={styles.favIcon}>🏀</Text>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.favName}>{t.team_name}</Text>
-                    <Text style={styles.rowSub}>Alert if diff ≤ {t.max_diff} pts from Q{t.start_quarter}</Text>
+                    <Text style={styles.favName}>{team.team_name}</Text>
+                    <Text style={styles.rowSub}>{t('active.alertDiff', team.max_diff, team.start_quarter)}</Text>
                   </View>
                 </View>
               ))}
@@ -567,8 +569,8 @@ export default function ActiveScreen() {
                     <Text style={styles.rowSub}>
                       {[
                         p.total_pts != null && `${p.total_pts} pts`,
-                        p.early_pts != null && p.early_pts_q != null && `Early ${p.early_pts}+ pts by Q${p.early_pts_q}`,
-                        p.td_watch && 'TD watch',
+                        p.early_pts != null && p.early_pts_q != null && t('active.earlyPtsRow', p.early_pts, p.early_pts_q),
+                        p.td_watch && t('active.tdWatch'),
                       ].filter(Boolean).join(' · ')}
                     </Text>
                   </View>
@@ -581,10 +583,10 @@ export default function ActiveScreen() {
         {/* ── Historical Mode ──────────────────────────────────────────────── */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>HISTORICAL MODE</Text>
+            <Text style={styles.sectionTitle}>{t('active.historical')}</Text>
             <View style={[styles.badge, { backgroundColor: hist?.enabled ? C.gold : C.border }]}>
               <Text style={[styles.badgeText, { color: hist?.enabled ? '#000' : C.textMuted }]}>
-                {hist?.enabled ? 'ON' : 'OFF'}
+                {hist?.enabled ? t('active.on') : t('active.off')}
               </Text>
             </View>
           </View>
@@ -592,18 +594,18 @@ export default function ActiveScreen() {
           {!hist?.enabled ? (
             <View style={styles.emptyState}>
               <Ionicons name="time-outline" size={28} color={C.border} />
-              <Text style={styles.emptyHint}>Disabled. Enable in Settings to catch all-time rare stat lines.</Text>
+              <Text style={styles.emptyHint}>{t('active.historicalOff')}</Text>
             </View>
           ) : activeCategories.length === 0 ? (
             <View style={styles.emptyState}>
               <Ionicons name="time-outline" size={28} color={C.border} />
-              <Text style={styles.emptyHint}>Enabled but no categories are active.</Text>
+              <Text style={styles.emptyHint}>{t('active.historicalNone')}</Text>
             </View>
           ) : (
             activeCategories.map(cat => (
               <View key={cat} style={styles.catItem}>
                 <View style={[styles.pillDot, { backgroundColor: C.gold, marginRight: 10 }]} />
-                <Text style={styles.catLabel}>{cat}</Text>
+                <Text style={styles.catLabel}>{t(cat)}</Text>
               </View>
             ))
           )}
@@ -612,21 +614,21 @@ export default function ActiveScreen() {
         {/* ── Trophy Room ──────────────────────────────────────────────────── */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>🏆 TROPHY ROOM</Text>
+            <Text style={styles.sectionTitle}>{t('active.trophy')}</Text>
             <TouchableOpacity
               onPress={async () => {
                 await AsyncStorage.removeItem(TROPHY_KEY);
                 setTrophies([]);
               }}
             >
-              <Text style={{ color: C.textMuted, fontSize: 11, fontWeight: '700' }}>CLEAR</Text>
+              <Text style={{ color: C.textMuted, fontSize: 11, fontWeight: '700' }}>{t('active.clear')}</Text>
             </TouchableOpacity>
           </View>
 
           {trophies.length === 0 ? (
             <View style={styles.emptyState}>
               <Text style={{ fontSize: 28 }}>🏆</Text>
-              <Text style={styles.emptyHint}>Alarms that fire will appear here as your Trophy Room fills up.</Text>
+              <Text style={styles.emptyHint}>{t('active.trophyEmpty')}</Text>
             </View>
           ) : (
             trophies.map((hit, i) => (
@@ -651,7 +653,7 @@ export default function ActiveScreen() {
         {/* ── Refresh ──────────────────────────────────────────────────────── */}
         <TouchableOpacity style={styles.refreshBtn} onPress={() => load()} disabled={loading}>
           <Ionicons name="refresh-outline" size={16} color={C.orange} style={{ marginRight: 6 }} />
-          <Text style={styles.refreshBtnText}>Refresh</Text>
+          <Text style={styles.refreshBtnText}>{t('active.refresh')}</Text>
         </TouchableOpacity>
 
       </ScrollView>
@@ -665,17 +667,17 @@ export default function ActiveScreen() {
       >
         <View style={styles.confirmOverlay}>
           <View style={styles.confirmBox}>
-            <Text style={styles.confirmTitle}>Remove Alert?</Text>
+            <Text style={styles.confirmTitle}>{t('active.removeAlert')}</Text>
             <Text style={styles.confirmMessage}>{confirmModal.message}</Text>
             <View style={styles.confirmButtons}>
               <TouchableOpacity style={styles.confirmCancelBtn} onPress={hideConfirm}>
-                <Text style={styles.confirmCancelText}>Keep</Text>
+                <Text style={styles.confirmCancelText}>{t('active.keep')}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.confirmDeleteBtn}
                 onPress={() => { hideConfirm(); confirmModal.onConfirm(); }}
               >
-                <Text style={styles.confirmDeleteText}>Delete</Text>
+                <Text style={styles.confirmDeleteText}>{t('active.delete')}</Text>
               </TouchableOpacity>
             </View>
           </View>

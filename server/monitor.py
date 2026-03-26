@@ -967,24 +967,29 @@ def start_player_monitoring_job(
 
             if triggered:
                 # Claim the same dedup key the radar uses for this condition.
-                # This prevents the radar from re-firing the same alert after
-                # this manual alarm thread exits and _has_manual_player_alarm
-                # returns False again.
+                # Guard on the return value: if the radar already fired this key
+                # (race condition), _fire_once returns False and we skip the send
+                # to avoid a duplicate notification.
                 if condition == "pts_goal":
-                    _fire_once(f"{game_id}_{player_id}_total_pts", push_token)
+                    did_fire = _fire_once(f"{game_id}_{player_id}_total_pts", push_token)
                 elif condition == "pts_early":
-                    _fire_once(f"{game_id}_{player_id}_early_pts_q{quarter_deadline}", push_token)
+                    did_fire = _fire_once(f"{game_id}_{player_id}_early_pts_q{quarter_deadline}", push_token)
                 elif condition == "triple_double":
-                    _fire_once(f"{game_id}_{player_id}_triple_double", push_token)
+                    did_fire = _fire_once(f"{game_id}_{player_id}_triple_double", push_token)
+                else:
+                    did_fire = True  # unknown condition — send anyway
 
-                log.info("PLAYER ALARM fire   | %s", notif_body)
-                _send_push_notification(
-                    push_token=push_token,
-                    title="Player Alert!",
-                    body=notif_body,
-                    sound_channel=sound_channel,
-                    alert_type=alert_type,
-                )
+                if did_fire:
+                    log.info("PLAYER ALARM fire   | %s", notif_body)
+                    _send_push_notification(
+                        push_token=push_token,
+                        title="Player Alert!",
+                        body=notif_body,
+                        sound_channel=sound_channel,
+                        alert_type=alert_type,
+                    )
+                else:
+                    log.info("PLAYER ALARM dedup  | %s (radar already fired)", notif_body)
                 _deactivate_db_alarm_for(player_id)
                 return
 

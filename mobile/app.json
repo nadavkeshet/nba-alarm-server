@@ -2,7 +2,7 @@
   "expo": {
     "name": "NBA Smart Alarm",
     "slug": "NBA-Alarm-App",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "nbaalarmapp",
@@ -20,6 +20,11 @@
         "DISABLE_KEYGUARD",
         "VIBRATE",
         "USE_FULL_SCREEN_INTENT",
+        "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+        "WAKE_LOCK",
+        "DISABLE_KEYGUARD",
+        "VIBRATE",
+        "USE_FULL_SCREEN_INTENT",
         "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
       ],
       "adaptiveIcon": {
@@ -28,7 +33,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "package": "com.nadav.nbaalarmapp",
-      "versionCode": 3,
+      "versionCode": 4,
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
@@ -65,6 +70,12 @@
       "typedRoutes": true,
       "reactCompiler": true
     },
-    "owner": "nbasmartalarm1"
+    "owner": "nbasmartalarm1",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/bac39d54-8d6f-41e4-9afb-591085bb5dc1"
+    }
   }
 }
