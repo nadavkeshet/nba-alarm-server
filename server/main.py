@@ -92,6 +92,8 @@ class Alarm(_Base):
     # Stored so monitoring threads can be restarted after a server restart.
     game_id        = Column(String,  nullable=True)
     game_name      = Column(String,  nullable=True)
+    home_team_id   = Column(String,  nullable=True)
+    away_team_id   = Column(String,  nullable=True)
     alert_type     = Column(String,  nullable=True, default="alarm")
     is_active      = Column(Boolean, default=True, nullable=False)
     created_at     = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
@@ -184,7 +186,9 @@ def _init_db() -> None:
         # Fields needed to restart monitoring threads after a server restart
         "ALTER TABLE alarms ADD COLUMN game_id    VARCHAR",
         "ALTER TABLE alarms ADD COLUMN game_name  VARCHAR",
-        "ALTER TABLE alarms ADD COLUMN alert_type VARCHAR DEFAULT 'alarm'",
+        "ALTER TABLE alarms ADD COLUMN alert_type    VARCHAR DEFAULT 'alarm'",
+        "ALTER TABLE alarms ADD COLUMN home_team_id  VARCHAR",
+        "ALTER TABLE alarms ADD COLUMN away_team_id  VARCHAR",
         "ALTER TABLE alarms ADD COLUMN created_at TIMESTAMPTZ",
         "ALTER TABLE favorites ADD COLUMN broadcast_only BOOLEAN DEFAULT FALSE NOT NULL",
         "ALTER TABLE favorite_teams ADD COLUMN broadcast_only BOOLEAN DEFAULT FALSE NOT NULL",
@@ -915,8 +919,10 @@ class AlarmRequest(BaseModel):
     max_diff: int
     start_quarter: int
     push_token: str
-    sound_channel: str = "classic_alarm"
-    alert_type: str    = "alarm"
+    sound_channel: str  = "classic_alarm"
+    alert_type: str     = "alarm"
+    home_team_id: str   = ""
+    away_team_id: str   = ""
 
 
 @app.post("/start-alarm")
@@ -942,6 +948,8 @@ async def start_alarm(req: AlarmRequest):
                     start_quarter  = req.start_quarter,
                     game_id        = req.game_id,
                     game_name      = req.game_name,
+                    home_team_id   = req.home_team_id or None,
+                    away_team_id   = req.away_team_id or None,
                     alert_type     = req.alert_type,
                 ))
                 session.commit()
@@ -1563,6 +1571,8 @@ def active_monitors(user_token: str = ""):
                             "condition_type": r.condition_type,
                             "threshold":      r.threshold,
                             "start_quarter":  r.start_quarter if r.start_quarter is not None else 4,
+                            "home_team_id":   r.home_team_id or "",
+                            "away_team_id":   r.away_team_id or "",
                         }
                         for r in alarm_rows
                     ]

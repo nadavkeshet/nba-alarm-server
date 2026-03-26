@@ -1103,6 +1103,10 @@ export default function SettingsScreen() {
                       style={styles.pickerRow}
                       onPress={() => setPickedTeam(team)}
                     >
+                      <Image
+                        source={{ uri: team.logo ?? `https://a.espncdn.com/i/teamlogos/nba/500/${team.id}.png` }}
+                        style={styles.pickerTeamLogo}
+                      />
                       <Text style={styles.pickerRowText}>{team.name}</Text>
                       <View style={styles.pickerRowRight}>
                         {isFav && <Text style={styles.savedBadge}>{t('settings.savedBadge')}</Text>}
@@ -1121,7 +1125,13 @@ export default function SettingsScreen() {
             {pickedTeam && (
               <ScrollView keyboardShouldPersistTaps="handled" style={{ flex: 1 }}>
                 <View style={styles.configArea}>
-                  <Text style={styles.configTitle}>{pickedTeam.name}</Text>
+                  <View style={styles.configTitleRow}>
+                    <Image
+                      source={{ uri: pickedTeam.logo ?? `https://a.espncdn.com/i/teamlogos/nba/500/${pickedTeam.id}.png` }}
+                      style={styles.configTeamLogo}
+                    />
+                    <Text style={styles.configTitle}>{pickedTeam.name}</Text>
+                  </View>
                   <Text style={styles.configSub}>{t('settings.configSub')}</Text>
 
                   <View style={styles.sliderRow}>
@@ -1609,6 +1619,7 @@ const makeStyles = (C: AppColors) => StyleSheet.create({
     paddingHorizontal: 16, paddingVertical: 10, gap: 10,
   },
   pickerPlayerHeadshot: { width: 36, height: 36, borderRadius: 18 },
+  pickerTeamLogo: { width: 28, height: 28, resizeMode: 'contain' },
   pickerRowText:  { fontSize: 15, color: C.textPrimary, fontWeight: '600', flex: 1 },
   pickerRowSub:   { fontSize: 12, color: C.textMuted, marginTop: 2 },
   pickerRowRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -1618,7 +1629,9 @@ const makeStyles = (C: AppColors) => StyleSheet.create({
 
   // Config area (step 2/3)
   configArea: { padding: 24 },
-  configTitle:{ fontSize: 20, fontWeight: '800', color: C.textPrimary, marginBottom: 4 },
+  configTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 },
+  configTeamLogo: { width: 36, height: 36, resizeMode: 'contain' },
+  configTitle:{ fontSize: 20, fontWeight: '800', color: C.textPrimary },
   configSub:  { fontSize: 13, color: C.textMuted, marginBottom: 8, lineHeight: 18 },
   configSummary: {
     flexDirection: 'row', alignItems: 'center', gap: 6,

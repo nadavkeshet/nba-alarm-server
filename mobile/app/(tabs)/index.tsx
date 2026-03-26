@@ -504,6 +504,7 @@ export default function HomeScreen() {
       setExpoPushToken(freshToken);
       sendTokenToServer(freshToken);
     }
+    const { home: gameHome, away: gameAway } = getTeams(selectedGame);
     try {
       const response = await fetch(`${SERVER_URL}/start-alarm`, {
         method: 'POST',
@@ -516,6 +517,8 @@ export default function HomeScreen() {
           push_token:    freshToken,
           sound_channel: ALARM_CHANNEL,
           alert_type:    alertType,
+          home_team_id:  gameHome?.team?.id?.toString() ?? '',
+          away_team_id:  gameAway?.team?.id?.toString() ?? '',
         }),
       });
       if (response.ok) {
