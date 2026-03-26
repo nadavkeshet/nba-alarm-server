@@ -299,8 +299,8 @@ export default function ActiveScreen() {
 
   const cancelGameAlarm = (alarm: GameAlarm) => {
     showConfirm(t('active.deleteConfirm'), () => {
-      const t = tokenRef.current;
-      const param = t ? `?user_token=${encodeURIComponent(t)}` : '';
+      const token = tokenRef.current;
+      const param = token ? `?user_token=${encodeURIComponent(token)}` : '';
       fetch(`${SERVER_URL}/active-monitors/game/${alarm.game_id}${param}`, { method: 'DELETE' })
         .then(() => load())
         .catch(e => console.error('Cancel game alarm error:', e));
@@ -310,8 +310,8 @@ export default function ActiveScreen() {
   const cancelPlayerAlarm = (alarms: PlayerAlarm[]) => {
     const first = alarms[0];
     showConfirm(t('active.deleteConfirm'), () => {
-      const t = tokenRef.current;
-      const param = t ? `?user_token=${encodeURIComponent(t)}` : '';
+      const token = tokenRef.current;
+      const param = token ? `?user_token=${encodeURIComponent(token)}` : '';
       // A single DELETE cancels all condition threads for this player on the server
       fetch(`${SERVER_URL}/active-monitors/player/${first.player_id}${param}`, { method: 'DELETE' })
         .then(() => load())
@@ -321,9 +321,9 @@ export default function ActiveScreen() {
 
   const cancelDbAlarm = (alarm: DbAlarm) => {
     showConfirm(t('active.deleteConfirm'), async () => {
-      const t = tokenRef.current;
-      if (!t) return;
-      const url = `${SERVER_URL}/active-monitors/db/${alarm.alarm_id}?user_token=${encodeURIComponent(t)}`;
+      const token = tokenRef.current;
+      if (!token) return;
+      const url = `${SERVER_URL}/active-monitors/db/${alarm.alarm_id}?user_token=${encodeURIComponent(token)}`;
       try {
         const resp = await fetch(url, { method: 'DELETE' });
         if (!resp.ok) return;
@@ -490,10 +490,10 @@ export default function ActiveScreen() {
                   </View>
                   <TouchableOpacity style={styles.cancelBtn} onPress={() => {
                     showConfirm(t('active.deletePlayer', group[0].target_name || ''), async () => {
-                      const t = tokenRef.current;
-                      if (!t) return;
+                      const token = tokenRef.current;
+                      if (!token) return;
                       await Promise.all(group.map(alarm =>
-                        fetch(`${SERVER_URL}/active-monitors/db/${alarm.alarm_id}?user_token=${encodeURIComponent(t)}`, { method: 'DELETE' })
+                        fetch(`${SERVER_URL}/active-monitors/db/${alarm.alarm_id}?user_token=${encodeURIComponent(token)}`, { method: 'DELETE' })
                       ));
                       setData(prev => prev ? {
                         ...prev,
