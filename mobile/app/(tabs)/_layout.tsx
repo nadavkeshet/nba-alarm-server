@@ -6,6 +6,7 @@ import React, { useEffect, useState } from 'react';
 import { HapticTab } from '../../components/haptic-tab';
 import { IconSymbol } from '../../components/ui/icon-symbol';
 import { WelcomeGuide } from '../../components/welcome-guide';
+import { ErrorBoundary } from '../../components/error-boundary';
 import { ThemeProvider, useTheme } from '../../context/ThemeContext';
 import { LanguageProvider, useLanguage } from '../../context/LanguageContext';
 
@@ -76,10 +77,12 @@ function TabLayoutInner() {
 
 export default function TabLayout() {
   return (
-    <ThemeProvider>
-      <LanguageProvider>
-        <TabLayoutInner />
-      </LanguageProvider>
-    </ThemeProvider>
+    <ErrorBoundary>
+      <ThemeProvider>
+        <LanguageProvider>
+          <TabLayoutInner />
+        </LanguageProvider>
+      </ThemeProvider>
+    </ErrorBoundary>
   );
 }
