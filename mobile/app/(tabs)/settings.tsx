@@ -71,7 +71,7 @@ interface CachedTeam   { id: string; name: string; abbreviation: string; logo: s
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const QRow = React.memo(function QRow({ value, onChange, quarters = ['1', '2', '3', '4'] }: { value: string; onChange: (q: string) => void; quarters?: string[] }) {
+const QRow = React.memo(function QRow({ value, onChange, quarters = ['1', '2', '3', '4'], styles }: { value: string; onChange: (q: string) => void; quarters?: string[]; styles: any }) {
   return (
     <View style={styles.quarterRow}>
       {quarters.map(q => (
@@ -618,6 +618,7 @@ export default function SettingsScreen() {
                   <QRow
                     value={edit.start_quarter}
                     onChange={q => setTeamEdits(prev => ({ ...prev, [team.team_id]: { ...edit, start_quarter: q } }))}
+                    styles={styles}
                   />
 
                   <View style={styles.alertTypeRow}>
@@ -758,7 +759,7 @@ export default function SettingsScreen() {
                           thumbTintColor={C.orange}
                         />
                         <Text style={styles.inputLabel}>{t('settings.byEndOfQ')}</Text>
-                        <QRow value={edit.early_pts_q} onChange={q => setEdit({ early_pts_q: q })} quarters={['1', '2', '3']} />
+                        <QRow value={edit.early_pts_q} onChange={q => setEdit({ early_pts_q: q })} quarters={['1', '2', '3']} styles={styles} />
                       </>
                     )}
                   </View>
@@ -866,7 +867,7 @@ export default function SettingsScreen() {
                 thumbTintColor={C.orange}
               />
               <Text style={styles.inputLabel}>{t('settings.startFrom')}</Text>
-              <QRow value={radarStartQ} onChange={setRadarStartQ} />
+              <QRow value={radarStartQ} onChange={setRadarStartQ} styles={styles} />
               <TouchableOpacity
                 style={styles.updateBtn}
                 onPress={() => patchGlobalRadar({
@@ -1138,7 +1139,7 @@ export default function SettingsScreen() {
                   />
 
                   <Text style={styles.inputLabel}>{t('settings.startFrom')}</Text>
-                  <QRow value={newTeamStartQ} onChange={setNewTeamStartQ} />
+                  <QRow value={newTeamStartQ} onChange={setNewTeamStartQ} styles={styles} />
 
                   <View style={styles.alertTypeRow}>
                     {(['alarm', 'silent'] as const).map(type => (
@@ -1364,7 +1365,7 @@ export default function SettingsScreen() {
                           thumbTintColor={C.orange}
                         />
                         <Text style={styles.inputLabel}>{t('settings.byEndOfQ')}</Text>
-                        <QRow value={newHotStartQ} onChange={setNewHotStartQ} quarters={['1', '2', '3']} />
+                        <QRow value={newHotStartQ} onChange={setNewHotStartQ} quarters={['1', '2', '3']} styles={styles} />
                       </>
                     )}
                   </View>

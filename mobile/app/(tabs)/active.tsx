@@ -110,9 +110,23 @@ const CONDITION_LABEL: Record<string, string> = {
   triple_double: 'active.condTriple',
 };
 
+// ─── Static styles for module-level components ────────────────────────────────
+// These components are defined outside ActiveScreen so they cannot access the
+// theme-computed `styles` object. Static/structural styles go here; dynamic
+// colors are passed as props.
+
+const pillStyles = StyleSheet.create({
+  pill:    { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, marginBottom: 6 },
+  pillDot: { width: 6, height: 6, borderRadius: 3, marginRight: 5 },
+  pillText:{ fontSize: 10, fontWeight: '900' as const, letterSpacing: 1 },
+});
+
+const cardLiveStyle = { flexDirection: 'row' as const, alignItems: 'center' as const, backgroundColor: 'rgba(255,107,0,0.04)', borderRadius: 12, borderWidth: 1.5, borderColor: 'rgba(255,107,0,0.25)', padding: 12 };
+const pulsingBorderStyle = { ...StyleSheet.absoluteFillObject, borderRadius: 12, borderWidth: 1.5, borderColor: 'rgba(255,107,0,0.85)' };
+
 // ─── Pulsing Card (for LIVE alarms) ───────────────────────────────────────────
 
-const PulsingCard = React.memo(function PulsingCard({ children }: { children: React.ReactNode }) {
+const PulsingCard = React.memo(function PulsingCard({ children, cardStyle }: { children: React.ReactNode; cardStyle: object }) {
   const pulse = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -132,8 +146,8 @@ const PulsingCard = React.memo(function PulsingCard({ children }: { children: Re
   return (
     // Base card keeps a faint static border; the bright border fades in/out
     // via an absolutely-positioned overlay — opacity is native-driver safe
-    <View style={[styles.alarmCard, styles.alarmCardLive]}>
-      <Animated.View style={[styles.pulsingBorder, { opacity: pulse }]} pointerEvents="none" />
+    <View style={[cardStyle, cardLiveStyle]}>
+      <Animated.View style={[pulsingBorderStyle, { opacity: pulse }]} pointerEvents="none" />
       {children}
     </View>
   );
@@ -143,9 +157,9 @@ const PulsingCard = React.memo(function PulsingCard({ children }: { children: Re
 
 const LivePill = React.memo(function LivePill({ label, color, bg }: { label: string; color: string; bg: string }) {
   return (
-    <View style={[styles.pill, { backgroundColor: bg }]}>
-      <View style={[styles.pillDot, { backgroundColor: color }]} />
-      <Text style={[styles.pillText, { color }]}>{label}</Text>
+    <View style={[pillStyles.pill, { backgroundColor: bg }]}>
+      <View style={[pillStyles.pillDot, { backgroundColor: color }]} />
+      <Text style={[pillStyles.pillText, { color }]}>{label}</Text>
     </View>
   );
 });
@@ -398,7 +412,7 @@ export default function ActiveScreen() {
           ) : (
             <View style={{ gap: 8 }}>
               {liveGameAlarms.map(alarm => (
-                <PulsingCard key={`live-${alarm.game_id}`}>
+                <PulsingCard key={`live-${alarm.game_id}`} cardStyle={styles.alarmCard}>
                   <View style={styles.alarmCardLeft}>
                     <LivePill
                       label={t('active.watching')}
@@ -453,7 +467,7 @@ export default function ActiveScreen() {
           ) : (
             <View style={{ gap: 8 }}>
               {livePlayerAlarmGroups.map(group => (
-                <PulsingCard key={`live-${group[0].player_id}`}>
+                <PulsingCard key={`live-${group[0].player_id}`} cardStyle={styles.alarmCard}>
                   <View style={styles.alarmCardLeft}>
                     <LivePill label={t('active.watching')} color={C.orange} bg={C.orangeDim} />
                     <Text style={styles.alarmGame}>{group[0].player_name ?? t('active.unknownPlayer')}</Text>
