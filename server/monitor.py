@@ -809,7 +809,9 @@ def start_monitoring_job(
                 _deactivate_db_alarm_for(game_id)
                 return
 
-            if quarter >= start_quarter and diff <= max_diff:
+            last5_active = (start_quarter == 5 and (quarter > 4 or (quarter == 4 and _clock_minutes_remaining(event) <= 5.0)))
+            quarter_ok   = last5_active if start_quarter == 5 else quarter >= start_quarter
+            if quarter_ok and diff <= max_diff:
                 log.info("GAME ALARM  fire   | %s | Q%d diff=%d", game_name, quarter, diff)
                 _send_push_notification(
                     push_token=push_token,
@@ -1079,7 +1081,9 @@ def _run_radar_tick_for_user(
                 start_q = int(criteria.get("start_quarter", 4))
                 c_alert = criteria.get("alert_type", radar_alert_type)
                 broadcast_only = bool(criteria.get("broadcast_only", False))
-                if quarter >= start_q and diff <= max_d:
+                last5_ok = start_q == 5 and (quarter > 4 or (quarter == 4 and _clock_minutes_remaining(event) <= 5.0))
+                quarter_ok_r = last5_ok if start_q == 5 else quarter >= start_q
+                if quarter_ok_r and diff <= max_d:
                     # If broadcast_only, skip if no TV broadcast found
                     if broadcast_only:
                         home_abbr = ""

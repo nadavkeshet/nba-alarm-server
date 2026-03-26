@@ -721,14 +721,14 @@ export default function HomeScreen() {
 
                 <Text style={styles.inputLabel}>{t('alarm.startFrom')}</Text>
                 <View style={styles.quarterRow}>
-                  {['1', '2', '3', '4'].map(q => (
+                  {['1', '2', '3', '4', '5'].map(q => (
                     <TouchableOpacity
                       key={q}
                       style={[styles.quarterButton, startQuarter === q && styles.quarterButtonActive]}
                       onPress={() => setStartQuarter(q)}
                     >
                       <Text style={[styles.quarterText, startQuarter === q && styles.quarterTextActive]}>
-                        Q{q}
+                        {q === '5' ? "Last 5'" : `Q${q}`}
                       </Text>
                     </TouchableOpacity>
                   ))}

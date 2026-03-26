@@ -72,7 +72,11 @@ interface CachedTeam   { id: string; name: string; abbreviation: string; logo: s
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const QRow = React.memo(function QRow({ value, onChange, quarters = ['1', '2', '3', '4'], styles }: { value: string; onChange: (q: string) => void; quarters?: string[]; styles: any }) {
+function qLabel(q: number | string | undefined | null): string {
+  return String(q) === '5' ? "Last 5'" : `Q${q ?? '?'}`;
+}
+
+const QRow = React.memo(function QRow({ value, onChange, quarters = ['1', '2', '3', '4', '5'], styles }: { value: string; onChange: (q: string) => void; quarters?: string[]; styles: any }) {
   return (
     <View style={styles.quarterRow}>
       {quarters.map(q => (
@@ -81,7 +85,7 @@ const QRow = React.memo(function QRow({ value, onChange, quarters = ['1', '2', '
           style={[styles.qBtn, value === q && styles.qBtnActive]}
           onPress={() => onChange(q)}
         >
-          <Text style={[styles.qBtnText, value === q && styles.qBtnTextActive]}>Q{q}</Text>
+          <Text style={[styles.qBtnText, value === q && styles.qBtnTextActive]}>{q === '5' ? "Last 5'" : `Q${q}`}</Text>
         </TouchableOpacity>
       ))}
     </View>
@@ -1184,7 +1188,7 @@ export default function SettingsScreen() {
                   <View style={styles.configSummary}>
                     <Ionicons name="information-circle-outline" size={14} color={C.textMuted} />
                     <Text style={styles.configSummaryText}>
-                      {t('settings.alertDiff', newTeamMaxDiff || 5, newTeamStartQ)}
+                      {`Alert fires when diff ≤ ${newTeamMaxDiff || 5} pts from ${qLabel(newTeamStartQ)}`}
                     </Text>
                   </View>
 

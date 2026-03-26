@@ -38,6 +38,8 @@ from monitor import (
     get_saved_push_token,
     # Notifications
     _send_push_notification,
+    # Clock helper
+    _clock_minutes_remaining,
     # Data
     get_today_games,
     # Startup
@@ -611,7 +613,13 @@ def _check_and_fire(alarm: Alarm, events: list[dict], summary: dict | None = Non
             period = _get_event_period(event)
             if state == "post":
                 return None
-            if state != "in" or period < required_quarter:
+            if state != "in":
+                continue
+            if required_quarter == 5:
+                last5 = period > 4 or (period == 4 and _clock_minutes_remaining(event) <= 5.0)
+                if not last5:
+                    continue
+            elif period < required_quarter:
                 continue
             diff = _extract_game_diff(event)
             if diff is not None and diff <= alarm.threshold:

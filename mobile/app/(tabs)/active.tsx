@@ -168,6 +168,11 @@ const LivePill = React.memo(function LivePill({ label, color, bg }: { label: str
   );
 });
 
+/** Returns "Last 5'" for start_quarter=5, otherwise "Q{n}" */
+function qLabel(q: number | string | undefined | null): string {
+  return String(q) === '5' ? "Last 5'" : `Q${q ?? '?'}`;
+}
+
 // ─── ActiveScreen ─────────────────────────────────────────────────────────────
 
 export default function ActiveScreen() {
@@ -425,7 +430,7 @@ export default function ActiveScreen() {
                     />
                     <Text style={styles.alarmGame}>{isHebrew ? translateGameName(alarm.game_name ?? '') || t('active.unknownGame') : (alarm.game_name ?? t('active.unknownGame'))}</Text>
                     <Text style={styles.alarmSub}>
-                      {t('active.alertDiff', alarm.max_diff ?? '?', alarm.start_quarter ?? '?')}
+                      {`≤ ${alarm.max_diff ?? '?'} pts · From ${qLabel(alarm.start_quarter)}`}
                     </Text>
                     <Text style={styles.alarmSub}>
                       {alarm.alert_type === 'alarm' ? t('active.fullAlarm') : t('active.silentMode')}
@@ -458,7 +463,7 @@ export default function ActiveScreen() {
                     <LivePill label={t('active.saved')} color={C.accentBlue} bg="rgba(77,140,245,0.12)" />
                     <Text style={styles.alarmGame}>{isHebrew ? translateGameName(alarm.target_name || '') || alarm.target_id || t('active.unknownGame') : (alarm.target_name || alarm.target_id || t('active.unknownGame'))}</Text>
                     <Text style={styles.alarmSub}>
-                      {t('active.scoregap', alarm.threshold ?? '?', alarm.start_quarter ?? 4)}
+                      {`≤ ${alarm.threshold ?? '?'} pts · From ${qLabel(alarm.start_quarter ?? 4)}`}
                     </Text>
                   </View>
                   <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelDbAlarm(alarm)}>
@@ -569,7 +574,7 @@ export default function ActiveScreen() {
             <View style={{ flex: 1 }}>
               <Text style={styles.rowLabel}>{t('active.radarAlerts')}</Text>
               <Text style={styles.rowSub}>
-                {radar?.enabled ? t('active.alertDiff', radar.max_diff, radar.start_quarter) : t('active.radarDisabled')}
+                {radar?.enabled ? `≤ ${radar.max_diff} pts · From ${qLabel(radar.start_quarter)}` : t('active.radarDisabled')}
               </Text>
             </View>
             <View style={[styles.statusDot, { backgroundColor: radar?.enabled ? C.accentBlue : C.border }]} />
@@ -599,7 +604,7 @@ export default function ActiveScreen() {
                   <Text style={styles.favIcon}>🏀</Text>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.favName}>{isHebrew ? teamFullToHe(team.team_name) : team.team_name}</Text>
-                    <Text style={styles.rowSub}>{t('active.alertDiff', team.max_diff, team.start_quarter)}</Text>
+                    <Text style={styles.rowSub}>{`≤ ${team.max_diff} pts · From ${qLabel(team.start_quarter)}`}</Text>
                   </View>
                 </View>
               ))}
