@@ -307,13 +307,11 @@ def get_broadcasts_for_game(game_id: str, game_name: str, home_abbr: str, away_a
         if not prog_teams.intersection(target_teams):
             continue
 
-        # Time filter: broadcast must be near the game time
+        # Time filter: broadcast must start within 30 min of game time
         prog_dt = prog.get("start_dt")
         if game_dt and prog_dt:
-            diff = (prog_dt - game_dt).total_seconds()
-            # Allow: 1 hour before game to 3 hours after game start
-            # This covers pre-game shows and the full game duration
-            if diff < -3600 or diff > 10800:
+            diff = abs((prog_dt - game_dt).total_seconds())
+            if diff > 1800:  # 30 minutes
                 continue
 
         channel_name = prog.get("channel_name", "")
