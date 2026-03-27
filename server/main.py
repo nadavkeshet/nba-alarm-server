@@ -872,17 +872,16 @@ def health():
 # ── DB Alarm Endpoint ──────────────────────────────────────────────────────────
 
 class SetAlarmRequest(BaseModel):
-    user_token:     str
-    target_id:      str
-    target_name:    str = ""   # human-readable player/game name
-    condition_type: str        # "points" | "score_diff" | "triple_double"
-    threshold:      int
-    start_quarter:  int = 4    # for score_diff: earliest quarter to fire (default Q4)
-    # For player alarms: the game being played (differs from target_id/target_name).
-    # Needed to restart monitoring threads after a server restart.
-    game_id:        str = ""
-    game_name:      str = ""
-    alert_type:     str = "alarm"
+    user_token:      str
+    target_id:       str
+    target_name:     str = ""
+    condition_type:  str
+    threshold:       int
+    start_quarter:   int = 4
+    game_id:         str = ""
+    game_name:       str = ""
+    alert_type:      str = "alarm"
+    notify_at_start: bool = False
 
 
 @app.post("/set_alarm")
@@ -924,10 +923,10 @@ def set_alarm(req: SetAlarmRequest):
             condition_type=condition_type,
             threshold=req.threshold,
             start_quarter=req.start_quarter,
-            # For game alarms game_id == target_id; for player alarms they differ.
             game_id=req.game_id or req.target_id,
             game_name=req.game_name or req.target_name or req.target_id,
             alert_type=req.alert_type or "alarm",
+            notify_at_start=req.notify_at_start,
             is_active=True,
         )
         session.add(alarm)
@@ -1607,14 +1606,15 @@ def active_monitors(user_token: str = ""):
                     # Build all dicts INSIDE the session so ORM attributes are never detached
                     db_alarms = [
                         {
-                            "alarm_id":       r.id,
-                            "target_id":      r.target_id,
-                            "target_name":    r.target_name or r.target_id,
-                            "condition_type": r.condition_type,
-                            "threshold":      r.threshold,
-                            "start_quarter":  r.start_quarter if r.start_quarter is not None else 4,
-                            "home_team_id":   r.home_team_id or "",
-                            "away_team_id":   r.away_team_id or "",
+                            "alarm_id":        r.id,
+                            "target_id":       r.target_id,
+                            "target_name":     r.target_name or r.target_id,
+                            "condition_type":  r.condition_type,
+                            "threshold":       r.threshold,
+                            "start_quarter":   r.start_quarter if r.start_quarter is not None else 4,
+                            "home_team_id":    r.home_team_id or "",
+                            "away_team_id":    r.away_team_id or "",
+                            "notify_at_start": getattr(r, 'notify_at_start', False),
                         }
                         for r in alarm_rows
                     ]
