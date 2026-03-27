@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import notifee from '@notifee/react-native';
+import notifee, { AuthorizationStatus } from '@notifee/react-native';
 import * as IntentLauncher from 'expo-intent-launcher';
 import React, { useEffect, useState } from 'react';
 import {
@@ -53,8 +53,10 @@ export function PermissionsOnboarding({ visible, onDone }: Props) {
   // Auto-request notifications on mount (shows system dialog)
   useEffect(() => {
     if (!visible) return;
-    notifee.requestPermission().then(() => {
-      setDone(prev => ({ ...prev, notifications: true }));
+    notifee.requestPermission().then(settings => {
+      if (settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED) {
+        setDone(prev => ({ ...prev, notifications: true }));
+      }
     }).catch(() => {});
   }, [visible]);
 
@@ -69,8 +71,10 @@ export function PermissionsOnboarding({ visible, onDone }: Props) {
       desc:     'Required to receive game and player alerts.',
       btnLabel: 'Allow',
       onPress:  async () => {
-        await notifee.requestPermission();
-        markDone('notifications');
+        const settings = await notifee.requestPermission();
+        if (settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED) {
+          markDone('notifications');
+        }
       },
     },
     {
