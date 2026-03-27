@@ -1084,9 +1084,10 @@ def _run_radar_tick_for_user(
                 start_q = int(criteria.get("start_quarter", 4))
                 c_alert = criteria.get("alert_type", radar_alert_type)
                 broadcast_only = bool(criteria.get("broadcast_only", False))
+                notify_start = bool(criteria.get("notify_at_start", False))
                 last5_ok = start_q == 5 and (quarter > 4 or (quarter == 4 and _clock_minutes_remaining(event) <= 5.0))
                 quarter_ok_r = last5_ok if start_q == 5 else quarter >= start_q
-                if quarter_ok_r and diff <= max_d:
+                if quarter_ok_r and (notify_start or diff <= max_d):
                     # If broadcast_only, skip if no TV broadcast found
                     if broadcast_only:
                         home_abbr = ""
@@ -1104,13 +1105,21 @@ def _run_radar_tick_for_user(
                         )
                         if not broadcasts:
                             continue  # no broadcast → skip alert
-                    label = "Favorite Team Alert!" if "team_name" in criteria else "NBA Radar – Close Game!"
-                    if _fire_once(f"{game_id}_game", token):
+                    if notify_start and diff > max_d:
+                        # Quarter started but score isn't close — fire "period starting" alert
+                        label = "Period Starting!"
+                        body_text = f"{game_name}\n{_period_label(quarter)} is underway! | Diff: {diff} pts"
+                        dedup_key = f"{game_id}_game_start"
+                    else:
+                        label = "Favorite Team Alert!" if "team_name" in criteria else "NBA Radar – Close Game!"
+                        body_text = f"{game_name}\n{_period_label(quarter)} | Diff: {diff} pts"
+                        dedup_key = f"{game_id}_game"
+                    if _fire_once(dedup_key, token):
                         log.info("RADAR ALARM  fire   | %s | Q%d diff=%d | %s | %s", game_name, quarter, diff, label, _tid(push_token))
                         _send_push_notification(
                             push_token=push_token,
                             title=label,
-                            body=f"{game_name}\n{_period_label(quarter)} | Diff: {diff} pts",
+                            body=body_text,
                             sound_channel=sound_channel,
                             alert_type=c_alert,
                         )

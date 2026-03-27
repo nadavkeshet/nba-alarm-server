@@ -128,11 +128,12 @@ class FavoriteTeamDB(_Base):
     user_token    = Column(String,  nullable=False, index=True)
     team_id       = Column(String,  nullable=False)
     team_name     = Column(String,  nullable=True)
-    score_gap       = Column(Integer, nullable=True)    # max_diff
-    start_quarter   = Column(Integer, nullable=True)
-    alert_type      = Column(String,  nullable=True, default='silent')
-    broadcast_only  = Column(Boolean, default=False, nullable=False)
-    created_at      = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    score_gap        = Column(Integer, nullable=True)    # max_diff
+    start_quarter    = Column(Integer, nullable=True)
+    alert_type       = Column(String,  nullable=True, default='silent')
+    broadcast_only   = Column(Boolean, default=False, nullable=False)
+    notify_at_start  = Column(Boolean, default=False, nullable=False)
+    created_at       = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class FiredAlertDB(_Base):
@@ -197,6 +198,7 @@ def _init_db() -> None:
         "ALTER TABLE favorite_teams ADD COLUMN broadcast_only BOOLEAN DEFAULT FALSE NOT NULL",
         "ALTER TABLE user_preferences ADD COLUMN sound_channel VARCHAR NOT NULL DEFAULT 'classic_alarm'",
         "ALTER TABLE alarms ADD COLUMN notify_at_start BOOLEAN DEFAULT FALSE NOT NULL",
+        "ALTER TABLE favorite_teams ADD COLUMN notify_at_start BOOLEAN DEFAULT FALSE NOT NULL",
     ]
     for sql in migrations:
         try:
@@ -426,7 +428,8 @@ def _get_all_users_for_radar() -> list[dict]:
                     "max_diff":       t.score_gap or 5,
                     "start_quarter":  t.start_quarter or 4,
                     "alert_type":     t.alert_type or "silent",
-                    "broadcast_only": getattr(t, 'broadcast_only', False),
+                    "broadcast_only":  getattr(t, 'broadcast_only', False),
+                    "notify_at_start": getattr(t, 'notify_at_start', False),
                 }
                 for t in teams
             ]
@@ -1181,7 +1184,8 @@ def get_settings(user_token: str = ""):
                     "max_diff":       t.score_gap or 5,
                     "start_quarter":  t.start_quarter or 4,
                     "alert_type":     t.alert_type or "silent",
-                    "broadcast_only": getattr(t, 'broadcast_only', False),
+                    "broadcast_only":  getattr(t, 'broadcast_only', False),
+                    "notify_at_start": getattr(t, 'notify_at_start', False),
                 }
                 for t in teams
             ]
@@ -1254,14 +1258,15 @@ def update_global_radar(req: GlobalRadarSettings):
 
 
 class FavoriteTeam(BaseModel):
-    user_token:     str = ""
-    team_id:        str
-    team_name:      str
-    max_diff:       int = 5
-    start_quarter:  int = 4
-    alert_type:     str = "silent"
-    broadcast_only: bool = False
-    free_only:      bool = False
+    user_token:      str = ""
+    team_id:         str
+    team_name:       str
+    max_diff:        int = 5
+    start_quarter:   int = 4
+    alert_type:      str = "silent"
+    broadcast_only:  bool = False
+    free_only:       bool = False
+    notify_at_start: bool = False
 
 
 @app.post("/settings/teams")
@@ -1277,13 +1282,15 @@ def upsert_team(req: FavoriteTeam):
                     existing.score_gap      = req.max_diff
                     existing.start_quarter  = req.start_quarter
                     existing.alert_type     = req.alert_type
-                    existing.broadcast_only = getattr(req, 'broadcast_only', False)
+                    existing.broadcast_only  = getattr(req, 'broadcast_only', False)
+                    existing.notify_at_start = getattr(req, 'notify_at_start', False)
                 else:
                     session.add(FavoriteTeamDB(
                         user_token=req.user_token, team_id=req.team_id,
                         team_name=req.team_name, score_gap=req.max_diff,
                         start_quarter=req.start_quarter, alert_type=req.alert_type,
                         broadcast_only=getattr(req, 'broadcast_only', False),
+                        notify_at_start=getattr(req, 'notify_at_start', False),
                     ))
                 session.commit()
         except Exception as exc:
