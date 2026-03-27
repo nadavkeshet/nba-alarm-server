@@ -519,13 +519,14 @@ export default function HomeScreen() {
         body: JSON.stringify({
           game_id:       selectedGame.id,
           game_name:     selectedGame.name,
-          max_diff:      noCondition ? 999 : maxDiff,
-          start_quarter: parseInt(startQuarter, 10),
-          push_token:    freshToken,
-          sound_channel: ALARM_CHANNEL,
-          alert_type:    alertType,
-          home_team_id:  gameHome?.team?.id?.toString() ?? '',
-          away_team_id:  gameAway?.team?.id?.toString() ?? '',
+          max_diff:        maxDiff,
+          start_quarter:   parseInt(startQuarter, 10),
+          notify_at_start: noCondition,
+          push_token:      freshToken,
+          sound_channel:   ALARM_CHANNEL,
+          alert_type:      alertType,
+          home_team_id:    gameHome?.team?.id?.toString() ?? '',
+          away_team_id:    gameAway?.team?.id?.toString() ?? '',
         }),
       });
       if (response.ok) {

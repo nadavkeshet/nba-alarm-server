@@ -46,7 +46,7 @@ const SOUND_KEY = 'nba_alarm_sound';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface GlobalRadar      { enabled: boolean; max_diff: number; start_quarter: number; alert_type: string }
-interface FavTeam          { team_id: string; team_name: string; max_diff: number; start_quarter: number; alert_type: string; broadcast_only: boolean }
+interface FavTeam          { team_id: string; team_name: string; max_diff: number; start_quarter: number; alert_type: string; broadcast_only: boolean; notify_at_start?: boolean }
 // Stored on server as { player_id: { name, total_pts, early_pts_q, early_pts, td_watch, alert_type } }
 interface FavPlayerEntry {
   name:           string;
@@ -125,7 +125,7 @@ export default function SettingsScreen() {
   const [radarStartQ, setRadarStartQ]   = useState('4');
 
   // Per-team in-place edit state for existing favorites
-  const [teamEdits, setTeamEdits] = useState<Record<string, { max_diff: number; start_quarter: string; alert_type: string; broadcast_only: boolean }>>({});
+  const [teamEdits, setTeamEdits] = useState<Record<string, { max_diff: number; start_quarter: string; alert_type: string; broadcast_only: boolean; notify_at_start: boolean }>>({});
 
   // ── Add Team Modal state ──────────────────────────────────────────────
   const [teamModalVisible, setTeamModalVisible] = useState(false);
@@ -206,9 +206,9 @@ export default function SettingsScreen() {
       setRadarStartQ(String(s.GlobalGameRadar?.start_quarter ?? 4));
 
       // Init per-team editable fields
-      const edits: Record<string, { max_diff: number; start_quarter: string; alert_type: string; broadcast_only: boolean }> = {};
+      const edits: Record<string, { max_diff: number; start_quarter: string; alert_type: string; broadcast_only: boolean; notify_at_start: boolean }> = {};
       for (const ft of s.FavoriteTeams ?? []) {
-        edits[ft.team_id] = { max_diff: ft.max_diff, start_quarter: String(ft.start_quarter), alert_type: ft.alert_type ?? 'silent', broadcast_only: ft.broadcast_only ?? false };
+        edits[ft.team_id] = { max_diff: ft.max_diff, start_quarter: String(ft.start_quarter), alert_type: ft.alert_type ?? 'silent', broadcast_only: ft.broadcast_only ?? false, notify_at_start: ft.notify_at_start ?? false };
       }
       setTeamEdits(edits);
 
@@ -379,7 +379,8 @@ export default function SettingsScreen() {
     await saveTeam({
       team_id:        pickedTeam.id,
       team_name:      pickedTeam.name,
-      max_diff:       newTeamNoCondition ? 999 : (newTeamMaxDiff || 5),
+      max_diff:       newTeamMaxDiff || 5,
+      notify_at_start: newTeamNoCondition,
       start_quarter:  parseInt(newTeamStartQ, 10) || 4,
       alert_type:     newTeamAlertType,
       broadcast_only: newTeamBroadcastOnly,
@@ -389,13 +390,14 @@ export default function SettingsScreen() {
 
   const updateExistingTeam = async (team: FavTeam) => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    const edit = teamEdits[team.team_id] ?? { max_diff: team.max_diff, start_quarter: String(team.start_quarter), alert_type: team.alert_type, broadcast_only: team.broadcast_only ?? false };
+    const edit = teamEdits[team.team_id] ?? { max_diff: team.max_diff, start_quarter: String(team.start_quarter), alert_type: team.alert_type, broadcast_only: team.broadcast_only ?? false, notify_at_start: team.notify_at_start ?? false };
     await saveTeam({
       ...team,
-      max_diff:       edit.max_diff || 5,
-      start_quarter:  parseInt(edit.start_quarter, 10) || 4,
-      alert_type:     edit.alert_type,
-      broadcast_only: edit.broadcast_only,
+      max_diff:        edit.max_diff || 5,
+      start_quarter:   parseInt(edit.start_quarter, 10) || 4,
+      alert_type:      edit.alert_type,
+      broadcast_only:  edit.broadcast_only,
+      notify_at_start: edit.notify_at_start,
     });
     flashSaved(team.team_id);
   };
@@ -614,12 +616,12 @@ export default function SettingsScreen() {
                       <Text style={styles.noCondSub}>Wake me when the quarter starts, regardless of the score</Text>
                     </View>
                     <BasketballToggle
-                      value={edit.max_diff >= 999}
-                      onValueChange={v => setTeamEdits(prev => ({ ...prev, [team.team_id]: { ...edit, max_diff: v ? 999 : 5 } }))}
+                      value={edit.notify_at_start}
+                      onValueChange={v => setTeamEdits(prev => ({ ...prev, [team.team_id]: { ...edit, notify_at_start: v } }))}
                     />
                   </View>
 
-                  {edit.max_diff < 999 && (
+                  {!edit.notify_at_start && (
                     <>
                       <View style={styles.sliderRow}>
                         <Text style={styles.inputLabel}>{t('settings.maxDiff')}</Text>

@@ -57,10 +57,11 @@ interface GlobalRadar {
 }
 
 interface FavTeam {
-  team_id: string;
-  team_name: string;
-  max_diff: number;
-  start_quarter: number;
+  team_id:         string;
+  team_name:       string;
+  max_diff:        number;
+  start_quarter:   number;
+  notify_at_start?: boolean;
 }
 
 interface FavPlayer {
@@ -73,14 +74,15 @@ interface FavPlayer {
 }
 
 interface DbAlarm {
-  alarm_id:       number;
-  target_id:      string;
-  target_name:    string;
-  condition_type: string;
-  threshold:      number;
-  start_quarter?: number;
-  home_team_id?:  string;
-  away_team_id?:  string;
+  alarm_id:         number;
+  target_id:        string;
+  target_name:      string;
+  condition_type:   string;
+  threshold:        number;
+  start_quarter?:   number;
+  home_team_id?:    string;
+  away_team_id?:    string;
+  notify_at_start?: boolean;
 }
 
 interface HistoricalCats {
@@ -430,7 +432,7 @@ export default function ActiveScreen() {
                     />
                     <Text style={styles.alarmGame}>{isHebrew ? translateGameName(alarm.game_name ?? '') || t('active.unknownGame') : (alarm.game_name ?? t('active.unknownGame'))}</Text>
                     <Text style={styles.alarmSub}>
-                      {(alarm.max_diff ?? 0) >= 999 ? `Any score · From ${qLabel(alarm.start_quarter)}` : `≤ ${alarm.max_diff ?? '?'} pts · From ${qLabel(alarm.start_quarter)}`}
+                      {alarm.notify_at_start ? `Any score · From ${qLabel(alarm.start_quarter)}` : `≤ ${alarm.threshold ?? '?'} pts · From ${qLabel(alarm.start_quarter)}`}
                     </Text>
                     <Text style={styles.alarmSub}>
                       {alarm.alert_type === 'alarm' ? t('active.fullAlarm') : t('active.silentMode')}
@@ -604,7 +606,7 @@ export default function ActiveScreen() {
                   <Text style={styles.favIcon}>🏀</Text>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.favName}>{isHebrew ? teamFullToHe(team.team_name) : team.team_name}</Text>
-                    <Text style={styles.rowSub}>{(team.max_diff ?? 0) >= 999 ? `Any score · From ${qLabel(team.start_quarter)}` : `≤ ${team.max_diff} pts · From ${qLabel(team.start_quarter)}`}</Text>
+                    <Text style={styles.rowSub}>{team.notify_at_start ? `Any score · From ${qLabel(team.start_quarter)}` : `≤ ${team.max_diff} pts · From ${qLabel(team.start_quarter)}`}</Text>
                   </View>
                 </View>
               ))}
