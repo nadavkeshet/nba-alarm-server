@@ -501,7 +501,11 @@ export default function HomeScreen() {
     if (!selectedGame) return;
     // Re-fetch token before sending alarm (ensures server has latest token)
     const freshToken = expoPushToken || (await messaging().getToken().catch(() => '')) || '';
-    if (freshToken && freshToken !== expoPushToken) {
+    if (!freshToken) {
+      showInfo(t('settings.notReady'), t('settings.notReadyMsg'));
+      return;
+    }
+    if (freshToken !== expoPushToken) {
       setExpoPushToken(freshToken);
       sendTokenToServer(freshToken);
     }
@@ -544,7 +548,11 @@ export default function HomeScreen() {
       return;
     }
     const freshToken = expoPushToken || (await messaging().getToken().catch(() => '')) || '';
-    if (freshToken && freshToken !== expoPushToken) {
+    if (!freshToken) {
+      showInfo(t('settings.notReady'), t('settings.notReadyMsg'));
+      return;
+    }
+    if (freshToken !== expoPushToken) {
       setExpoPushToken(freshToken);
       sendTokenToServer(freshToken);
     }

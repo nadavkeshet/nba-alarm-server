@@ -867,6 +867,8 @@ class SetAlarmRequest(BaseModel):
 @app.post("/set_alarm")
 def set_alarm(req: SetAlarmRequest):
     """Persist a new alarm to PostgreSQL."""
+    if not req.user_token or not req.user_token.strip():
+        raise HTTPException(status_code=400, detail="user_token is required.")
     if engine is None:
         raise HTTPException(status_code=503, detail="Database not configured.")
     condition_type = req.condition_type.strip().lower()
@@ -937,6 +939,8 @@ class AlarmRequest(BaseModel):
 @app.post("/start-alarm")
 async def start_alarm(req: AlarmRequest):
     """Register game alarm in DB; _alarm_poller handles the monitoring."""
+    if not req.push_token or not req.push_token.strip():
+        raise HTTPException(status_code=400, detail="push_token is required.")
     save_push_token(req.push_token, req.sound_channel)
     if engine is not None:
         try:
@@ -993,6 +997,8 @@ class PlayerAlarmRequest(BaseModel):
 @app.post("/start-player-alarm")
 async def start_player_alarm(req: PlayerAlarmRequest):
     """Register player alarm in DB; _alarm_poller handles the monitoring."""
+    if not req.push_token or not req.push_token.strip():
+        raise HTTPException(status_code=400, detail="push_token is required.")
     save_push_token(req.push_token, req.sound_channel)
     if engine is not None:
         try:
