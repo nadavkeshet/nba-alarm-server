@@ -119,8 +119,9 @@ def _is_nba_programme(title: str, desc: str) -> bool:
     # Must have at least one team name
     if not _match_teams(combined):
         return False
-    # Exclude non-game content
-    exclude = ["daily", "אקשן", "מגזין", "highlight", "recap", "הרגעים", "בד בויז", "סרט"]
+    # Exclude non-game content (replays, highlights, magazine shows)
+    exclude = ["daily", "אקשן", "מגזין", "highlight", "recap", "הרגעים", "בד בויז", "סרט",
+               "שידור חוזר", "מקוצר", "תקציר", "replay", "rebroadcast", "condensed"]
     if any(ex in combined_lower for ex in exclude):
         return False
     return True
@@ -330,8 +331,12 @@ def get_broadcasts_for_game(game_id: str, game_name: str, home_abbr: str, away_a
             "start_utc": prog.get("start_utc", ""),
         })
 
-    # Sort: free first, then live, then by start time
-    matches.sort(key=lambda x: (not x["is_free"], not x["is_live"], x.get("start_utc", "")))
+    # If any match is a live broadcast, drop non-live ones (replays, condensed games)
+    if any(m["is_live"] for m in matches):
+        matches = [m for m in matches if m["is_live"]]
+
+    # Sort: free first, then by start time
+    matches.sort(key=lambda x: (not x["is_free"], x.get("start_utc", "")))
     return matches
 
 
