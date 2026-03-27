@@ -130,10 +130,11 @@ export default function SettingsScreen() {
   // ── Add Team Modal state ──────────────────────────────────────────────
   const [teamModalVisible, setTeamModalVisible] = useState(false);
   const [pickedTeam, setPickedTeam]             = useState<CachedTeam | null>(null);
-  const [newTeamMaxDiff, setNewTeamMaxDiff]       = useState(5);
-  const [newTeamStartQ, setNewTeamStartQ]         = useState('4');
-  const [newTeamAlertType, setNewTeamAlertType]     = useState<'alarm' | 'silent'>('silent');
+  const [newTeamMaxDiff, setNewTeamMaxDiff]           = useState(5);
+  const [newTeamStartQ, setNewTeamStartQ]             = useState('4');
+  const [newTeamAlertType, setNewTeamAlertType]       = useState<'alarm' | 'silent'>('silent');
   const [newTeamBroadcastOnly, setNewTeamBroadcastOnly] = useState(false);
+  const [newTeamNoCondition, setNewTeamNoCondition]   = useState(false);
 
   // Per-player in-place edit state (all 4 conditions + enabled toggles)
   const [playerEdits, setPlayerEdits] = useState<Record<string, {
@@ -378,7 +379,7 @@ export default function SettingsScreen() {
     await saveTeam({
       team_id:        pickedTeam.id,
       team_name:      pickedTeam.name,
-      max_diff:       newTeamMaxDiff || 5,
+      max_diff:       newTeamNoCondition ? 999 : (newTeamMaxDiff || 5),
       start_quarter:  parseInt(newTeamStartQ, 10) || 4,
       alert_type:     newTeamAlertType,
       broadcast_only: newTeamBroadcastOnly,
@@ -522,6 +523,7 @@ export default function SettingsScreen() {
     setNewTeamStartQ('4');
     setNewTeamAlertType('silent');
     setNewTeamBroadcastOnly(false);
+    setNewTeamNoCondition(false);
     setTeamModalVisible(true);
   };
   const closeTeamModal = () => { setTeamModalVisible(false); setPickedTeam(null); };
@@ -605,19 +607,35 @@ export default function SettingsScreen() {
                     </TouchableOpacity>
                   </View>
 
-                  <View style={styles.sliderRow}>
-                    <Text style={styles.inputLabel}>{t('settings.maxDiff')}</Text>
-                    <Text style={styles.sliderValue}>{edit.max_diff}</Text>
+                  {/* No-condition toggle */}
+                  <View style={styles.noCondRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.inputLabel}>Any Score</Text>
+                      <Text style={styles.noCondSub}>Wake me when the quarter starts, regardless of the score</Text>
+                    </View>
+                    <BasketballToggle
+                      value={edit.max_diff >= 999}
+                      onValueChange={v => setTeamEdits(prev => ({ ...prev, [team.team_id]: { ...edit, max_diff: v ? 999 : 5 } }))}
+                    />
                   </View>
-                  <Slider
-                    style={styles.slider}
-                    minimumValue={1} maximumValue={25} step={1}
-                    value={edit.max_diff}
-                    onValueChange={v => setTeamEdits(prev => ({ ...prev, [team.team_id]: { ...edit, max_diff: v } }))}
-                    minimumTrackTintColor={C.orange}
-                    maximumTrackTintColor={C.border}
-                    thumbTintColor={C.orange}
-                  />
+
+                  {edit.max_diff < 999 && (
+                    <>
+                      <View style={styles.sliderRow}>
+                        <Text style={styles.inputLabel}>{t('settings.maxDiff')}</Text>
+                        <Text style={styles.sliderValue}>{edit.max_diff}</Text>
+                      </View>
+                      <Slider
+                        style={styles.slider}
+                        minimumValue={1} maximumValue={25} step={1}
+                        value={edit.max_diff}
+                        onValueChange={v => setTeamEdits(prev => ({ ...prev, [team.team_id]: { ...edit, max_diff: v } }))}
+                        minimumTrackTintColor={C.orange}
+                        maximumTrackTintColor={C.border}
+                        thumbTintColor={C.orange}
+                      />
+                    </>
+                  )}
 
                   <Text style={styles.inputLabel}>{t('settings.startFrom')}</Text>
                   <QRow
@@ -1139,19 +1157,32 @@ export default function SettingsScreen() {
                   </View>
                   <Text style={styles.configSub}>{t('settings.configSub')}</Text>
 
-                  <View style={styles.sliderRow}>
-                    <Text style={styles.inputLabel}>{t('settings.maxDiff')}</Text>
-                    <Text style={styles.sliderValue}>{newTeamMaxDiff}</Text>
+                  {/* No-condition toggle */}
+                  <View style={styles.noCondRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.inputLabel}>Any Score</Text>
+                      <Text style={styles.noCondSub}>Wake me when the quarter starts, regardless of the score</Text>
+                    </View>
+                    <BasketballToggle value={newTeamNoCondition} onValueChange={setNewTeamNoCondition} />
                   </View>
-                  <Slider
-                    style={styles.slider}
-                    minimumValue={1} maximumValue={25} step={1}
-                    value={newTeamMaxDiff}
-                    onValueChange={setNewTeamMaxDiff}
-                    minimumTrackTintColor={C.orange}
-                    maximumTrackTintColor={C.border}
-                    thumbTintColor={C.orange}
-                  />
+
+                  {!newTeamNoCondition && (
+                    <>
+                      <View style={styles.sliderRow}>
+                        <Text style={styles.inputLabel}>{t('settings.maxDiff')}</Text>
+                        <Text style={styles.sliderValue}>{newTeamMaxDiff}</Text>
+                      </View>
+                      <Slider
+                        style={styles.slider}
+                        minimumValue={1} maximumValue={25} step={1}
+                        value={newTeamMaxDiff}
+                        onValueChange={setNewTeamMaxDiff}
+                        minimumTrackTintColor={C.orange}
+                        maximumTrackTintColor={C.border}
+                        thumbTintColor={C.orange}
+                      />
+                    </>
+                  )}
 
                   <Text style={styles.inputLabel}>{t('settings.startFrom')}</Text>
                   <QRow value={newTeamStartQ} onChange={setNewTeamStartQ} styles={styles} />
@@ -1188,7 +1219,9 @@ export default function SettingsScreen() {
                   <View style={styles.configSummary}>
                     <Ionicons name="information-circle-outline" size={14} color={C.textMuted} />
                     <Text style={styles.configSummaryText}>
-                      {`Alert fires when diff ≤ ${newTeamMaxDiff || 5} pts from ${qLabel(newTeamStartQ)}`}
+                      {newTeamNoCondition
+                        ? `Alert fires at the start of ${qLabel(newTeamStartQ)}, any score`
+                        : `Alert fires when diff ≤ ${newTeamMaxDiff || 5} pts from ${qLabel(newTeamStartQ)}`}
                     </Text>
                   </View>
 
@@ -1540,6 +1573,11 @@ const makeStyles = (C: AppColors) => StyleSheet.create({
     fontSize: 10, fontWeight: '800', color: C.textMuted,
     letterSpacing: 1.5, marginBottom: 0, marginTop: 10,
   },
+  noCondRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    marginTop: 10, marginBottom: 4,
+  },
+  noCondSub: { fontSize: 11, color: C.textMuted, marginTop: 2, lineHeight: 15 },
   sliderRow: {
     flexDirection: 'row', alignItems: 'center',
     justifyContent: 'space-between', marginTop: 10,

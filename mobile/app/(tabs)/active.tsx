@@ -430,7 +430,7 @@ export default function ActiveScreen() {
                     />
                     <Text style={styles.alarmGame}>{isHebrew ? translateGameName(alarm.game_name ?? '') || t('active.unknownGame') : (alarm.game_name ?? t('active.unknownGame'))}</Text>
                     <Text style={styles.alarmSub}>
-                      {`≤ ${alarm.max_diff ?? '?'} pts · From ${qLabel(alarm.start_quarter)}`}
+                      {(alarm.max_diff ?? 0) >= 999 ? `Any score · From ${qLabel(alarm.start_quarter)}` : `≤ ${alarm.max_diff ?? '?'} pts · From ${qLabel(alarm.start_quarter)}`}
                     </Text>
                     <Text style={styles.alarmSub}>
                       {alarm.alert_type === 'alarm' ? t('active.fullAlarm') : t('active.silentMode')}
@@ -604,7 +604,7 @@ export default function ActiveScreen() {
                   <Text style={styles.favIcon}>🏀</Text>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.favName}>{isHebrew ? teamFullToHe(team.team_name) : team.team_name}</Text>
-                    <Text style={styles.rowSub}>{`≤ ${team.max_diff} pts · From ${qLabel(team.start_quarter)}`}</Text>
+                    <Text style={styles.rowSub}>{(team.max_diff ?? 0) >= 999 ? `Any score · From ${qLabel(team.start_quarter)}` : `≤ ${team.max_diff} pts · From ${qLabel(team.start_quarter)}`}</Text>
                   </View>
                 </View>
               ))}

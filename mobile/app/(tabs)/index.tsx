@@ -298,6 +298,7 @@ export default function HomeScreen() {
   // ── Game alarm state ──────────────────────────────────────────────
   const [maxDiff, setMaxDiff]           = useState(5);
   const [startQuarter, setStartQuarter] = useState('4');
+  const [noCondition, setNoCondition]   = useState(false);
 
   // ── Player alarm state ────────────────────────────────────────────
   const [teams, setTeams]                   = useState<any[]>([]);
@@ -486,6 +487,7 @@ export default function HomeScreen() {
     setSelectedGame(null);
     setAlarmTab('game');
     setAlertType('alarm');
+    setNoCondition(false);
     setTeams([]);
     setSelectedPlayer(null);
     setPtsGoalEnabled(true);
@@ -517,7 +519,7 @@ export default function HomeScreen() {
         body: JSON.stringify({
           game_id:       selectedGame.id,
           game_name:     selectedGame.name,
-          max_diff:      maxDiff,
+          max_diff:      noCondition ? 999 : maxDiff,
           start_quarter: parseInt(startQuarter, 10),
           push_token:    freshToken,
           sound_channel: ALARM_CHANNEL,
@@ -713,19 +715,32 @@ export default function HomeScreen() {
             {/* ── Game Alarm tab ── */}
             {alarmTab === 'game' && (
               <>
-                <View style={styles.sliderRow}>
-                  <Text style={styles.inputLabel}>{t('alarm.maxPointDiff')}</Text>
-                  <Text style={styles.sliderValue}>{maxDiff}</Text>
+                {/* No-condition toggle */}
+                <View style={styles.noCondRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.inputLabel}>Any Score</Text>
+                    <Text style={styles.noCondSub}>Wake me when the quarter starts, regardless of the score</Text>
+                  </View>
+                  <BasketballToggle value={noCondition} onValueChange={setNoCondition} />
                 </View>
-                <Slider
-                  style={styles.slider}
-                  minimumValue={1} maximumValue={25} step={1}
-                  value={maxDiff}
-                  onValueChange={setMaxDiff}
-                  minimumTrackTintColor={C.orange}
-                  maximumTrackTintColor={C.border}
-                  thumbTintColor={C.orange}
-                />
+
+                {!noCondition && (
+                  <>
+                    <View style={styles.sliderRow}>
+                      <Text style={styles.inputLabel}>{t('alarm.maxPointDiff')}</Text>
+                      <Text style={styles.sliderValue}>{maxDiff}</Text>
+                    </View>
+                    <Slider
+                      style={styles.slider}
+                      minimumValue={1} maximumValue={25} step={1}
+                      value={maxDiff}
+                      onValueChange={setMaxDiff}
+                      minimumTrackTintColor={C.orange}
+                      maximumTrackTintColor={C.border}
+                      thumbTintColor={C.orange}
+                    />
+                  </>
+                )}
 
                 <Text style={styles.inputLabel}>{t('alarm.startFrom')}</Text>
                 <View style={styles.quarterRow}>
@@ -1075,6 +1090,11 @@ const makeStyles = (C: AppColors) => StyleSheet.create({
   alarmTabTextActive: { color: '#fff' },
 
   inputLabel: { fontSize: 12, color: C.textMuted, fontWeight: '700', marginBottom: 0, letterSpacing: 1 },
+  noCondRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    marginTop: 10, marginBottom: 4,
+  },
+  noCondSub: { fontSize: 11, color: C.textMuted, marginTop: 2, lineHeight: 15 },
   sliderRow: {
     flexDirection: 'row', alignItems: 'center',
     justifyContent: 'space-between', marginTop: 10,
