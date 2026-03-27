@@ -251,13 +251,16 @@ def _deactivate_db_alarm_for(target_id: str) -> None:
 def _fire_once(key: str, token: str = "") -> bool:
     """
     Returns True (and marks the key) the first time it is called for this key
-    on the current UTC date.  Returns False on all subsequent calls today.
+    on the current Eastern date.  Returns False on all subsequent calls today.
     token is included in the key so different users never block each other.
+
+    Uses Eastern time (UTC-5) so the date never rolls over mid-game — NBA
+    games end well before 7am ET, which is when the Eastern date changes.
 
     On first fire: persists the key to the DB (via callback) so the dedup
     state survives a server restart mid-game — no duplicate wake-ups.
     """
-    today    = datetime.now(timezone.utc).strftime("%Y%m%d")
+    today    = (datetime.now(timezone.utc) - timedelta(hours=5)).strftime("%Y%m%d")
     full_key = f"{today}_{token}_{key}" if token else f"{today}_{key}"
     with _FIRED_LOCK:
         if full_key in _FIRED_ALERTS:
@@ -1234,8 +1237,8 @@ def _run_radar_tick_for_user(
 
 
 def _prune_fired_alerts() -> None:
-    """Remove dedup keys from previous UTC days to prevent unbounded memory growth."""
-    today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    """Remove dedup keys from previous Eastern days to prevent unbounded memory growth."""
+    today = (datetime.now(timezone.utc) - timedelta(hours=5)).strftime("%Y%m%d")
     with _FIRED_LOCK:
         stale = {k for k in _FIRED_ALERTS if not k.startswith(today)}
         _FIRED_ALERTS.difference_update(stale)

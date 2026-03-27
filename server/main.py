@@ -4,7 +4,7 @@ import logging
 import threading
 import requests
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 log = logging.getLogger("nba_monitor")
@@ -348,7 +348,8 @@ def _load_fired_alerts_from_db() -> None:
     if engine is None:
         return
     try:
-        today_prefix = datetime.now(timezone.utc).strftime("%Y%m%d")
+        # Use Eastern time so the prefix never changes mid-game (games end before 7am ET)
+        today_prefix = (datetime.now(timezone.utc) - timedelta(hours=5)).strftime("%Y%m%d")
         with Session(engine) as session:
             rows = session.query(FiredAlertDB).all()
             today_keys  = {r.key for r in rows if r.key.startswith(today_prefix)}
