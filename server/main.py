@@ -96,8 +96,9 @@ class Alarm(_Base):
     game_name      = Column(String,  nullable=True)
     home_team_id   = Column(String,  nullable=True)
     away_team_id   = Column(String,  nullable=True)
-    alert_type     = Column(String,  nullable=True, default="alarm")
-    is_active      = Column(Boolean, default=True, nullable=False)
+    alert_type       = Column(String,  nullable=True, default="alarm")
+    notify_at_start  = Column(Boolean, default=False, nullable=False)
+    is_active        = Column(Boolean, default=True, nullable=False)
     created_at     = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
@@ -195,6 +196,7 @@ def _init_db() -> None:
         "ALTER TABLE favorites ADD COLUMN broadcast_only BOOLEAN DEFAULT FALSE NOT NULL",
         "ALTER TABLE favorite_teams ADD COLUMN broadcast_only BOOLEAN DEFAULT FALSE NOT NULL",
         "ALTER TABLE user_preferences ADD COLUMN sound_channel VARCHAR NOT NULL DEFAULT 'classic_alarm'",
+        "ALTER TABLE alarms ADD COLUMN notify_at_start BOOLEAN DEFAULT FALSE NOT NULL",
     ]
     for sql in migrations:
         try:
@@ -616,6 +618,22 @@ def _check_and_fire(alarm: Alarm, events: list[dict], summary: dict | None = Non
                 return None
             if state != "in":
                 continue
+
+            # "Notify at start" — fire when the selected quarter begins
+            if getattr(alarm, 'notify_at_start', False):
+                quarter_started = False
+                if required_quarter == 5:
+                    quarter_started = period > 4 or (period == 4 and _clock_minutes_remaining(event) <= 5.0)
+                else:
+                    quarter_started = period >= required_quarter
+                if quarter_started:
+                    diff = _extract_game_diff(event)
+                    diff_str = f" | Diff: {diff}" if diff is not None else ""
+                    return {
+                        "title": "Period Starting!",
+                        "body":  f"{game_name}\n{_period_str(period)} is underway!{diff_str}",
+                    }
+
             if required_quarter == 5:
                 last5 = period > 4 or (period == 4 and _clock_minutes_remaining(event) <= 5.0)
                 if not last5:
@@ -930,10 +948,11 @@ class AlarmRequest(BaseModel):
     max_diff: int
     start_quarter: int
     push_token: str
-    sound_channel: str  = "classic_alarm"
-    alert_type: str     = "alarm"
-    home_team_id: str   = ""
-    away_team_id: str   = ""
+    sound_channel: str      = "classic_alarm"
+    alert_type: str         = "alarm"
+    home_team_id: str       = ""
+    away_team_id: str       = ""
+    notify_at_start: bool   = False
 
 
 @app.post("/start-alarm")
@@ -953,17 +972,18 @@ async def start_alarm(req: AlarmRequest):
                     Alarm.is_active.is_(True),
                 ).update({"is_active": False}, synchronize_session=False)
                 session.add(Alarm(
-                    user_token     = req.push_token,
-                    target_id      = req.game_id,
-                    target_name    = req.game_name,
-                    condition_type = "score_diff",
-                    threshold      = req.max_diff,
-                    start_quarter  = req.start_quarter,
-                    game_id        = req.game_id,
-                    game_name      = req.game_name,
-                    home_team_id   = req.home_team_id or None,
-                    away_team_id   = req.away_team_id or None,
-                    alert_type     = req.alert_type,
+                    user_token       = req.push_token,
+                    target_id        = req.game_id,
+                    target_name      = req.game_name,
+                    condition_type   = "score_diff",
+                    threshold        = req.max_diff,
+                    start_quarter    = req.start_quarter,
+                    game_id          = req.game_id,
+                    game_name        = req.game_name,
+                    home_team_id     = req.home_team_id or None,
+                    away_team_id     = req.away_team_id or None,
+                    alert_type       = req.alert_type,
+                    notify_at_start  = req.notify_at_start,
                 ))
                 session.commit()
         except Exception as exc:
