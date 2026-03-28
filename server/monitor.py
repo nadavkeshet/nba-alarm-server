@@ -20,6 +20,10 @@ import threading
 import requests
 from datetime import datetime, timedelta, timezone
 from epg import get_broadcasts_for_game
+from i18n import (t_title, t_body_game, t_body_period_start, t_body_scoring,
+                  t_body_early_pts, t_body_triple_double, t_body_test,
+                  t_body_historic_scoring, t_body_historic_threes, t_body_quad,
+                  translate_game_name, period_label as i18n_period_label)
 
 import firebase_admin
 from firebase_admin import credentials, messaging as fb_messaging
@@ -639,6 +643,24 @@ def fetch_game_roster(game_id: str) -> dict:
 # Push notification
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# User language lookup (for notification translations)
+# ---------------------------------------------------------------------------
+_DB_GET_USER_LANGUAGE_FN = None
+
+def register_db_get_user_language(fn) -> None:
+    global _DB_GET_USER_LANGUAGE_FN
+    _DB_GET_USER_LANGUAGE_FN = fn
+
+def _get_user_language(push_token: str) -> str:
+    if _DB_GET_USER_LANGUAGE_FN:
+        try:
+            return _DB_GET_USER_LANGUAGE_FN(push_token) or "en"
+        except Exception:
+            pass
+    return "en"
+
+
 def _send_push_notification(
     push_token: str,
     title: str,
@@ -828,10 +850,11 @@ def start_monitoring_job(
             quarter_ok   = last5_active if start_quarter == 5 else quarter >= start_quarter
             if quarter_ok and diff <= max_diff:
                 log.info("GAME ALARM  fire   | %s | Q%d diff=%d", game_name, quarter, diff)
+                _lang = _get_user_language(push_token)
                 _send_push_notification(
                     push_token=push_token,
-                    title="Smart Alarm! It's Getting Dramatic!",
-                    body=f"{game_name}\n{_period_label(quarter)} | Point Diff: {diff} | CLOSE GAME!",
+                    title=t_title("smart_alarm", _lang),
+                    body=t_body_game(game_name, quarter, diff, _lang),
                     sound_channel=sound_channel,
                     alert_type=alert_type,
                 )
@@ -1053,7 +1076,8 @@ def _run_radar_tick_for_user(
     sound_channel: str,
     prefs: dict,
     events: list[dict],
-    summaries: dict,          # mutable cache: game_id → summary JSON (shared across users)
+    summaries: dict,
+    language: str = "en",
 ) -> None:
     """
     Check one user's preferences against pre-fetched ESPN data.
@@ -1118,13 +1142,13 @@ def _run_radar_tick_for_user(
                         if not broadcasts:
                             continue  # no broadcast → skip alert
                     if notify_start and diff > max_d:
-                        # Quarter started but score isn't close — fire "period starting" alert
-                        label = "Period Starting!"
-                        body_text = f"{game_name}\n{_period_label(quarter)} is underway! | Diff: {diff} pts"
+                        label = t_title("period_starting", language)
+                        body_text = t_body_period_start(game_name, quarter, diff, language)
                         dedup_key = f"{game_id}_game"
                     else:
-                        label = "Favorite Team Alert!" if "team_name" in criteria else "NBA Radar – Close Game!"
-                        body_text = f"{game_name}\n{_period_label(quarter)} | Diff: {diff} pts"
+                        title_key = "fav_team" if "team_name" in criteria else "radar"
+                        label = t_title(title_key, language)
+                        body_text = t_body_game(game_name, quarter, diff, language)
                         dedup_key = f"{game_id}_game"
                     if _fire_once(dedup_key, token):
                         log.info("RADAR ALARM  fire   | %s | Q%d diff=%d | %s | %s", game_name, quarter, diff, label, _tid(push_token))
@@ -1195,8 +1219,8 @@ def _run_radar_tick_for_user(
                                 log.info("RADAR ALARM  fire   | %s | %d pts in %s | %s", player_name, pts, game_name, _tid(push_token))
                                 _send_push_notification(
                                     push_token=push_token,
-                                    title="Scoring Alert!",
-                                    body=f"{player_name} has {pts} pts in {game_name}!",
+                                    title=t_title("scoring_alert", language),
+                                    body=t_body_scoring(player_name, pts, game_name, language),
                                     sound_channel=sound_channel, alert_type=p_alert,
                                 )
 
@@ -1205,8 +1229,8 @@ def _run_radar_tick_for_user(
                                 if _fire_once(f"{game_id}_{player_id}_early_pts_q{early_pts_q}", token):
                                     _send_push_notification(
                                         push_token=push_token,
-                                        title="Early Points Alert!",
-                                        body=f"{player_name}: {pts} pts by {_period_label(quarter)} in {game_name}!",
+                                        title=t_title("early_points", language),
+                                        body=t_body_early_pts(player_name, pts, quarter, game_name, language),
                                         sound_channel=sound_channel, alert_type=p_alert,
                                     )
 
@@ -1217,8 +1241,8 @@ def _run_radar_tick_for_user(
                             if _fire_once(f"{game_id}_{player_id}_triple_double", token):
                                 _send_push_notification(
                                     push_token=push_token,
-                                    title="Triple-Double Watch!",
-                                    body=f"{player_name}: {' / '.join(hot)} in {game_name}!",
+                                    title=t_title("triple_double", language),
+                                    body=t_body_triple_double(player_name, " / ".join(hot), game_name, language),
                                     sound_channel=sound_channel, alert_type=p_alert,
                                 )
 
@@ -1229,8 +1253,9 @@ def _run_radar_tick_for_user(
                     if hist_cats.get("scoring_40_half") and pts >= 40 and quarter <= 2:
                         if _fire_once(f"{game_id}_{player_id}_scoring_40", token):
                             _send_push_notification(
-                                push_token=push_token, title="Historic Scoring Pace!",
-                                body=f"{player_name}: {pts} pts in {_period_label(quarter)} of {game_name}!",
+                                push_token=push_token,
+                                title=t_title("historic_scoring", language),
+                                body=t_body_historic_scoring(player_name, pts, quarter, game_name, language),
                                 sound_channel=sound_channel, alert_type=hist_alert_type,
                             )
 
@@ -1239,8 +1264,9 @@ def _run_radar_tick_for_user(
                         if not (quarter >= 4 and clock_mins <= 3):
                             if _fire_once(f"{game_id}_{player_id}_threes_11", token):
                                 _send_push_notification(
-                                    push_token=push_token, title="Historic 3-Point Game!",
-                                    body=f"{player_name}: {threes} threes in {game_name}!",
+                                    push_token=push_token,
+                                    title=t_title("historic_threes", language),
+                                    body=t_body_historic_threes(player_name, threes, game_name, language),
                                     sound_channel=sound_channel, alert_type=hist_alert_type,
                                 )
 
@@ -1251,8 +1277,9 @@ def _run_radar_tick_for_user(
                             hot = [f"{n} {v}" for n, v in zip(["PTS","REB","AST","STL","BLK"], [pts,reb,ast,stl,blk]) if v >= 8]
                             if _fire_once(f"{game_id}_{player_id}_quad", token):
                                 _send_push_notification(
-                                    push_token=push_token, title="Quad-Double Threat!",
-                                    body=f"{player_name}: {' / '.join(hot)} in {game_name}!",
+                                    push_token=push_token,
+                                    title=t_title("quad_double", language),
+                                    body=t_body_quad(player_name, " / ".join(hot), game_name, language),
                                     sound_channel=sound_channel, alert_type=hist_alert_type,
                                 )
 
@@ -1293,6 +1320,7 @@ def _run_radar_tick(users: list[dict]) -> bool:
                 prefs         = user["prefs"],
                 events        = events,
                 summaries     = summaries,
+                language      = user.get("language", "en"),
             )
         except Exception as exc:
             log.error("RADAR: error processing user %s: %s", _tid(user.get("token", "")), exc)

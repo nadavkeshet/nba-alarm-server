@@ -10,6 +10,8 @@ from typing import Optional
 log = logging.getLogger("nba_monitor")
 
 from epg import get_broadcasts_for_game, get_all_broadcasts
+from i18n import (t_title, t_body_game, t_body_period_start, t_body_scoring,
+                  t_body_early_pts, t_body_triple_double, translate_game_name)
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -51,6 +53,7 @@ from monitor import (
     # Invalid token cleanup
     register_db_invalidate_token,
     register_db_save_notification,
+    register_db_get_user_language,
     # Fired-alert persistence (survives server restarts)
     register_db_persist_fired,
     register_db_check_fired,
@@ -296,6 +299,22 @@ def _save_notification(user_token: str, title: str, body: str) -> None:
 
 
 register_db_save_notification(_save_notification)
+
+
+def _get_user_language_from_db(push_token: str) -> str:
+    if engine is None:
+        return "en"
+    try:
+        with Session(engine) as session:
+            pref = session.get(UserPreferenceDB, push_token)
+            if pref and hasattr(pref, 'language') and pref.language:
+                return pref.language
+    except Exception:
+        pass
+    return "en"
+
+
+register_db_get_user_language(_get_user_language_from_db)
 
 
 def _migrate_token(old_token: str, new_token: str) -> None:
@@ -634,7 +653,7 @@ def _period_str(period: int) -> str:
     return f"Q{period}" if period <= 4 else f"OT{period - 4}"
 
 
-def _check_and_fire(alarm: Alarm, events: list[dict], summary: dict | None = None) -> dict | None | bool:
+def _check_and_fire(alarm: Alarm, events: list[dict], summary: dict | None = None, language: str = "en") -> dict | None | bool:
     """
     Return a dict {"title": ..., "body": ...} if the alarm condition is met.
     Return None if the alarm has expired and should be deactivated without firing.
@@ -663,11 +682,10 @@ def _check_and_fire(alarm: Alarm, events: list[dict], summary: dict | None = Non
                 else:
                     quarter_started = period >= required_quarter
                 if quarter_started:
-                    diff = _extract_game_diff(event)
-                    diff_str = f" | Diff: {diff}" if diff is not None else ""
+                    diff = _extract_game_diff(event) or 0
                     return {
-                        "title": "Period Starting!",
-                        "body":  f"{game_name}\n{_period_str(period)} is underway!{diff_str}",
+                        "title": t_title("period_starting", language),
+                        "body":  t_body_period_start(game_name, period, diff, language),
                     }
 
             if required_quarter == 5:
@@ -679,8 +697,8 @@ def _check_and_fire(alarm: Alarm, events: list[dict], summary: dict | None = Non
             diff = _extract_game_diff(event)
             if diff is not None and diff <= alarm.threshold:
                 return {
-                    "title": "Smart Alarm! It's Getting Dramatic!",
-                    "body":  f"{game_name}\n{_period_str(period)} | Point Diff: {diff} | CLOSE GAME!",
+                    "title": t_title("smart_alarm", language),
+                    "body":  t_body_game(game_name, period, diff, language),
                 }
 
     elif alarm.condition_type == "points":
@@ -766,7 +784,8 @@ async def _alarm_poller() -> None:
             for alarm in alarms:
                 try:
                     summary = summaries.get(alarm.game_id) if alarm.game_id else None
-                    result = _check_and_fire(alarm, events, summary)
+                    alarm_lang = _get_user_language_from_db(alarm.user_token)
+                    result = _check_and_fire(alarm, events, summary, language=alarm_lang)
                     if isinstance(result, dict):
                         # Build dedup key using same format as the radar so
                         # poller and radar share one dedup set and never both fire.
@@ -1114,10 +1133,12 @@ class TestAlarmRequest(BaseModel):
 
 @app.post("/test-alarm")
 def test_alarm(req: TestAlarmRequest):
+    from i18n import t_title as _t_title, t_body_test as _t_body_test
+    lang = _get_user_language_from_db(req.push_token)
     _send_push_notification(
         push_token=req.push_token,
-        title="Test Notification",
-        body="Your NBA Smart Alarm is working!",
+        title=_t_title("test", lang),
+        body=_t_body_test(lang),
         sound_channel=req.sound_channel,
     )
     return {"status": "test_notification_sent"}
