@@ -50,6 +50,7 @@ from monitor import (
     register_db_get_all_users,
     # Invalid token cleanup
     register_db_invalidate_token,
+    register_db_save_notification,
     # Fired-alert persistence (survives server restarts)
     register_db_persist_fired,
     register_db_check_fired,
@@ -144,8 +145,19 @@ class FiredAlertDB(_Base):
     """
     __tablename__ = "fired_alerts"
 
-    key      = Column(String,                primary_key=True)   # same key used in _fire_once
+    key      = Column(String,                primary_key=True)
     fired_at = Column(DateTime(timezone=True), nullable=False)
+
+
+class NotificationHistoryDB(_Base):
+    """Every notification sent to a user, for Trophy Room display."""
+    __tablename__ = "notification_history"
+
+    id        = Column(Integer, primary_key=True, autoincrement=True)
+    user_token = Column(String, nullable=False, index=True)
+    title     = Column(String, nullable=False)
+    body      = Column(String, nullable=False)
+    sent_at   = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class UserPreferenceDB(_Base):
@@ -265,6 +277,23 @@ def _invalidate_push_token(push_token: str) -> None:
 
 
 register_db_invalidate_token(_invalidate_push_token)
+
+
+def _save_notification(user_token: str, title: str, body: str) -> None:
+    """Save a sent notification to history for Trophy Room."""
+    if engine is None:
+        return
+    try:
+        with Session(engine) as session:
+            session.add(NotificationHistoryDB(
+                user_token=user_token, title=title, body=body,
+            ))
+            session.commit()
+    except Exception as exc:
+        log.error("DB: save notification history failed – %s", exc)
+
+
+register_db_save_notification(_save_notification)
 
 
 def _migrate_token(old_token: str, new_token: str) -> None:
@@ -1530,6 +1559,29 @@ def epg_all_games(country: str = "il"):
     """
     today_games = get_today_games()
     return {"broadcasts": get_all_broadcasts(country=country, games=today_games)}
+
+
+@app.get("/trophy-room")
+def trophy_room(user_token: str = ""):
+    """Get notification history for a user (Trophy Room)."""
+    if not user_token or engine is None:
+        return {"notifications": []}
+    try:
+        with Session(engine) as session:
+            rows = session.query(NotificationHistoryDB).filter_by(
+                user_token=user_token
+            ).order_by(NotificationHistoryDB.sent_at.desc()).limit(50).all()
+            return {"notifications": [
+                {
+                    "title": r.title,
+                    "body": r.body,
+                    "sent_at": r.sent_at.isoformat() if r.sent_at else "",
+                }
+                for r in rows
+            ]}
+    except Exception as exc:
+        log.error("trophy-room error: %s", exc)
+        return {"notifications": []}
 
 
 @app.get("/roster")

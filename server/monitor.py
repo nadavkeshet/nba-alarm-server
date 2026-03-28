@@ -193,12 +193,18 @@ def register_db_deactivate(fn) -> None:
 # ---------------------------------------------------------------------------
 
 _DB_INVALIDATE_TOKEN_FN = None
+_DB_SAVE_NOTIFICATION_FN = None
 
 
 def register_db_invalidate_token(fn) -> None:
-    """Register a callable(push_token: str) that removes an invalid FCM token from DB."""
     global _DB_INVALIDATE_TOKEN_FN
     _DB_INVALIDATE_TOKEN_FN = fn
+
+
+def register_db_save_notification(fn) -> None:
+    """Register a callable(user_token, title, body) to save notification to history."""
+    global _DB_SAVE_NOTIFICATION_FN
+    _DB_SAVE_NOTIFICATION_FN = fn
 
 
 # ---------------------------------------------------------------------------
@@ -697,6 +703,12 @@ def _send_push_notification(
         )
         response = fb_messaging.send(message)
         log.info("FCM push sent → %s", response)
+        # Save to notification history for Trophy Room
+        if _DB_SAVE_NOTIFICATION_FN is not None:
+            try:
+                _DB_SAVE_NOTIFICATION_FN(push_token, title, body)
+            except Exception:
+                pass
     except fb_messaging.UnregisteredError:
         # Token is no longer valid (app uninstalled / re-installed without re-registering).
         # Remove it from the DB so we never attempt it again.
