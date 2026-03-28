@@ -719,8 +719,8 @@ export default function HomeScreen() {
                 {/* No-condition toggle */}
                 <View style={styles.noCondRow}>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.inputLabel}>Any Score</Text>
-                    <Text style={styles.noCondSub}>Wake me when the quarter starts, regardless of the score</Text>
+                    <Text style={styles.inputLabel}>{t('alarm.anyScore')}</Text>
+                    <Text style={styles.noCondSub}>{t('alarm.anyScoreSub')}</Text>
                   </View>
                   <BasketballToggle value={noCondition} onValueChange={setNoCondition} />
                 </View>

@@ -164,6 +164,9 @@ export const he = {
   'settings.savedBadge':      '★ שמור',
   'settings.players':         '{0} שחקנים',
 
+  'alarm.anyScore':    'כל תוצאה',
+  'alarm.anyScoreSub': 'העירו אותי כשהרבע מתחיל, ללא קשר לפער בניקוד',
+
   // ── Guide ────────────────────────────────────────────────────────
   'guide.skip':       'דלג',
   'guide.back':       'חזור',

@@ -164,6 +164,9 @@ export const en = {
   'settings.savedBadge':      '★ saved',
   'settings.players':         '{0} players',
 
+  'alarm.anyScore':    'Any Score',
+  'alarm.anyScoreSub': 'Wake me when the quarter starts, regardless of the score',
+
   // ── Guide ────────────────────────────────────────────────────────
   'guide.skip':       'Skip',
   'guide.back':       'Back',
