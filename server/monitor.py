@@ -1121,7 +1121,7 @@ def _run_radar_tick_for_user(
                         # Quarter started but score isn't close — fire "period starting" alert
                         label = "Period Starting!"
                         body_text = f"{game_name}\n{_period_label(quarter)} is underway! | Diff: {diff} pts"
-                        dedup_key = f"{game_id}_game_start"
+                        dedup_key = f"{game_id}_game"
                     else:
                         label = "Favorite Team Alert!" if "team_name" in criteria else "NBA Radar – Close Game!"
                         body_text = f"{game_name}\n{_period_label(quarter)} | Diff: {diff} pts"

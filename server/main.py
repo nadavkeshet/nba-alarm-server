@@ -175,6 +175,7 @@ class UserPreferenceDB(_Base):
     hist_threes_11          = Column(Boolean, default=False,   nullable=False)
     hist_quad_double        = Column(Boolean, default=False,   nullable=False)
     sound_channel           = Column(String,  default="classic_alarm", nullable=False)
+    language                = Column(String,  default="en", nullable=False)
     created_at              = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
@@ -211,6 +212,7 @@ def _init_db() -> None:
         "ALTER TABLE user_preferences ADD COLUMN sound_channel VARCHAR NOT NULL DEFAULT 'classic_alarm'",
         "ALTER TABLE alarms ADD COLUMN notify_at_start BOOLEAN DEFAULT FALSE NOT NULL",
         "ALTER TABLE favorite_teams ADD COLUMN notify_at_start BOOLEAN DEFAULT FALSE NOT NULL",
+        "ALTER TABLE user_preferences ADD COLUMN language VARCHAR NOT NULL DEFAULT 'en'",
     ]
     for sql in migrations:
         try:
@@ -480,10 +482,12 @@ def _get_all_users_for_radar() -> list[dict]:
 
             # Sound channel: read from DB per user
             channel = pref.sound_channel if pref and hasattr(pref, 'sound_channel') and pref.sound_channel else "classic_alarm"
+            lang = pref.language if pref and hasattr(pref, 'language') and pref.language else "en"
 
             users.append({
                 "token":   token,
                 "channel": channel,
+                "language": lang,
                 "prefs": {
                     "FavoritePlayers": fav_players,
                     "FavoriteTeams":   fav_teams,
@@ -1472,7 +1476,8 @@ def update_thresholds(req: GlobalThresholdsRequest):
 class RegisterTokenRequest(BaseModel):
     push_token: str
     sound_channel: str = "classic_alarm"
-    old_token: str     = ""   # set by onTokenRefresh to trigger data migration
+    old_token: str     = ""
+    language: str      = "en"
 
 
 @app.post("/register-token")
@@ -1490,10 +1495,12 @@ def register_token(req: RegisterTokenRequest):
                 pref = session.get(UserPreferenceDB, req.push_token)
                 if pref:
                     pref.sound_channel = req.sound_channel
+                    pref.language = req.language or "en"
                 else:
                     session.add(UserPreferenceDB(
                         user_token=req.push_token,
                         sound_channel=req.sound_channel,
+                        language=req.language or "en",
                     ))
                 session.commit()
         except Exception as exc:
