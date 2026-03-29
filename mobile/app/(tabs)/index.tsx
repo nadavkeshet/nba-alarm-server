@@ -28,7 +28,6 @@ import {
 import Slider from '@react-native-community/slider';
 import { BasketballToggle } from '../../components/basketball-toggle';
 import { TeamBadge } from '../../components/TeamBadge';
-import { PlayerAvatar } from '../../components/PlayerAvatar';
 
 
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -523,8 +522,8 @@ export default function HomeScreen() {
           push_token:      freshToken,
           sound_channel:   ALARM_CHANNEL,
           alert_type:      alertType,
-          home_team_id:    gameHome?.team?.id?.toString() ?? '',
-          away_team_id:    gameAway?.team?.id?.toString() ?? '',
+          home_team_id:    gameHome?.team?.abbreviation ?? '',
+          away_team_id:    gameAway?.team?.abbreviation ?? '',
         }),
       });
       if (response.ok) {
@@ -789,7 +788,6 @@ export default function HomeScreen() {
                               style={[styles.playerRow, isSelected && styles.playerRowSelected]}
                               onPress={() => setSelectedPlayer(isSelected ? null : player)}
                             >
-                              <PlayerAvatar size={32} />
                               <Text style={styles.playerJersey}>
                                 {player.jersey ? `#${player.jersey}` : '  '}
                               </Text>

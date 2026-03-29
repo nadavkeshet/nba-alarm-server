@@ -27,7 +27,6 @@ import Slider from '@react-native-community/slider';
 import { BasketballToggle } from '../../components/basketball-toggle';
 import { WelcomeGuide } from '../../components/welcome-guide';
 import { TeamBadge } from '../../components/TeamBadge';
-import { PlayerAvatar } from '../../components/PlayerAvatar';
 import { SERVER_URL } from '../../config';
 import { teamFullToHe } from '../../utils/teamNames';
 
@@ -715,7 +714,6 @@ export default function SettingsScreen() {
               return (
                 <View key={pid} style={styles.favCard}>
                   <View style={styles.favCardHeader}>
-                    <PlayerAvatar size={36} />
                     <Text style={styles.favName}>{p.name}</Text>
                     <TouchableOpacity onPress={() => removePlayer(pid)} style={styles.removeBtn}>
                       <Text style={styles.removeBtnText}>{t('settings.remove')}</Text>
@@ -1309,7 +1307,6 @@ export default function SettingsScreen() {
                       style={styles.pickerRow}
                       onPress={() => setPickedPlayer(p)}
                     >
-                      <PlayerAvatar size={36} />
                       <View style={{ flex: 1 }}>
                         <Text style={styles.pickerRowText}>{p.name}</Text>
                         <Text style={styles.pickerRowSub}>
