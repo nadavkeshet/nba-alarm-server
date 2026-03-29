@@ -27,6 +27,8 @@ import {
 
 import Slider from '@react-native-community/slider';
 import { BasketballToggle } from '../../components/basketball-toggle';
+import { TeamBadge } from '../../components/TeamBadge';
+import { PlayerAvatar } from '../../components/PlayerAvatar';
 
 
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -148,9 +150,7 @@ function GameCard({
 
       <View style={styles.teamsRow}>
         <View style={styles.teamBlock}>
-          {away?.team?.logo
-            ? <Image source={{ uri: away.team.logo }} style={styles.teamLogo} resizeMode="contain" />
-            : <View style={[styles.teamLogo, styles.logoPlaceholder]} />}
+          <TeamBadge abbreviation={away?.team?.abbreviation ?? ''} size={56} />
           <Text style={styles.teamAbbr}>{isHebrew ? teamAbbrToHe(away?.team?.abbreviation ?? '') : (away?.team?.abbreviation ?? '?')}</Text>
           {showScore && <Text style={styles.scoreText}>{away?.score ?? '—'}</Text>}
           {awayStarred ? <Text style={styles.starBtnActive}>★</Text> : null}
@@ -161,9 +161,7 @@ function GameCard({
         </View>
 
         <View style={styles.teamBlock}>
-          {home?.team?.logo
-            ? <Image source={{ uri: home.team.logo }} style={styles.teamLogo} resizeMode="contain" />
-            : <View style={[styles.teamLogo, styles.logoPlaceholder]} />}
+          <TeamBadge abbreviation={home?.team?.abbreviation ?? ''} size={56} />
           <Text style={styles.teamAbbr}>{isHebrew ? teamAbbrToHe(home?.team?.abbreviation ?? '') : (home?.team?.abbreviation ?? '?')}</Text>
           {showScore && <Text style={styles.scoreText}>{home?.score ?? '—'}</Text>}
           {homeStarred ? <Text style={styles.starBtnActive}>★</Text> : null}
@@ -779,9 +777,7 @@ export default function HomeScreen() {
                     {teams.map(team => (
                       <View key={team.id}>
                         <View style={styles.teamHeader}>
-                          {team.logo
-                            ? <Image source={{ uri: team.logo }} style={styles.teamHeaderLogo} resizeMode="contain" />
-                            : null}
+                          <TeamBadge abbreviation={team.abbreviation ?? ''} size={20} />
                           <Text style={styles.teamHeaderName}>{team.abbreviation}</Text>
                         </View>
 
@@ -793,10 +789,7 @@ export default function HomeScreen() {
                               style={[styles.playerRow, isSelected && styles.playerRowSelected]}
                               onPress={() => setSelectedPlayer(isSelected ? null : player)}
                             >
-                              <Image
-                                source={{ uri: `https://a.espncdn.com/i/headshots/nba/players/full/${player.id}.png` }}
-                                style={styles.playerHeadshot}
-                              />
+                              <PlayerAvatar size={32} />
                               <Text style={styles.playerJersey}>
                                 {player.jersey ? `#${player.jersey}` : '  '}
                               </Text>

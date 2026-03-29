@@ -7,7 +7,6 @@ import { useTheme, type AppColors } from '../../context/ThemeContext';
 import { useLanguage } from '../../context/LanguageContext';
 import {
   Animated,
-  Image,
   InteractionManager,
   Modal,
   ScrollView,
@@ -19,6 +18,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { SkeletonAlarmCard } from '../../components/skeleton-card';
+import { TeamBadge } from '../../components/TeamBadge';
+import { PlayerAvatar } from '../../components/PlayerAvatar';
 
 import { SERVER_URL } from '../../config';
 import { translateGameName, teamFullToHe } from '../../utils/teamNames';
@@ -448,16 +449,10 @@ export default function ActiveScreen() {
                   {(alarm.home_team_id || alarm.away_team_id) && (
                     <View style={styles.alarmTeamLogos}>
                       {alarm.away_team_id ? (
-                        <Image
-                          source={{ uri: `https://a.espncdn.com/i/teamlogos/nba/500/${alarm.away_team_id}.png` }}
-                          style={styles.alarmTeamLogo}
-                        />
+                        <TeamBadge abbreviation="" size={28} />
                       ) : null}
                       {alarm.home_team_id ? (
-                        <Image
-                          source={{ uri: `https://a.espncdn.com/i/teamlogos/nba/500/${alarm.home_team_id}.png` }}
-                          style={styles.alarmTeamLogo}
-                        />
+                        <TeamBadge abbreviation="" size={28} />
                       ) : null}
                     </View>
                   )}
@@ -495,10 +490,7 @@ export default function ActiveScreen() {
             <View style={{ gap: 8 }}>
               {livePlayerAlarmGroups.map(group => (
                 <PulsingCard key={`live-${group[0].player_id}`} cardStyle={styles.alarmCard}>
-                  <Image
-                    source={{ uri: `https://a.espncdn.com/i/headshots/nba/players/full/${group[0].player_id}.png` }}
-                    style={styles.alarmPlayerHeadshot}
-                  />
+                  <PlayerAvatar size={40} />
                   <View style={styles.alarmCardLeft}>
                     <LivePill label={t('active.watching')} color={C.orange} bg={C.orangeDim} />
                     <Text style={styles.alarmGame}>{group[0].player_name ?? t('active.unknownPlayer')}</Text>
@@ -520,10 +512,7 @@ export default function ActiveScreen() {
               ))}
               {dbPlayerAlarmGroups.map(group => (
                 <View key={`db-${group[0].target_id}`} style={styles.alarmCard}>
-                  <Image
-                    source={{ uri: `https://a.espncdn.com/i/headshots/nba/players/full/${group[0].target_id}.png` }}
-                    style={styles.alarmPlayerHeadshot}
-                  />
+                  <PlayerAvatar size={40} />
                   <View style={styles.alarmCardLeft}>
                     <LivePill label={t('active.saved')} color={C.orange} bg={C.orangeDim} />
                     <Text style={styles.alarmGame}>{group[0].target_name || group[0].target_id || t('active.unknownPlayer')}</Text>

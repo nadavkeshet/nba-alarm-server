@@ -11,7 +11,6 @@ import {
   ActivityIndicator,
   Clipboard,
   FlatList,
-  Image,
   Linking,
   Modal,
   NativeModules,
@@ -27,6 +26,8 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import Slider from '@react-native-community/slider';
 import { BasketballToggle } from '../../components/basketball-toggle';
 import { WelcomeGuide } from '../../components/welcome-guide';
+import { TeamBadge } from '../../components/TeamBadge';
+import { PlayerAvatar } from '../../components/PlayerAvatar';
 import { SERVER_URL } from '../../config';
 import { teamFullToHe } from '../../utils/teamNames';
 
@@ -599,10 +600,7 @@ export default function SettingsScreen() {
               return (
                 <View key={team.team_id} style={styles.favCard}>
                   <View style={styles.favCardHeader}>
-                    <Image
-                      source={{ uri: `https://a.espncdn.com/i/teamlogos/nba/500/${team.team_id}.png` }}
-                      style={styles.favTeamLogo}
-                    />
+                    <TeamBadge abbreviation={allTeams.find(t => t.id === team.team_id)?.abbreviation ?? ''} size={36} />
                     <Text style={styles.favName}>{isHebrew ? teamFullToHe(team.team_name) : team.team_name}</Text>
                     <TouchableOpacity onPress={() => removeTeam(team.team_id)} style={styles.removeBtn}>
                       <Text style={styles.removeBtnText}>{t('settings.remove')}</Text>
@@ -717,10 +715,7 @@ export default function SettingsScreen() {
               return (
                 <View key={pid} style={styles.favCard}>
                   <View style={styles.favCardHeader}>
-                    <Image
-                      source={{ uri: `https://a.espncdn.com/i/headshots/nba/players/full/${pid}.png` }}
-                      style={styles.favPlayerHeadshot}
-                    />
+                    <PlayerAvatar size={36} />
                     <Text style={styles.favName}>{p.name}</Text>
                     <TouchableOpacity onPress={() => removePlayer(pid)} style={styles.removeBtn}>
                       <Text style={styles.removeBtnText}>{t('settings.remove')}</Text>
@@ -1128,10 +1123,7 @@ export default function SettingsScreen() {
                       style={styles.pickerRow}
                       onPress={() => setPickedTeam(team)}
                     >
-                      <Image
-                        source={{ uri: team.logo ?? `https://a.espncdn.com/i/teamlogos/nba/500/${team.id}.png` }}
-                        style={styles.pickerTeamLogo}
-                      />
+                      <TeamBadge abbreviation={team.abbreviation ?? ''} size={28} />
                       <Text style={styles.pickerRowText}>{isHebrew ? teamFullToHe(team.name) : team.name}</Text>
                       <View style={styles.pickerRowRight}>
                         {isFav && <Text style={styles.savedBadge}>{t('settings.savedBadge')}</Text>}
@@ -1151,10 +1143,7 @@ export default function SettingsScreen() {
               <ScrollView keyboardShouldPersistTaps="handled" style={{ flex: 1 }}>
                 <View style={styles.configArea}>
                   <View style={styles.configTitleRow}>
-                    <Image
-                      source={{ uri: pickedTeam.logo ?? `https://a.espncdn.com/i/teamlogos/nba/500/${pickedTeam.id}.png` }}
-                      style={styles.configTeamLogo}
-                    />
+                    <TeamBadge abbreviation={pickedTeam.abbreviation ?? ''} size={36} />
                     <Text style={styles.configTitle}>{isHebrew ? teamFullToHe(pickedTeam.name) : pickedTeam.name}</Text>
                   </View>
                   <Text style={styles.configSub}>{t('settings.configSub')}</Text>
@@ -1320,10 +1309,7 @@ export default function SettingsScreen() {
                       style={styles.pickerRow}
                       onPress={() => setPickedPlayer(p)}
                     >
-                      <Image
-                        source={{ uri: `https://a.espncdn.com/i/headshots/nba/players/full/${p.id}.png` }}
-                        style={styles.pickerPlayerHeadshot}
-                      />
+                      <PlayerAvatar size={36} />
                       <View style={{ flex: 1 }}>
                         <Text style={styles.pickerRowText}>{p.name}</Text>
                         <Text style={styles.pickerRowSub}>
