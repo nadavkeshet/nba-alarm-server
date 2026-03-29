@@ -135,5 +135,5 @@ Not affiliated with, endorsed by, or connected to the National Basketball Associ
 ---
 
 <p align="center">
-  <b>Clutch Alarm</b> © 2025 — <a href="https://clutchalarm.com">clutchalarm.com</a>
+  <b>Clutch Alarm</b> © 2026 — <a href="https://clutchalarm.com">clutchalarm.com</a>
 </p>
