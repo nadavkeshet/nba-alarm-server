@@ -39,12 +39,14 @@ def translate_game_name(name: str, lang: str) -> str:
     if lang != "he":
         return name
     result = name
+    # Replace "at" / "@" with "נגד"
+    result = result.replace(" at ", " נגד ")
+    result = result.replace(" @ ", " נגד ")
     # Translate full names
     for en, he in _TEAM_HE.items():
         result = result.replace(en, he)
-    # Translate abbreviations (only if full name didn't match)
+    # Translate abbreviations
     for en, he in _ABBR_HE.items():
-        # Only replace standalone abbreviations (surrounded by spaces/punctuation)
         result = result.replace(f" {en} ", f" {he} ")
         if result.startswith(en + " "):
             result = he + result[len(en):]
