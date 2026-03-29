@@ -19,7 +19,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { SkeletonAlarmCard } from '../../components/skeleton-card';
 import { TeamBadge } from '../../components/TeamBadge';
-import { PlayerAvatar } from '../../components/PlayerAvatar';
 
 import { SERVER_URL } from '../../config';
 import { translateGameName, teamFullToHe } from '../../utils/teamNames';
@@ -449,10 +448,10 @@ export default function ActiveScreen() {
                   {(alarm.home_team_id || alarm.away_team_id) && (
                     <View style={styles.alarmTeamLogos}>
                       {alarm.away_team_id ? (
-                        <TeamBadge abbreviation="" size={28} />
+                        <TeamBadge abbreviation={alarm.away_team_id} size={28} />
                       ) : null}
                       {alarm.home_team_id ? (
-                        <TeamBadge abbreviation="" size={28} />
+                        <TeamBadge abbreviation={alarm.home_team_id} size={28} />
                       ) : null}
                     </View>
                   )}
@@ -490,7 +489,6 @@ export default function ActiveScreen() {
             <View style={{ gap: 8 }}>
               {livePlayerAlarmGroups.map(group => (
                 <PulsingCard key={`live-${group[0].player_id}`} cardStyle={styles.alarmCard}>
-                  <PlayerAvatar size={40} />
                   <View style={styles.alarmCardLeft}>
                     <LivePill label={t('active.watching')} color={C.orange} bg={C.orangeDim} />
                     <Text style={styles.alarmGame}>{group[0].player_name ?? t('active.unknownPlayer')}</Text>
@@ -512,7 +510,6 @@ export default function ActiveScreen() {
               ))}
               {dbPlayerAlarmGroups.map(group => (
                 <View key={`db-${group[0].target_id}`} style={styles.alarmCard}>
-                  <PlayerAvatar size={40} />
                   <View style={styles.alarmCardLeft}>
                     <LivePill label={t('active.saved')} color={C.orange} bg={C.orangeDim} />
                     <Text style={styles.alarmGame}>{group[0].target_name || group[0].target_id || t('active.unknownPlayer')}</Text>
