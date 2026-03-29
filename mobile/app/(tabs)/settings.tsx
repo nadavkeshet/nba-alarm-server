@@ -1054,7 +1054,7 @@ export default function SettingsScreen() {
         {/* ── Privacy Policy ────────────────────────────────────────── */}
         <TouchableOpacity
           style={styles.privacyBtn}
-          onPress={() => Linking.openURL('https://sites.google.com/view/nba-smart-alarm-privacy/%D7%91%D7%99%D7%AA')}
+          onPress={() => Linking.openURL('https://clutchalarm.com/privacy')}
         >
           <Text style={styles.privacyBtnText}>Privacy Policy</Text>
         </TouchableOpacity>
