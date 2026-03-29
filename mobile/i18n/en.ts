@@ -211,5 +211,5 @@ export const en = {
   'guide.slide8.b1':    'Early Points has a deadline: the alert only fires while the game is still in or before your chosen quarter. Once the quarter passes, the condition expires silently.',
   'guide.slide8.b2':    'Game Alarms only start watching from the quarter you pick — anything before is ignored.',
   'guide.slide8.b3':    'You can revisit this guide at any time from the bottom of the Settings tab.',
-  'guide.slide8.b4':    'Questions or suggestions? nbasmartalarm@gmail.com',
+  'guide.slide8.b4':    'Questions or suggestions? nadav@clutchalarm.com',
 };

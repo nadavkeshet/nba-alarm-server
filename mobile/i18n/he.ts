@@ -211,5 +211,5 @@ export const he = {
   'guide.slide8.b1':    'לנקודות מוקדמות יש דדליין: ההתראה פועלת רק עד הרבע שבחרת. לאחר מכן התנאי פוקע.',
   'guide.slide8.b2':    'התראות משחק מתחילות לעקוב רק מהרבע שבחרת.',
   'guide.slide8.b3':    'ניתן לחזור למדריך זה בכל עת מלשונית ההגדרות.',
-  'guide.slide8.b4':    'שאלות או הצעות? nbasmartalarm@gmail.com',
+  'guide.slide8.b4':    'שאלות או הצעות? nadav@clutchalarm.com',
 };

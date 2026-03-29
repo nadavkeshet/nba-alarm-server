@@ -1059,8 +1059,8 @@ export default function SettingsScreen() {
           <Text style={styles.privacyBtnText}>Privacy Policy</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={() => Linking.openURL('mailto:nbasmartalarm@gmail.com')}>
-          <Text style={styles.contactText}>nbasmartalarm@gmail.com</Text>
+        <TouchableOpacity onPress={() => Linking.openURL('mailto:nadav@clutchalarm.com')}>
+          <Text style={styles.contactText}>nadav@clutchalarm.com</Text>
         </TouchableOpacity>
 
         {userToken ? (
