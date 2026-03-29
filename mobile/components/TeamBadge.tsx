@@ -1,6 +1,5 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 
 const TEAM_COLORS: Record<string, [string, string]> = {
   ATL: ['#C8102E', '#FDB927'], BKN: ['#002A60', '#CD1041'],
@@ -30,23 +29,23 @@ interface Props {
   size?: number;
 }
 
+// Pure JS gradient simulation: primary color circle with secondary color
+// overlay in the bottom-right quadrant, clipped to the circle shape.
 export function TeamBadge({ abbreviation, size = 36 }: Props) {
   const abbr = (abbreviation || '?').toUpperCase();
-  const colors = TEAM_COLORS[abbr] ?? DEFAULT_COLORS;
+  const [primary, secondary] = TEAM_COLORS[abbr] ?? DEFAULT_COLORS;
   const fontSize = Math.round(size * 0.26);
-  const glowSize = Math.round(size * 0.04);
+  const borderWidth = Math.max(1, Math.round(size * 0.04));
 
   return (
-    <LinearGradient
-      colors={[colors[0], colors[1]]}
-      start={{ x: 0.3, y: 0 }}
-      end={{ x: 0.7, y: 1 }}
+    <View
       style={[
         styles.circle,
         {
           width: size, height: size, borderRadius: size / 2,
-          borderWidth: glowSize,
-          shadowColor: colors[0],
+          backgroundColor: primary,
+          borderWidth,
+          shadowColor: primary,
           shadowOpacity: 0.4,
           shadowRadius: 4,
           shadowOffset: { width: 0, height: 2 },
@@ -54,6 +53,16 @@ export function TeamBadge({ abbreviation, size = 36 }: Props) {
         },
       ]}
     >
+      {/* Secondary color overlay — bottom half, simulates gradient */}
+      <View
+        style={{
+          position: 'absolute',
+          bottom: 0, left: 0, right: 0,
+          height: size * 0.45,
+          backgroundColor: secondary,
+          opacity: 0.45,
+        }}
+      />
       <Text
         style={[
           styles.text,
@@ -69,7 +78,7 @@ export function TeamBadge({ abbreviation, size = 36 }: Props) {
       >
         {abbr}
       </Text>
-    </LinearGradient>
+    </View>
   );
 }
 
