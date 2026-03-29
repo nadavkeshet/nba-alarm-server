@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>Privacy Policy — Clutch Alarm</title>
+  <meta name="description" content="Privacy Policy for Clutch Alarm — the NBA alarm clock app.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg-deep: #060E18;
+      --bg-court: #0B1623;
+      --bg-card: #111E2E;
+      --cyan: #3CBEF0;
+      --white: #F0F2F5;
+      --white-60: rgba(240,242,245,0.6);
+      --white-30: rgba(240,242,245,0.3);
+      --white-10: rgba(240,242,245,0.1);
+      --font-display: 'Bebas Neue', Impact, sans-serif;
+      --font-body: 'DM Sans', -apple-system, sans-serif;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: var(--font-body);
+      background: var(--bg-deep);
+      color: var(--white);
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    [dir="rtl"] { direction: rtl; text-align: right; }
+
+    /* ─── NOISE OVERLAY ─── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    /* ─── NAV ─── */
+    nav {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 100;
+      padding: 16px 32px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      background: rgba(6,14,24,0.75);
+      border-bottom: 1px solid var(--white-10);
+    }
+
+    .nav-logo {
+      font-family: var(--font-display);
+      font-size: 28px;
+      letter-spacing: 2px;
+      color: var(--white);
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .nav-logo .logo-dot {
+      width: 10px; height: 10px;
+      background: var(--cyan);
+      border-radius: 50%;
+      box-shadow: 0 0 12px var(--cyan), 0 0 24px rgba(60,190,240,0.3);
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse-dot {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.4); opacity: 0.7; }
+    }
+
+    .lang-toggle {
+      display: flex;
+      gap: 4px;
+      background: var(--white-10);
+      border-radius: 8px;
+      padding: 3px;
+    }
+
+    .lang-btn {
+      padding: 6px 14px;
+      border: none;
+      border-radius: 6px;
+      font-family: var(--font-body);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      background: transparent;
+      color: var(--white-60);
+      transition: all 0.25s;
+    }
+
+    .lang-btn.active {
+      background: var(--cyan);
+      color: #fff;
+      box-shadow: 0 2px 8px rgba(60,190,240,0.4);
+    }
+
+    /* ─── CONTENT ─── */
+    .policy {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 120px 24px 80px;
+    }
+
+    .policy h1 {
+      font-family: var(--font-display);
+      font-size: clamp(36px, 6vw, 56px);
+      letter-spacing: 2px;
+      margin-bottom: 8px;
+      color: var(--white);
+    }
+
+    .policy .updated {
+      color: var(--white-30);
+      font-size: 14px;
+      margin-bottom: 40px;
+      display: block;
+    }
+
+    .policy .summary {
+      background: var(--bg-card);
+      border: 1px solid var(--white-10);
+      border-radius: 16px;
+      padding: 28px 32px;
+      margin-bottom: 48px;
+      color: var(--white-60);
+      line-height: 1.7;
+      font-size: 15px;
+      border-left: 3px solid var(--cyan);
+    }
+
+    [dir="rtl"] .policy .summary {
+      border-left: none;
+      border-right: 3px solid var(--cyan);
+    }
+
+    .policy h2 {
+      font-family: var(--font-display);
+      font-size: 26px;
+      letter-spacing: 1px;
+      color: var(--cyan);
+      margin-top: 48px;
+      margin-bottom: 16px;
+    }
+
+    .policy p {
+      color: var(--white-60);
+      line-height: 1.75;
+      font-size: 15px;
+      margin-bottom: 16px;
+    }
+
+    .policy ul {
+      list-style: none;
+      margin-bottom: 16px;
+    }
+
+    .policy ul li {
+      color: var(--white-60);
+      line-height: 1.7;
+      font-size: 15px;
+      padding-left: 20px;
+      position: relative;
+      margin-bottom: 10px;
+    }
+
+    [dir="rtl"] .policy ul li { padding-left: 0; padding-right: 20px; }
+
+    .policy ul li::before {
+      content: '›';
+      position: absolute;
+      left: 0;
+      color: var(--cyan);
+      font-weight: 700;
+      font-size: 18px;
+    }
+
+    [dir="rtl"] .policy ul li::before { left: auto; right: 0; }
+
+    .policy strong { color: var(--white); font-weight: 600; }
+
+    .policy a {
+      color: var(--cyan);
+      text-decoration: none;
+    }
+
+    .policy a:hover { text-decoration: underline; }
+
+    /* ─── FOOTER ─── */
+    footer {
+      padding: 40px 24px;
+      text-align: center;
+      border-top: 1px solid var(--white-10);
+      color: var(--white-30);
+      font-size: 14px;
+    }
+
+    footer a {
+      color: var(--cyan);
+      text-decoration: none;
+    }
+
+    /* ─── RESPONSIVE ─── */
+    @media (max-width: 768px) {
+      nav { padding: 12px 16px; }
+      .nav-logo { font-size: 22px; }
+      .policy { padding: 100px 20px 60px; }
+      .policy .summary { padding: 20px 24px; }
+    }
+
+    @media (max-width: 480px) {
+      .lang-btn { padding: 6px 10px; font-size: 13px; }
+      .policy h2 { font-size: 22px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav>
+  <a href="index.html" class="nav-logo">
+    <span class="logo-dot"></span>
+    CLUTCH ALARM
+  </a>
+  <div class="lang-toggle">
+    <button class="lang-btn active" onclick="setLang('en')">EN</button>
+    <button class="lang-btn" onclick="setLang('he')">עב</button>
+  </div>
+</nav>
+
+<div class="policy" id="policy-en">
+  <h1>PRIVACY POLICY</h1>
+  <span class="updated">Last updated: March 20, 2026</span>
+
+  <div class="summary">
+    <strong>Short version:</strong> Clutch Alarm does not collect your name, email address, or any personally identifiable information. The only data stored on our server is an anonymous device token used to send push notifications, and the in-app preferences you configure (favorite teams, players, and alert settings).
+  </div>
+
+  <h2>1. WHO WE ARE</h2>
+  <p>Clutch Alarm is developed by Itamar Kenan and Nadav Keshet. The idea and Android app were created by Nadav Keshet, and the iOS app was developed by Itamar Kenan. If you have any questions about this policy, you can reach us at <a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a>.</p>
+
+  <h2>2. INFORMATION WE COLLECT</h2>
+  <p>We collect only what is strictly necessary to deliver the app's core functionality:</p>
+  <ul>
+    <li><strong>Device Push Token (FCM Token):</strong> A randomly generated, anonymous identifier provided by Google Firebase that allows us to send push notifications to your device. This token is not linked to your name, email, or any other personal data.</li>
+    <li><strong>In-App Preferences:</strong> Settings you configure inside the app — including your favorite NBA teams, favorite players, alert thresholds, and global radar preferences. These are stored on our server solely to restore your preferences across sessions and to power alerts.</li>
+  </ul>
+  <p>We do not collect or store your name, email address, phone number, location, payment information, contacts, or any other personally identifiable information.</p>
+
+  <h2>3. HOW WE USE YOUR INFORMATION</h2>
+  <ul>
+    <li>To deliver real-time push notifications about NBA games and player performance that match your configured preferences.</li>
+    <li>To save and restore your alert settings and favorites between app sessions.</li>
+  </ul>
+  <p>We do not use your information for advertising, profiling, or any purpose other than operating the app's features.</p>
+
+  <h2>4. TRACKING, ANALYTICS & COOKIES</h2>
+  <p>Clutch Alarm does not use any analytics SDKs, tracking pixels, advertising identifiers, or cookies. We do not track your activity across apps or websites. The app does not participate in Apple's App Tracking Transparency framework because there is nothing to track.</p>
+
+  <h2>5. DATA SHARING AND THIRD PARTIES</h2>
+  <p>We do not sell, trade, or rent your information to any third party. The following third-party services are used to operate the app:</p>
+  <ul>
+    <li><strong>Google Firebase (Cloud Messaging):</strong> Used to deliver push notifications. Google may process device identifiers as part of this service. <a href="https://firebase.google.com/support/privacy" target="_blank">Firebase Privacy Policy</a></li>
+    <li><strong>ESPN (Public API):</strong> We fetch publicly available NBA game data from ESPN's API. No user data is sent to ESPN.</li>
+    <li><strong>Railway (Server Hosting):</strong> Our backend server is hosted on Railway.app. Preference data stored on our server resides in Railway's infrastructure. <a href="https://railway.com/legal/privacy" target="_blank">Railway Privacy Policy</a></li>
+  </ul>
+
+  <h2>6. DATA RETENTION</h2>
+  <p>Your push token and preferences are stored on our server for as long as you use the app. Because no account or email is associated with your data, there is no account-deletion flow — your data is identified only by your device's anonymous push token. If you uninstall the app, your token becomes inactive and any associated preferences will no longer be used.</p>
+  <p>If you wish to have your data deleted, email us at <a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a> and we will remove your token and preferences from our server within 30 days.</p>
+
+  <h2>7. PERMISSIONS</h2>
+  <p><strong>Android:</strong></p>
+  <ul>
+    <li><strong>POST_NOTIFICATIONS:</strong> Required to send push notification alerts.</li>
+    <li><strong>WAKE_LOCK / DISABLE_KEYGUARD:</strong> Allows the alarm to wake your screen when a notification arrives.</li>
+    <li><strong>VIBRATE:</strong> Enables vibration with alarm notifications.</li>
+    <li><strong>USE_FULL_SCREEN_INTENT:</strong> Allows notifications to appear on the lock screen in full-screen alarm style.</li>
+  </ul>
+  <p><strong>iOS:</strong></p>
+  <ul>
+    <li><strong>Push Notifications:</strong> Required to deliver game and player alerts.</li>
+    <li><strong>Background Remote Notifications:</strong> Allows the app to process incoming alerts while in the background.</li>
+  </ul>
+  <p>All permissions on both platforms are used solely to deliver alarm notifications. No permission is used to collect personal data.</p>
+
+  <h2>8. INTERNATIONAL DATA TRANSFER</h2>
+  <p>Our server is hosted on Railway.app and may be located outside your country of residence. By using the app, you consent to the transfer and processing of your anonymous device token and preferences on servers that may be in a different jurisdiction. Since no personally identifiable information is collected, the risk associated with this transfer is minimal.</p>
+
+  <h2>9. YOUR RIGHTS</h2>
+  <p>Depending on your location, you may have the right to:</p>
+  <ul>
+    <li><strong>Access:</strong> Request a copy of the data we hold about your device token.</li>
+    <li><strong>Deletion:</strong> Request that we delete all data associated with your device token.</li>
+    <li><strong>Portability:</strong> Receive your stored preferences in a machine-readable format.</li>
+  </ul>
+  <p>Since we identify users only by anonymous push token, we may ask you to provide your token (available in the app's Settings screen) to locate your data. To exercise any of these rights, email <a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a>.</p>
+
+  <h2>10. CHILDREN'S PRIVACY</h2>
+  <p>Clutch Alarm is not directed at children under the age of 13. We do not knowingly collect personal information from children. If you believe a child has provided information through the app, please contact us and we will delete it promptly.</p>
+
+  <h2>11. SECURITY</h2>
+  <p>We take reasonable technical measures to protect the data stored on our server. The anonymous nature of our data (no names, emails, or passwords) significantly limits the risk of a data breach affecting your personal information.</p>
+
+  <h2>12. CHANGES TO THIS POLICY</h2>
+  <p>We may update this Privacy Policy from time to time. When we do, we will update the "Last updated" date at the top of this page. Continued use of the app after changes are posted constitutes your acceptance of the updated policy.</p>
+
+  <h2>13. CONTACT US</h2>
+  <p>If you have any questions, concerns, or data deletion requests, please contact us:</p>
+  <p><a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a></p>
+</div>
+
+<div class="policy" id="policy-he" style="display:none;">
+  <h1>מדיניות פרטיות</h1>
+  <span class="updated">עדכון אחרון: 20 במרץ 2026</span>
+
+  <div class="summary">
+    <strong>בקצרה:</strong> Clutch Alarm לא אוספת את שמך, כתובת האימייל שלך או כל מידע מזהה אישית. המידע היחיד שנשמר בשרת שלנו הוא טוקן מכשיר אנונימי המשמש לשליחת התראות, וההעדפות שאתה מגדיר באפליקציה (קבוצות מועדפות, שחקנים והגדרות התראה).
+  </div>
+
+  <h2>1. מי אנחנו</h2>
+  <p>Clutch Alarm פותחה על ידי איתמר קינן ונדב קשת. הרעיון ואפליקציית האנדרואיד נוצרו על ידי נדב קשת, ואפליקציית ה-iOS פותחה על ידי איתמר קינן. לשאלות בנוגע למדיניות זו, ניתן לפנות אלינו בכתובת <a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a>.</p>
+
+  <h2>2. מידע שאנו אוספים</h2>
+  <p>אנו אוספים רק את מה שנדרש לתפקוד הליבה של האפליקציה:</p>
+  <ul>
+    <li><strong>טוקן התראות מכשיר (FCM Token):</strong> מזהה אנונימי שנוצר באופן אקראי על ידי Google Firebase, המאפשר לנו לשלוח התראות למכשיר שלך. טוקן זה אינו מקושר לשמך, אימייל או כל מידע אישי אחר.</li>
+    <li><strong>העדפות באפליקציה:</strong> הגדרות שאתה מגדיר באפליקציה — כולל קבוצות NBA מועדפות, שחקנים מועדפים, ספי התראה והגדרות רדאר גלובלי. אלו נשמרות בשרת שלנו אך ורק לשחזור ההעדפות שלך בין הפעלות ולהפעלת התראות.</li>
+  </ul>
+  <p>איננו אוספים או שומרים את שמך, כתובת אימייל, מספר טלפון, מיקום, פרטי תשלום, אנשי קשר או כל מידע מזהה אישית אחר.</p>
+
+  <h2>3. כיצד אנו משתמשים במידע שלך</h2>
+  <ul>
+    <li>למשלוח התראות בזמן אמת על משחקי NBA וביצועי שחקנים התואמים להעדפות שהגדרת.</li>
+    <li>לשמירה ושחזור הגדרות ההתראה והמועדפים שלך בין הפעלות.</li>
+  </ul>
+  <p>איננו משתמשים במידע שלך לפרסום, פרופיילינג או כל מטרה אחרת מלבד הפעלת תכונות האפליקציה.</p>
+
+  <h2>4. מעקב, אנליטיקס ועוגיות</h2>
+  <p>Clutch Alarm אינה משתמשת ב-SDK של אנליטיקס, פיקסלי מעקב, מזהי פרסום או עוגיות. איננו עוקבים אחרי הפעילות שלך בין אפליקציות או אתרים. האפליקציה אינה משתתפת ב-App Tracking Transparency של Apple כי אין מה לעקוב.</p>
+
+  <h2>5. שיתוף מידע וצדדים שלישיים</h2>
+  <p>איננו מוכרים, סוחרים או משכירים את המידע שלך לכל צד שלישי. השירותים הבאים של צדדים שלישיים משמשים להפעלת האפליקציה:</p>
+  <ul>
+    <li><strong>Google Firebase (Cloud Messaging):</strong> משמש למשלוח התראות. Google עשויה לעבד מזהי מכשיר כחלק משירות זה. <a href="https://firebase.google.com/support/privacy" target="_blank">מדיניות הפרטיות של Firebase</a></li>
+    <li><strong>ESPN (API ציבורי):</strong> אנו מושכים נתוני משחקי NBA זמינים לציבור מה-API של ESPN. שום מידע משתמש לא נשלח ל-ESPN.</li>
+    <li><strong>Railway (אירוח שרת):</strong> שרת הגב שלנו מתארח ב-Railway.app. נתוני העדפות המאוחסנים בשרת שלנו שוכנים בתשתית של Railway. <a href="https://railway.com/legal/privacy" target="_blank">מדיניות הפרטיות של Railway</a></li>
+  </ul>
+
+  <h2>6. שמירת מידע</h2>
+  <p>טוקן ההתראות וההעדפות שלך נשמרים בשרת שלנו כל עוד אתה משתמש באפליקציה. מכיוון שאין חשבון או אימייל משויך למידע שלך, אין תהליך מחיקת חשבון — המידע שלך מזוהה רק על ידי טוקן ההתראות האנונימי של המכשיר. אם תסיר את האפליקציה, הטוקן שלך הופך ללא פעיל וכל ההעדפות המשויכות לא ישמשו עוד.</p>
+  <p>אם ברצונך למחוק את המידע שלך, שלח אימייל ל-<a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a> ונסיר את הטוקן וההעדפות שלך מהשרת תוך 30 יום.</p>
+
+  <h2>7. הרשאות</h2>
+  <p><strong>אנדרואיד:</strong></p>
+  <ul>
+    <li><strong>POST_NOTIFICATIONS:</strong> נדרשת לשליחת התראות.</li>
+    <li><strong>WAKE_LOCK / DISABLE_KEYGUARD:</strong> מאפשרת לאזעקה להעיר את המסך כשמגיעה התראה.</li>
+    <li><strong>VIBRATE:</strong> מאפשרת רטט עם התראות אזעקה.</li>
+    <li><strong>USE_FULL_SCREEN_INTENT:</strong> מאפשרת להתראות להופיע על מסך הנעילה בסגנון אזעקת מסך מלא.</li>
+  </ul>
+  <p><strong>iOS:</strong></p>
+  <ul>
+    <li><strong>התראות Push:</strong> נדרשות למשלוח התראות על משחקים ושחקנים.</li>
+    <li><strong>התראות רקע מרוחקות:</strong> מאפשרות לאפליקציה לעבד התראות נכנסות ברקע.</li>
+  </ul>
+  <p>כל ההרשאות בשתי הפלטפורמות משמשות אך ורק למשלוח התראות אזעקה. שום הרשאה אינה משמשת לאיסוף מידע אישי.</p>
+
+  <h2>8. העברת מידע בינלאומית</h2>
+  <p>השרת שלנו מתארח ב-Railway.app ועשוי להיות ממוקם מחוץ למדינת מגוריך. השימוש באפליקציה מהווה הסכמה להעברה ועיבוד של טוקן המכשיר האנונימי וההעדפות שלך בשרתים שעשויים להיות בתחום שיפוט אחר. מכיוון שלא נאסף מידע מזהה אישית, הסיכון הקשור להעברה זו מינימלי.</p>
+
+  <h2>9. הזכויות שלך</h2>
+  <p>בהתאם למיקומך, ייתכן שיש לך זכות:</p>
+  <ul>
+    <li><strong>גישה:</strong> לבקש עותק של המידע שאנו מחזיקים על טוקן המכשיר שלך.</li>
+    <li><strong>מחיקה:</strong> לבקש שנמחק את כל המידע המשויך לטוקן המכשיר שלך.</li>
+    <li><strong>ניידות:</strong> לקבל את ההעדפות השמורות שלך בפורמט קריא למכונה.</li>
+  </ul>
+  <p>מכיוון שאנו מזהים משתמשים רק לפי טוקן Push אנונימי, ייתכן שנבקש ממך לספק את הטוקן שלך (זמין במסך ההגדרות של האפליקציה) כדי לאתר את המידע שלך. למימוש זכויות אלו, שלח אימייל ל-<a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a>.</p>
+
+  <h2>10. פרטיות ילדים</h2>
+  <p>Clutch Alarm אינה מיועדת לילדים מתחת לגיל 13. איננו אוספים ביודעין מידע אישי מילדים. אם אתה מאמין שילד סיפק מידע דרך האפליקציה, אנא צור איתנו קשר ונמחק אותו באופן מיידי.</p>
+
+  <h2>11. אבטחה</h2>
+  <p>אנו נוקטים באמצעים טכניים סבירים להגנה על המידע המאוחסן בשרת שלנו. האופי האנונימי של המידע שלנו (ללא שמות, אימיילים או סיסמאות) מפחית משמעותית את הסיכון שפריצת נתונים תשפיע על המידע האישי שלך.</p>
+
+  <h2>12. שינויים במדיניות זו</h2>
+  <p>אנו עשויים לעדכן מדיניות פרטיות זו מעת לעת. כאשר נעשה זאת, נעדכן את תאריך "עדכון אחרון" בראש עמוד זה. המשך השימוש באפליקציה לאחר פרסום שינויים מהווה את הסכמתך למדיניות המעודכנת.</p>
+
+  <h2>13. צור קשר</h2>
+  <p>לשאלות, חששות או בקשות מחיקת מידע, אנא פנה אלינו:</p>
+  <p><a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a></p>
+</div>
+
+<footer>
+  <p><a href="index.html" data-i18n="backHome"></a> &mdash; Clutch Alarm &copy; 2025</p>
+</footer>
+
+<script>
+const footerText = {
+  en: 'Back to Home',
+  he: 'חזרה לדף הבית'
+};
+
+let currentLang = 'en';
+
+function setLang(lang) {
+  currentLang = lang;
+  document.documentElement.lang = lang;
+  document.documentElement.dir = lang === 'he' ? 'rtl' : 'ltr';
+
+  document.querySelectorAll('.lang-btn').forEach(btn => {
+    btn.classList.toggle('active',
+      (lang === 'en' && btn.textContent === 'EN') ||
+      (lang === 'he' && btn.textContent === 'עב')
+    );
+  });
+
+  document.getElementById('policy-en').style.display = lang === 'en' ? 'block' : 'none';
+  document.getElementById('policy-he').style.display = lang === 'he' ? 'block' : 'none';
+
+  document.querySelector('[data-i18n="backHome"]').textContent = footerText[lang];
+}
+
+// Auto-detect language
+const browserLang = (navigator.language || navigator.userLanguage || 'en').toLowerCase();
+const detectedLang = browserLang.startsWith('he') ? 'he' : 'en';
+setLang(detectedLang);
+</script>
+
+</body>
+</html>
+<!-- deployed Sun Mar 29 20:09:36 IDT 2026 -->

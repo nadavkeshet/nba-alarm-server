@@ -1,4 +1,4 @@
-## NBA Smart Alarm – System Flow
+## Clutch Alarm – System Flow
 
 Paste this into https://mermaid.live
 

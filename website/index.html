@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>Clutch Alarm — Never Miss a Clutch Moment</title>
+  <meta name="description" content="An alarm clock for NBA fans. Go to sleep and let the app wake you up when games get close, players go off, or history is being made.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg-deep: #060E18;
+      --bg-court: #0B1623;
+      --bg-card: #111E2E;
+      --bg-card-hover: #162840;
+      --orange: #3CBEF0;
+      --orange-glow: #5DD4FF;
+      --amber: #7EE0FF;
+      --white: #F0F2F5;
+      --white-60: rgba(240,242,245,0.6);
+      --white-30: rgba(240,242,245,0.3);
+      --white-10: rgba(240,242,245,0.1);
+      --font-display: 'Bebas Neue', Impact, sans-serif;
+      --font-body: 'DM Sans', -apple-system, sans-serif;
+      --max-w: 1200px;
+      --radius: 16px;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: var(--font-body);
+      background: var(--bg-deep);
+      color: var(--white);
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    [dir="rtl"] { direction: rtl; text-align: right; }
+    [dir="rtl"] .feature-icon { margin-right: 0; margin-left: auto; }
+
+    /* ─── NOISE OVERLAY ─── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    /* ─── NAV ─── */
+    nav {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 100;
+      padding: 16px 32px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      background: rgba(6,14,24,0.75);
+      border-bottom: 1px solid var(--white-10);
+      transition: background 0.3s;
+    }
+
+    .nav-logo {
+      font-family: var(--font-display);
+      font-size: 28px;
+      letter-spacing: 2px;
+      color: var(--white);
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .nav-logo .logo-dot {
+      width: 10px; height: 10px;
+      background: var(--orange);
+      border-radius: 50%;
+      box-shadow: 0 0 12px var(--orange), 0 0 24px rgba(60,190,240,0.3);
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse-dot {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.4); opacity: 0.7; }
+    }
+
+    .lang-toggle {
+      display: flex;
+      gap: 4px;
+      background: var(--white-10);
+      border-radius: 8px;
+      padding: 3px;
+    }
+
+    .lang-btn {
+      padding: 6px 14px;
+      border: none;
+      border-radius: 6px;
+      font-family: var(--font-body);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      background: transparent;
+      color: var(--white-60);
+      transition: all 0.25s;
+    }
+
+    .lang-btn.active {
+      background: var(--orange);
+      color: #fff;
+      box-shadow: 0 2px 8px rgba(60,190,240,0.4);
+    }
+
+    /* ─── HERO ─── */
+    .hero {
+      position: relative;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      padding: 120px 24px 80px;
+      overflow: hidden;
+    }
+
+    /* Court lines background */
+    .hero::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 600px 600px at 50% 55%, rgba(60,190,240,0.06) 0%, transparent 70%),
+        radial-gradient(circle at 50% 50%, transparent 199px, rgba(60,190,240,0.03) 200px, rgba(60,190,240,0.03) 201px, transparent 202px),
+        linear-gradient(90deg, transparent calc(50% - 1px), rgba(60,190,240,0.04) calc(50% - 1px), rgba(60,190,240,0.04) calc(50% + 1px), transparent calc(50% + 1px));
+      pointer-events: none;
+    }
+
+    /* Floating basketball SVGs */
+    .hero-ball {
+      position: absolute;
+      opacity: 0.04;
+      animation: float 20s ease-in-out infinite;
+    }
+    .hero-ball:nth-child(1) { top: 10%; left: 8%; width: 180px; animation-delay: 0s; }
+    .hero-ball:nth-child(2) { bottom: 15%; right: 5%; width: 120px; animation-delay: -7s; }
+    .hero-ball:nth-child(3) { top: 40%; right: 15%; width: 80px; animation-delay: -13s; }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0) rotate(0deg); }
+      33% { transform: translateY(-25px) rotate(8deg); }
+      66% { transform: translateY(15px) rotate(-5deg); }
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 20px;
+      border: 1px solid var(--orange);
+      border-radius: 100px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--orange);
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      margin-bottom: 32px;
+      backdrop-filter: blur(8px);
+      background: rgba(60,190,240,0.08);
+      animation: fadeUp 0.8s ease-out both;
+    }
+
+    .hero-badge .badge-live {
+      width: 8px; height: 8px;
+      background: var(--orange);
+      border-radius: 50%;
+      animation: pulse-dot 1.5s infinite;
+    }
+
+    .hero h1 {
+      font-family: var(--font-display);
+      font-size: clamp(56px, 10vw, 120px);
+      line-height: 0.92;
+      letter-spacing: 3px;
+      margin-bottom: 24px;
+      animation: fadeUp 0.8s 0.15s ease-out both;
+    }
+
+    .hero h1 .highlight {
+      color: var(--orange);
+      position: relative;
+      display: inline-block;
+    }
+
+    .hero h1 .highlight::after {
+      content: '';
+      position: absolute;
+      bottom: 2px; left: -4px; right: -4px;
+      height: 6px;
+      background: var(--orange);
+      opacity: 0.25;
+      border-radius: 3px;
+    }
+
+    .hero-sub {
+      font-size: clamp(16px, 2.2vw, 21px);
+      color: var(--white-60);
+      max-width: 560px;
+      line-height: 1.6;
+      margin-bottom: 48px;
+      animation: fadeUp 0.8s 0.3s ease-out both;
+    }
+
+    .hero-stores {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      justify-content: center;
+      animation: fadeUp 0.8s 0.45s ease-out both;
+    }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(28px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ─── STORE BUTTONS ─── */
+    .store-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 28px;
+      background: var(--white);
+      color: #111;
+      border-radius: 14px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 15px;
+      transition: transform 0.2s, box-shadow 0.2s;
+      border: none;
+      cursor: default;
+    }
+
+    .store-btn:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 30px rgba(60,190,240,0.2);
+    }
+
+    .store-btn svg { flex-shrink: 0; }
+
+    .store-btn .store-text { text-align: left; line-height: 1.2; }
+    [dir="rtl"] .store-btn .store-text { text-align: right; }
+    .store-btn .store-label { font-size: 11px; font-weight: 400; color: #555; }
+    .store-btn .store-name { font-size: 17px; font-weight: 700; }
+    .store-btn .coming-soon {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--orange);
+      background: rgba(60,190,240,0.12);
+      padding: 3px 8px;
+      border-radius: 4px;
+      margin-top: 2px;
+      display: inline-block;
+    }
+
+    .android-note {
+      color: var(--white-30);
+      font-size: 13px;
+      margin-top: 12px;
+      line-height: 1.5;
+    }
+
+    /* ─── SECTION BASE ─── */
+    section {
+      padding: 100px 24px;
+      position: relative;
+    }
+
+    .section-inner {
+      max-width: var(--max-w);
+      margin: 0 auto;
+    }
+
+    .section-label {
+      font-family: var(--font-display);
+      font-size: 14px;
+      letter-spacing: 3px;
+      color: var(--orange);
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+
+    .section-title {
+      font-family: var(--font-display);
+      font-size: clamp(36px, 5vw, 64px);
+      letter-spacing: 2px;
+      line-height: 1;
+      margin-bottom: 56px;
+    }
+
+    /* ─── FEATURES ─── */
+    .features-section {
+      background: var(--bg-court);
+      border-top: 1px solid var(--white-10);
+      border-bottom: 1px solid var(--white-10);
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 24px;
+    }
+
+    .feature-card {
+      background: var(--bg-card);
+      border: 1px solid var(--white-10);
+      border-radius: var(--radius);
+      padding: 36px 32px;
+      transition: transform 0.3s, border-color 0.3s, background 0.3s;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .feature-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--orange), var(--amber));
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .feature-card:hover {
+      transform: translateY(-4px);
+      border-color: rgba(60,190,240,0.3);
+      background: var(--bg-card-hover);
+    }
+
+    .feature-card:hover::before { opacity: 1; }
+
+    .feature-icon {
+      width: 52px; height: 52px;
+      border-radius: 14px;
+      background: rgba(60,190,240,0.1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      margin-bottom: 20px;
+      border: 1px solid rgba(60,190,240,0.15);
+    }
+
+    .feature-card h3 {
+      font-family: var(--font-display);
+      font-size: 24px;
+      letter-spacing: 1px;
+      margin-bottom: 10px;
+    }
+
+    .feature-card p {
+      color: var(--white-60);
+      line-height: 1.65;
+      font-size: 15px;
+    }
+
+    /* ─── HOW IT WORKS ─── */
+    .how-section {
+      background: var(--bg-deep);
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 40px;
+      counter-reset: step;
+    }
+
+    .step {
+      position: relative;
+      padding-top: 64px;
+    }
+
+    .step::before {
+      counter-increment: step;
+      content: counter(step);
+      position: absolute;
+      top: 0; left: 0;
+      font-family: var(--font-display);
+      font-size: 56px;
+      color: var(--orange);
+      opacity: 0.2;
+      line-height: 1;
+    }
+
+    [dir="rtl"] .step::before { left: auto; right: 0; }
+
+    .step h3 {
+      font-family: var(--font-display);
+      font-size: 22px;
+      letter-spacing: 1px;
+      margin-bottom: 10px;
+    }
+
+    .step p {
+      color: var(--white-60);
+      line-height: 1.6;
+      font-size: 15px;
+    }
+
+    /* ─── NOTIFICATION SECTION ─── */
+    .notif-section {
+      background: var(--bg-court);
+      border-top: 1px solid var(--white-10);
+      border-bottom: 1px solid var(--white-10);
+    }
+
+    .notif-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 32px;
+      align-items: start;
+    }
+
+    .notif-card {
+      background: var(--bg-card);
+      border: 1px solid var(--white-10);
+      border-radius: var(--radius);
+      padding: 32px;
+    }
+
+    .notif-card h3 {
+      font-family: var(--font-display);
+      font-size: 22px;
+      letter-spacing: 1px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .notif-card ul {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .notif-card li {
+      color: var(--white-60);
+      line-height: 1.55;
+      font-size: 15px;
+      padding-left: 24px;
+      position: relative;
+    }
+
+    [dir="rtl"] .notif-card li { padding-left: 0; padding-right: 24px; }
+
+    .notif-card li::before {
+      content: '→';
+      position: absolute;
+      left: 0;
+      color: var(--orange);
+      font-weight: 700;
+    }
+
+    [dir="rtl"] .notif-card li::before { left: auto; right: 0; content: '←'; }
+
+    /* ─── CTA ─── */
+    .cta-section {
+      text-align: center;
+      padding: 120px 24px;
+      position: relative;
+    }
+
+    .cta-section::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse at center, rgba(60,190,240,0.08) 0%, transparent 60%);
+      pointer-events: none;
+    }
+
+    .cta-section .section-title { margin-bottom: 20px; }
+
+    .cta-sub {
+      color: var(--white-60);
+      font-size: 18px;
+      margin-bottom: 40px;
+      max-width: 480px;
+      margin-left: auto;
+      margin-right: auto;
+      line-height: 1.6;
+    }
+
+    .cta-stores {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    /* ─── FOOTER ─── */
+    footer {
+      padding: 40px 24px;
+      text-align: center;
+      border-top: 1px solid var(--white-10);
+      color: var(--white-30);
+      font-size: 14px;
+    }
+
+    footer a {
+      color: var(--orange);
+      text-decoration: none;
+    }
+
+    /* ─── SCROLL REVEAL ─── */
+    .reveal {
+      opacity: 0;
+      transform: translateY(32px);
+      transition: opacity 0.7s ease-out, transform 0.7s ease-out;
+    }
+
+    .reveal.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* ─── RESPONSIVE ─── */
+    @media (max-width: 768px) {
+      nav { padding: 12px 16px; }
+      .nav-logo { font-size: 22px; }
+      section { padding: 72px 20px; }
+      .features-grid { grid-template-columns: 1fr; }
+      .notif-grid { grid-template-columns: 1fr; }
+      .steps { grid-template-columns: 1fr 1fr; gap: 28px; }
+      .hero { padding: 100px 20px 60px; min-height: auto; min-height: 100dvh; }
+      .hero h1 { font-size: clamp(42px, 12vw, 72px); }
+      .hero-sub { font-size: 16px; }
+      .section-title { margin-bottom: 36px; }
+      .feature-card { padding: 28px 24px; }
+      .cta-section { padding: 80px 20px; }
+    }
+
+    @media (max-width: 480px) {
+      .steps { grid-template-columns: 1fr; }
+      .store-btn { width: 100%; justify-content: center; }
+      .hero-stores, .cta-stores { flex-direction: column; align-items: stretch; }
+      .hero { padding: 90px 16px 48px; }
+      .hero-badge { font-size: 11px; padding: 6px 14px; }
+      .hero h1 { font-size: clamp(36px, 14vw, 56px); letter-spacing: 1px; }
+      .hero-sub { font-size: 15px; margin-bottom: 32px; }
+      .lang-toggle { gap: 2px; }
+      .lang-btn { padding: 6px 10px; font-size: 13px; }
+      .notif-card { padding: 24px 20px; }
+      .step { padding-top: 48px; }
+      .step::before { font-size: 42px; }
+      .android-note { font-size: 12px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Basketball SVG template -->
+<svg style="display:none">
+  <symbol id="basketball" viewBox="0 0 100 100">
+    <circle cx="50" cy="50" r="48" fill="none" stroke="currentColor" stroke-width="2"/>
+    <path d="M2 50 H98 M50 2 V98 M15 15 Q50 45 85 15 M15 85 Q50 55 85 85" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  </symbol>
+</svg>
+
+<!-- ─── NAV ─── -->
+<nav>
+  <a href="#" class="nav-logo">
+    <span class="logo-dot"></span>
+    CLUTCH ALARM
+  </a>
+  <div class="lang-toggle">
+    <button class="lang-btn active" onclick="setLang('en')">EN</button>
+    <button class="lang-btn" onclick="setLang('he')">עב</button>
+  </div>
+</nav>
+
+<!-- ─── HERO ─── -->
+<section class="hero">
+  <svg class="hero-ball" aria-hidden="true"><use href="#basketball"/></svg>
+  <svg class="hero-ball" aria-hidden="true"><use href="#basketball"/></svg>
+  <svg class="hero-ball" aria-hidden="true"><use href="#basketball"/></svg>
+
+  <div class="hero-badge">
+    <span class="badge-live"></span>
+    <span data-i18n="heroBadge"></span>
+  </div>
+  <h1><span data-i18n="heroTitle1"></span><br><span class="highlight" data-i18n="heroTitle2"></span></h1>
+  <p class="hero-sub" data-i18n="heroSub"></p>
+  <div class="hero-stores">
+    <div class="store-btn" aria-label="Google Play">
+      <svg width="28" height="28" viewBox="0 0 24 24"><path fill="#111" d="M3.61 1.814L13.793 12 3.61 22.186a.996.996 0 0 1-.61-.92V2.734c0-.382.218-.72.61-.92zM14.5 12.707l2.735 2.735-9.742 5.462L14.5 12.707zm3.442-3.442L20.7 11.15c.58.335.58.872 0 1.207l-2.758 1.885-2.928-2.928 2.928-2.049zM7.493 3.096l9.742 5.462L14.5 11.293 7.493 3.096z"/></svg>
+      <div class="store-text">
+        <div class="store-name">Google Play</div>
+        <div class="coming-soon" data-i18n="comingSoon"></div>
+      </div>
+    </div>
+    <div class="store-btn" aria-label="App Store">
+      <svg width="24" height="28" viewBox="0 0 18 22"><path fill="#111" d="M14.94 5.28C14.05 4.19 12.78 3.6 11.47 3.6c-1.7.08-3.32 1.12-4.18 1.12-.9 0-2.24-1.06-3.72-1.03A5.46 5.46 0 0 0 .93 5.56C-.74 8.27.38 12.28 1.98 14.49c.79 1.08 1.71 2.29 2.93 2.25 1.19-.05 1.63-.73 3.07-.73s1.84.73 3.08.7c1.27-.02 2.06-1.08 2.83-2.17.56-.78.99-1.67 1.27-2.6a4.78 4.78 0 0 1-2.89-4.39c0-1.77.96-3.4 2.49-4.27zM12.23.37A4.77 4.77 0 0 1 11.13 4a4.17 4.17 0 0 1-2.79-1.37A4.5 4.5 0 0 1 9.49.03a4.82 4.82 0 0 1 2.74.34z"/></svg>
+      <div class="store-text">
+        <div class="store-name">App Store</div>
+        <div class="coming-soon" data-i18n="comingSoon"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── FEATURES ─── -->
+<section class="features-section">
+  <div class="section-inner">
+    <div class="section-label reveal" data-i18n="featLabel"></div>
+    <h2 class="section-title reveal" data-i18n="featTitle"></h2>
+    <div class="features-grid">
+
+      <div class="feature-card reveal">
+        <div class="feature-icon">🏀</div>
+        <h3 data-i18n="feat1Title"></h3>
+        <p data-i18n="feat1Desc"></p>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="feature-icon">👤</div>
+        <h3 data-i18n="feat2Title"></h3>
+        <p data-i18n="feat2Desc"></p>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="feature-icon">📡</div>
+        <h3 data-i18n="feat3Title"></h3>
+        <p data-i18n="feat3Desc"></p>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="feature-icon">🔔</div>
+        <h3 data-i18n="feat4Title"></h3>
+        <p data-i18n="feat4Desc"></p>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="feature-icon">⭐</div>
+        <h3 data-i18n="feat5Title"></h3>
+        <p data-i18n="feat5Desc"></p>
+      </div>
+
+      <div class="feature-card reveal">
+        <div class="feature-icon">🏆</div>
+        <h3 data-i18n="feat6Title"></h3>
+        <p data-i18n="feat6Desc"></p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ─── HOW IT WORKS ─── -->
+<section class="how-section">
+  <div class="section-inner">
+    <div class="section-label reveal" data-i18n="howLabel"></div>
+    <h2 class="section-title reveal" data-i18n="howTitle"></h2>
+    <div class="steps">
+      <div class="step reveal">
+        <h3 data-i18n="step1Title"></h3>
+        <p data-i18n="step1Desc"></p>
+      </div>
+      <div class="step reveal">
+        <h3 data-i18n="step2Title"></h3>
+        <p data-i18n="step2Desc"></p>
+      </div>
+      <div class="step reveal">
+        <h3 data-i18n="step3Title"></h3>
+        <p data-i18n="step3Desc"></p>
+      </div>
+      <div class="step reveal">
+        <h3 data-i18n="step4Title"></h3>
+        <p data-i18n="step4Desc"></p>
+      </div>
+    </div>
+    <p class="android-note reveal" data-i18n="androidNote"></p>
+  </div>
+</section>
+
+<!-- ─── NOTIFICATIONS ─── -->
+<section class="notif-section">
+  <div class="section-inner">
+    <div class="section-label reveal" data-i18n="notifLabel"></div>
+    <h2 class="section-title reveal" data-i18n="notifTitle"></h2>
+    <div class="notif-grid">
+      <div class="notif-card reveal">
+        <h3>🔔 <span data-i18n="notifAlarmTitle"></span></h3>
+        <ul>
+          <li data-i18n="notifAlarm1"></li>
+          <li data-i18n="notifAlarm2"></li>
+          <li data-i18n="notifAlarm3"></li>
+        </ul>
+      </div>
+      <div class="notif-card reveal">
+        <h3>🔕 <span data-i18n="notifSilentTitle"></span></h3>
+        <ul>
+          <li data-i18n="notifSilent1"></li>
+          <li data-i18n="notifSilent2"></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── CTA ─── -->
+<section class="cta-section">
+  <div class="section-inner">
+    <div class="section-label reveal" data-i18n="ctaLabel"></div>
+    <h2 class="section-title reveal" data-i18n="ctaTitle"></h2>
+    <p class="cta-sub reveal" data-i18n="ctaSub"></p>
+    <div class="cta-stores reveal">
+      <div class="store-btn" aria-label="Google Play">
+        <svg width="28" height="28" viewBox="0 0 24 24"><path fill="#111" d="M3.61 1.814L13.793 12 3.61 22.186a.996.996 0 0 1-.61-.92V2.734c0-.382.218-.72.61-.92zM14.5 12.707l2.735 2.735-9.742 5.462L14.5 12.707zm3.442-3.442L20.7 11.15c.58.335.58.872 0 1.207l-2.758 1.885-2.928-2.928 2.928-2.049zM7.493 3.096l9.742 5.462L14.5 11.293 7.493 3.096z"/></svg>
+        <div class="store-text">
+          <div class="store-name">Google Play</div>
+          <div class="coming-soon" data-i18n="comingSoon"></div>
+        </div>
+      </div>
+      <div class="store-btn" aria-label="App Store">
+        <svg width="24" height="28" viewBox="0 0 18 22"><path fill="#111" d="M14.94 5.28C14.05 4.19 12.78 3.6 11.47 3.6c-1.7.08-3.32 1.12-4.18 1.12-.9 0-2.24-1.06-3.72-1.03A5.46 5.46 0 0 0 .93 5.56C-.74 8.27.38 12.28 1.98 14.49c.79 1.08 1.71 2.29 2.93 2.25 1.19-.05 1.63-.73 3.07-.73s1.84.73 3.08.7c1.27-.02 2.06-1.08 2.83-2.17.56-.78.99-1.67 1.27-2.6a4.78 4.78 0 0 1-2.89-4.39c0-1.77.96-3.4 2.49-4.27zM12.23.37A4.77 4.77 0 0 1 11.13 4a4.17 4.17 0 0 1-2.79-1.37A4.5 4.5 0 0 1 9.49.03a4.82 4.82 0 0 1 2.74.34z"/></svg>
+        <div class="store-text">
+          <div class="store-name">App Store</div>
+          <div class="coming-soon" data-i18n="comingSoon"></div>
+        </div>
+      </div>
+    </div>
+    <p class="android-note reveal" style="margin-top: 24px;" data-i18n="ctaAndroidNote"></p>
+  </div>
+</section>
+
+<!-- ─── FOOTER ─── -->
+<footer>
+  <p data-i18n="footer"></p>
+</footer>
+
+<script>
+const i18n = {
+  en: {
+    heroBadge: 'NBA Alarm Clock',
+    heroTitle1: 'NEVER MISS A',
+    heroTitle2: 'CLUTCH MOMENT',
+    heroSub: 'An alarm clock for NBA fans. Fall asleep and let the app wake you up when a game gets close, a player goes off, or history is being made — even if your phone is on silent.*',
+    comingSoon: 'Coming Soon',
+
+    featLabel: 'Features',
+    featTitle: 'EVERYTHING YOU NEED TO STAY IN THE GAME',
+    feat1Title: 'GAME ALARMS',
+    feat1Desc: 'Set a score gap threshold and a starting quarter. When any game gets within your range, the alarm fires — even if your phone is on silent.*',
+    feat2Title: 'PLAYER ALARMS',
+    feat2Desc: 'Track individual players with Points Goal, Early Scorer detection, and Triple-Double Watch. Each condition fires independently.',
+    feat3Title: 'GLOBAL RADAR',
+    feat3Desc: 'The app continuously scans the entire league. Any game that meets your criteria triggers an alert — no manual setup needed.',
+    feat4Title: 'ALARM NOTIFICATIONS',
+    feat4Desc: 'Full-screen alerts that bypass silent mode and Do Not Disturb.* Your screen wakes up, a loud alarm plays through the system alarm channel.',
+    feat5Title: 'FAVORITE TEAMS & PLAYERS',
+    feat5Desc: 'Save your favorite teams and players with custom thresholds. The app monitors every game they play, automatically.',
+    feat6Title: 'HISTORICAL MODE',
+    feat6Desc: 'Get alerted for once-in-a-generation stat lines: 40+ points before halftime, 12+ three-pointers, or a Quad-Double threat developing.',
+
+    howLabel: 'How It Works',
+    howTitle: 'FROM SETUP TO CLUTCH ALERT IN SECONDS',
+    step1Title: 'PICK A GAME',
+    step1Desc: 'Browse today\'s NBA schedule. Tap any live or upcoming game to set up your alarm.',
+    step2Title: 'SET YOUR CONDITIONS',
+    step2Desc: 'Choose a score gap, a player stat milestone, or let the radar handle it. Mix and match — each condition fires on its own.',
+    step3Title: 'GO TO SLEEP',
+    step3Desc: 'Our server monitors every game in real-time. You don\'t need the app open — put your phone down and rest. We\'ll wake you when it matters.',
+    step4Title: 'GET THE ALERT',
+    step4Desc: 'When your condition is met, a full-screen notification wakes your device with a loud alarm — even on silent or Do Not Disturb.*',
+    androidNote: '* Silent mode & DND bypass, full-screen alerts, and screen wake are Android-only features.',
+
+    notifLabel: 'Notifications',
+    notifTitle: 'TWO MODES, YOUR CHOICE',
+    notifAlarmTitle: 'Alarm Mode',
+    notifAlarm1: 'Looping alarm sound plays even if your phone is on silent or vibrate*',
+    notifAlarm2: 'Screen wakes up and shows a full-screen notification on your lock screen*',
+    notifAlarm3: 'Bypasses Do Not Disturb — routes through the system alarm channel*',
+    notifSilentTitle: 'Silent Mode',
+    notifSilent1: 'A regular push notification with game or player details',
+    notifSilent2: 'No sound — perfect for when you\'re in a meeting but still want updates',
+
+    ctaLabel: 'Download',
+    ctaTitle: 'READY TO CATCH EVERY CLUTCH MOMENT?',
+    ctaSub: 'Free to download. Set your first alarm in under 30 seconds.',
+    ctaAndroidNote: '* Silent mode & DND bypass, full-screen alerts, and screen wake are Android-only features.',
+    footer: 'Clutch Alarm &copy; 2025 &mdash; <a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a> &mdash; <a href="privacy.html" target="_blank">Privacy Policy</a><br><span style="font-size:11px;opacity:0.5">Not affiliated with, endorsed by, or connected to the National Basketball Association (NBA) or any of its teams.<br>All NBA-related names and marks are the property of their respective owners. Game data provided by publicly available sources.</span>'
+  },
+  he: {
+    heroBadge: 'שעון מעורר NBA',
+    heroTitle1: 'לעולם אל תפספס',
+    heroTitle2: 'רגע קלאצ\'',
+    heroSub: 'שעון מעורר לאוהדי NBA. תירדם בשקט ותן לאפליקציה להעיר אותך כשהמשחק מתחמם, שחקן משתולל, או שנכתב היסטוריה — גם אם הטלפון על שקט.*',
+    comingSoon: 'בקרוב',
+
+    featLabel: 'תכונות',
+    featTitle: 'כל מה שצריך כדי לא לפספס',
+    feat1Title: 'התראות משחק',
+    feat1Desc: 'הגדר סף הפרש ניקוד ורבע התחלה. כשמשחק כלשהו מגיע לטווח שלך, ההתראה מופעלת — גם אם הטלפון על שקט.*',
+    feat2Title: 'התראות שחקן',
+    feat2Desc: 'עקוב אחרי שחקנים עם יעד נקודות, זיהוי פתיחה חמה ומעקב טריפל דאבל. כל תנאי מופעל בנפרד.',
+    feat3Title: 'רדאר גלובלי',
+    feat3Desc: 'האפליקציה סורקת ברציפות את כל הליגה. כל משחק שעומד בקריטריונים שלך יפעיל התראה — ללא הגדרה ידנית.',
+    feat4Title: 'התראות אזעקה',
+    feat4Desc: 'התראות מסך מלא שעוקפות מצב שקט ולא להפריע.* המסך מתעורר, אזעקה חזקה מופעלת דרך ערוץ האזעקות של המערכת.',
+    feat5Title: 'קבוצות ושחקנים מועדפים',
+    feat5Desc: 'שמור קבוצות ושחקנים מועדפים עם ספים מותאמים אישית. האפליקציה עוקבת אחרי כל משחק שלהם, אוטומטית.',
+    feat6Title: 'מצב היסטורי',
+    feat6Desc: 'קבל התראה על הופעות סטטיסטיות נדירות: 40+ נקודות לפני ההפסקה, 12+ שלשות, או איום קוואדרופל דאבל.',
+
+    howLabel: 'איך זה עובד',
+    howTitle: 'מהגדרה להתראה בשניות',
+    step1Title: 'בחר משחק',
+    step1Desc: 'עיין בלוח המשחקים של היום. הקש על כל משחק חי או מתוכנן כדי להגדיר התראה.',
+    step2Title: 'הגדר תנאים',
+    step2Desc: 'בחר הפרש ניקוד, יעד סטטיסטי של שחקן, או תן לרדאר לטפל בזה. שלב ומזג — כל תנאי מופעל בנפרד.',
+    step3Title: 'לך לישון',
+    step3Desc: 'השרת שלנו עוקב אחרי כל משחק בזמן אמת. לא צריך שהאפליקציה תהיה פתוחה — שים את הטלפון ותנוח. נעיר אותך כשצריך.',
+    step4Title: 'קבל את ההתראה',
+    step4Desc: 'כשהתנאי מתקיים, התראת מסך מלא מעירה את המכשיר עם אזעקה חזקה — גם במצב שקט או לא להפריע.*',
+    androidNote: '* עקיפת מצב שקט ולא להפריע, התראות מסך מלא והערת מסך זמינות באנדרואיד בלבד.',
+
+    notifLabel: 'התראות',
+    notifTitle: 'שני מצבים, הבחירה שלך',
+    notifAlarmTitle: 'מצב אזעקה',
+    notifAlarm1: 'צליל אזעקה חוזר מופעל גם אם הטלפון על שקט או רטט*',
+    notifAlarm2: 'המסך מתעורר ומציג התראת מסך מלא על מסך הנעילה*',
+    notifAlarm3: 'עוקף מצב לא להפריע — מנותב דרך ערוץ האזעקות של המערכת*',
+    notifSilentTitle: 'מצב שקט',
+    notifSilent1: 'התראה רגילה עם פרטי המשחק או השחקן',
+    notifSilent2: 'ללא צליל — מושלם כשאתה בפגישה אבל עדיין רוצה עדכונים',
+
+    ctaLabel: 'הורדה',
+    ctaTitle: 'מוכן לתפוס כל רגע קלאצ\'?',
+    ctaSub: 'חינם להורדה. הגדר את ההתראה הראשונה שלך תוך 30 שניות.',
+    ctaAndroidNote: '* עקיפת מצב שקט ולא להפריע, התראות מסך מלא והערת מסך זמינות באנדרואיד בלבד.',
+    footer: 'Clutch Alarm &copy; 2025 &mdash; <a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a> &mdash; <a href="privacy.html" target="_blank">מדיניות פרטיות</a><br><span style="font-size:11px;opacity:0.5">אינה קשורה, ממומנת או מחוברת לליגה הלאומית לכדורסל (NBA) או לאף אחת מקבוצותיה.<br>כל השמות והסימנים הקשורים ל-NBA הם רכושם של בעליהם בהתאמה. נתוני משחקים מסופקים ממקורות ציבוריים.</span>'
+  }
+};
+
+let currentLang = 'en';
+
+function setLang(lang) {
+  currentLang = lang;
+  document.documentElement.lang = lang;
+  document.documentElement.dir = lang === 'he' ? 'rtl' : 'ltr';
+
+  // Update toggle buttons
+  document.querySelectorAll('.lang-btn').forEach(btn => {
+    btn.classList.toggle('active',
+      (lang === 'en' && btn.textContent === 'EN') ||
+      (lang === 'he' && btn.textContent === 'עב')
+    );
+  });
+
+  // Apply translations
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.getAttribute('data-i18n');
+    if (i18n[lang][key] !== undefined) {
+      el.innerHTML = i18n[lang][key];
+    }
+  });
+}
+
+// Scroll reveal
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach((entry, i) => {
+    if (entry.isIntersecting) {
+      setTimeout(() => entry.target.classList.add('visible'), i * 80);
+      observer.unobserve(entry.target);
+    }
+  });
+}, { threshold: 0.15 });
+
+document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+// Auto-detect language from browser
+const browserLang = (navigator.language || navigator.userLanguage || 'en').toLowerCase();
+const detectedLang = browserLang.startsWith('he') ? 'he' : 'en';
+setLang(detectedLang);
+
+</script>
+
+</body>
+</html>
+<!-- deployed Sun Mar 29 20:09:36 IDT 2026 -->
