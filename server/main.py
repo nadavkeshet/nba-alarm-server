@@ -1539,12 +1539,18 @@ def games():
 
 # ── EPG (TV Broadcast Guide) ─────────────────────────────────────────────────
 
+# Countries whose EPG files are small enough to safely load in memory.
+# Large countries (us, gb, de, fr, ...) have massive XML files that OOM the server.
+_ALLOWED_EPG_COUNTRIES = {"il"}
+
 @app.get("/epg")
 def epg_for_game(game_id: str = "", country: str = "il"):
     """
     Get TV broadcast channels for a specific game.
     Query params: game_id, country (ISO 2-letter code, default: il)
     """
+    if country.lower() not in _ALLOWED_EPG_COUNTRIES:
+        return {"game_id": game_id, "broadcasts": []}
     event = None
     for g in get_today_games():
         if str(g.get("id")) == game_id:
@@ -1585,6 +1591,8 @@ def epg_all_games(country: str = "il"):
     Get all NBA TV broadcasts for today's games, keyed by ESPN game_id.
     Returns: { "broadcasts": { "401810906": [...], "401810907": [...] } }
     """
+    if country.lower() not in _ALLOWED_EPG_COUNTRIES:
+        return {"broadcasts": {}}
     today_games = get_today_games()
     return {"broadcasts": get_all_broadcasts(country=country, games=today_games)}
 
