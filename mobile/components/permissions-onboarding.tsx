@@ -177,7 +177,7 @@ export function PermissionsOnboarding({ visible, onDone }: Props) {
           <View style={styles.noteCard}>
             <Ionicons name="information-circle-outline" size={15} color={C.muted} style={{ marginTop: 1 }} />
             <Text style={styles.noteText}>
-              On Samsung devices, also go to Settings → Apps → NBA Smart Alarm → Battery → Unrestricted, and make sure the app is not listed under Sleeping Apps.
+              On Samsung devices, also go to Settings → Apps → Clutch Alarm → Battery → Unrestricted, and make sure the app is not listed under Sleeping Apps.
             </Text>
           </View>
         </ScrollView>

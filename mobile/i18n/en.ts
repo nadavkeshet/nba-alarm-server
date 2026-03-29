@@ -5,7 +5,7 @@ export const en = {
   'tab.settings':'Settings',
 
   // ── Home ────────────────────────────────────────────────────────
-  'home.title':            'NBA Smart Alarm',
+  'home.title':            'Clutch Alarm',
   'home.todaysGames':      "TODAY'S GAMES",
   'home.connectionError':  'Connection Error',
   'home.connectionErrorSub':'Could not reach the server.',
@@ -200,7 +200,7 @@ export const en = {
   'guide.slide6.b2':    '🔕  Silent mode — a regular notification appears with game or player details, no sound.',
   'guide.slide6.b3':    '📵  Do Not Disturb? No problem — Alarm mode routes audio through the system alarm channel, which bypasses DND.',
   'guide.slide6.b4':    '⚠️  The sound uses your Alarm volume — not media or ringtone volume. If you hear nothing, turn up the Alarm volume in your phone settings.',
-  'guide.slide6.b5':    '⚠️  Android may stop background apps to save battery. Go to Settings → Apps → NBA Smart Alarm → Battery → set to Unrestricted.',
+  'guide.slide6.b5':    '⚠️  Android may stop background apps to save battery. Go to Settings → Apps → Clutch Alarm → Battery → set to Unrestricted.',
 
   'guide.slide7.title': 'No Double Alerts',
   'guide.slide7.b1':    "Set a Game Alarm on a match where your Favorite Team is playing? The app detects the overlap — your manual alarm takes priority.",
