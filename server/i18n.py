@@ -2,35 +2,35 @@
 Notification text translations for NBA Smart Alarm.
 """
 
-# Hebrew team name map (English full name → Hebrew)
+# Hebrew city-only names (no mascot names for copyright)
 _TEAM_HE = {
-    "Atlanta Hawks": "אטלנטה הוקס", "Boston Celtics": "בוסטון סלטיקס",
-    "Brooklyn Nets": "ברוקלין נטס", "Charlotte Hornets": "שרלוט הורנטס",
-    "Chicago Bulls": "שיקגו בולס", "Cleveland Cavaliers": "קליבלנד קאבלירס",
-    "Dallas Mavericks": "דאלאס מאבריקס", "Denver Nuggets": "דנבר נאגטס",
-    "Detroit Pistons": "דטרויט פיסטונס", "Golden State Warriors": "גולדן סטייט ווריירס",
-    "Houston Rockets": "יוסטון רוקטס", "Indiana Pacers": "אינדיאנה פייסרס",
-    "LA Clippers": "לוס אנג'לס קליפרס", "Los Angeles Lakers": "לוס אנג'לס לייקרס",
-    "Memphis Grizzlies": "ממפיס גריזליס", "Miami Heat": "מיאמי היט",
-    "Milwaukee Bucks": "מילווקי באקס", "Minnesota Timberwolves": "מינסוטה טימברוולבס",
-    "New Orleans Pelicans": "ניו אורלינס פליקנס", "New York Knicks": "ניו יורק ניקס",
-    "Oklahoma City Thunder": "אוקלהומה סיטי ת'אנדר", "Orlando Magic": "אורלנדו מאג'יק",
-    "Philadelphia 76ers": "פילדלפיה סיקסרס", "Phoenix Suns": "פיניקס סאנס",
-    "Portland Trail Blazers": "פורטלנד טרייל בלייזרס", "Sacramento Kings": "סקרמנטו קינגס",
-    "San Antonio Spurs": "סן אנטוניו ספרס", "Toronto Raptors": "טורנטו רפטורס",
-    "Utah Jazz": "יוטה ג'אז", "Washington Wizards": "וושינגטון וויזארדס",
+    "Atlanta Hawks": "אטלנטה", "Boston Celtics": "בוסטון",
+    "Brooklyn Nets": "ברוקלין", "Charlotte Hornets": "שרלוט",
+    "Chicago Bulls": "שיקגו", "Cleveland Cavaliers": "קליבלנד",
+    "Dallas Mavericks": "דאלאס", "Denver Nuggets": "דנבר",
+    "Detroit Pistons": "דטרויט", "Golden State Warriors": "גולדן סטייט",
+    "Houston Rockets": "יוסטון", "Indiana Pacers": "אינדיאנה",
+    "LA Clippers": "ל.א.", "Los Angeles Lakers": "ל.א.",
+    "Memphis Grizzlies": "ממפיס", "Miami Heat": "מיאמי",
+    "Milwaukee Bucks": "מילווקי", "Minnesota Timberwolves": "מינסוטה",
+    "New Orleans Pelicans": "ניו אורלינס", "New York Knicks": "ניו יורק",
+    "Oklahoma City Thunder": "אוקלהומה סיטי", "Orlando Magic": "אורלנדו",
+    "Philadelphia 76ers": "פילדלפיה", "Phoenix Suns": "פיניקס",
+    "Portland Trail Blazers": "פורטלנד", "Sacramento Kings": "סקרמנטו",
+    "San Antonio Spurs": "סן אנטוניו", "Toronto Raptors": "טורנטו",
+    "Utah Jazz": "יוטה", "Washington Wizards": "וושינגטון",
 }
 
-# Hebrew abbreviation map
+# Hebrew abbreviation map (city only)
 _ABBR_HE = {
-    "ATL": "הוקס", "BOS": "סלטיקס", "BKN": "נטס", "CHA": "הורנטס",
-    "CHI": "בולס", "CLE": "קאבס", "DAL": "מאבס", "DEN": "נאגטס",
-    "DET": "פיסטונס", "GS": "ווריירס", "HOU": "רוקטס", "IND": "פייסרס",
-    "LAC": "קליפרס", "LAL": "לייקרס", "MEM": "גריזליס", "MIA": "היט",
-    "MIL": "באקס", "MIN": "וולבס", "NO": "פליקנס", "NY": "ניקס",
-    "OKC": "ת'אנדר", "ORL": "מאג'יק", "PHI": "סיקסרס", "PHX": "סאנס",
-    "POR": "בלייזרס", "SAC": "קינגס", "SA": "ספרס", "TOR": "רפטורס",
-    "UTAH": "ג'אז", "WSH": "וויזארדס",
+    "ATL": "אטלנטה", "BOS": "בוסטון", "BKN": "ברוקלין", "CHA": "שרלוט",
+    "CHI": "שיקגו", "CLE": "קליבלנד", "DAL": "דאלאס", "DEN": "דנבר",
+    "DET": "דטרויט", "GS": "גולדן סטייט", "HOU": "יוסטון", "IND": "אינדיאנה",
+    "LAC": "ל.א.", "LAL": "ל.א.", "MEM": "ממפיס", "MIA": "מיאמי",
+    "MIL": "מילווקי", "MIN": "מינסוטה", "NO": "ניו אורלינס", "NY": "ניו יורק",
+    "OKC": "אוקלהומה סיטי", "ORL": "אורלנדו", "PHI": "פילדלפיה", "PHX": "פיניקס",
+    "POR": "פורטלנד", "SAC": "סקרמנטו", "SA": "סן אנטוניו", "TOR": "טורנטו",
+    "UTAH": "יוטה", "WSH": "וושינגטון",
 }
 
 
