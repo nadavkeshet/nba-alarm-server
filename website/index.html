@@ -6,6 +6,8 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
   <title>Clutch Alarm — Never Miss a Clutch Moment</title>
   <meta name="description" content="An alarm clock for NBA fans. Go to sleep and let the app wake you up when games get close, players go off, or history is being made.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -574,7 +576,6 @@
 </head>
 <body>
 
-<!-- Basketball SVG template -->
 <svg style="display:none">
   <symbol id="basketball" viewBox="0 0 100 100">
     <circle cx="50" cy="50" r="48" fill="none" stroke="currentColor" stroke-width="2"/>
@@ -582,7 +583,6 @@
   </symbol>
 </svg>
 
-<!-- ─── NAV ─── -->
 <nav>
   <a href="#" class="nav-logo">
     <span class="logo-dot"></span>
@@ -594,7 +594,6 @@
   </div>
 </nav>
 
-<!-- ─── HERO ─── -->
 <section class="hero">
   <svg class="hero-ball" aria-hidden="true"><use href="#basketball"/></svg>
   <svg class="hero-ball" aria-hidden="true"><use href="#basketball"/></svg>
@@ -624,7 +623,6 @@
   </div>
 </section>
 
-<!-- ─── FEATURES ─── -->
 <section class="features-section">
   <div class="section-inner">
     <div class="section-label reveal" data-i18n="featLabel"></div>
@@ -671,7 +669,6 @@
   </div>
 </section>
 
-<!-- ─── HOW IT WORKS ─── -->
 <section class="how-section">
   <div class="section-inner">
     <div class="section-label reveal" data-i18n="howLabel"></div>
@@ -698,7 +695,6 @@
   </div>
 </section>
 
-<!-- ─── NOTIFICATIONS ─── -->
 <section class="notif-section">
   <div class="section-inner">
     <div class="section-label reveal" data-i18n="notifLabel"></div>
@@ -723,7 +719,6 @@
   </div>
 </section>
 
-<!-- ─── CTA ─── -->
 <section class="cta-section">
   <div class="section-inner">
     <div class="section-label reveal" data-i18n="ctaLabel"></div>
@@ -749,7 +744,6 @@
   </div>
 </section>
 
-<!-- ─── FOOTER ─── -->
 <footer>
   <p data-i18n="footer"></p>
 </footer>
@@ -807,54 +801,54 @@ const i18n = {
     footer: 'Clutch Alarm &copy; 2026 &mdash; <a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a> &mdash; <a href="privacy.html" target="_blank">Privacy Policy</a><br><span style="font-size:11px;opacity:0.5">Not affiliated with, endorsed by, or connected to the National Basketball Association (NBA) or any of its teams.<br>All NBA-related names and marks are the property of their respective owners. Game data provided by publicly available sources.</span>'
   },
   he: {
-    heroBadge: 'שעון מעורר NBA',
-    heroTitle1: 'לעולם אל תפספס',
+    heroBadge: 'שעון מעורר ל-NBA',
+    heroTitle1: 'אף פעם אל תפספסו',
     heroTitle2: 'רגע קלאצ\'',
-    heroSub: 'שעון מעורר לאוהדי NBA. תירדם בשקט ותן לאפליקציה להעיר אותך כשהמשחק מתחמם, שחקן משתולל, או שנכתב היסטוריה — גם אם הטלפון על שקט.*',
+    heroSub: 'שעון מעורר לאוהדי NBA. לכו לישון ותנו לאפליקציה להעיר אתכם כשהמשחק צמוד, שחקן מתפוצץ על המגרש, או כשהיסטוריה נכתבת — אפילו אם הטלפון שלכם על השתק.*',
     comingSoon: 'בקרוב',
 
     featLabel: 'תכונות',
-    featTitle: 'כל מה שצריך כדי לא לפספס',
-    feat1Title: 'התראות משחק',
-    feat1Desc: 'הגדר סף הפרש ניקוד ורבע התחלה. כשמשחק כלשהו מגיע לטווח שלך, ההתראה מופעלת — גם אם הטלפון על שקט.*',
-    feat2Title: 'התראות שחקן',
-    feat2Desc: 'עקוב אחרי שחקנים עם יעד נקודות, זיהוי פתיחה חמה ומעקב טריפל דאבל. כל תנאי מופעל בנפרד.',
+    featTitle: 'כל מה שאתם צריכים כדי להישאר במשחק',
+    feat1Title: 'התראות משחקים',
+    feat1Desc: 'הגדירו הפרש נקודות ורבע התחלתי. כשמשחק כלשהו מגיע לטווח שהגדרתם, האזעקה תופעל — גם אם הטלפון שלכם על השתק.*',
+    feat2Title: 'התראות שחקנים',
+    feat2Desc: 'עקבו אחרי שחקנים ספציפיים עם יעדי נקודות, זיהוי קלעים חמים מוקדמים, ומעקב טריפל-דאבל. כל תנאי מפעיל התראה באופן עצמאי.',
     feat3Title: 'רדאר גלובלי',
-    feat3Desc: 'האפליקציה סורקת ברציפות את כל הליגה. כל משחק שעומד בקריטריונים שלך יפעיל התראה — ללא הגדרה ידנית.',
+    feat3Desc: 'האפליקציה סורקת את כל הליגה באופן רציף. כל משחק שעומד בקריטריונים שלכם יפעיל התראה — אין צורך בהגדרה ידנית.',
     feat4Title: 'התראות אזעקה',
-    feat4Desc: 'התראות מסך מלא שעוקפות מצב שקט ולא להפריע.* המסך מתעורר, אזעקה חזקה מופעלת דרך ערוץ האזעקות של המערכת.',
-    feat5Title: 'קבוצות ושחקנים מועדפים',
-    feat5Desc: 'שמור קבוצות ושחקנים מועדפים עם ספים מותאמים אישית. האפליקציה עוקבת אחרי כל משחק שלהם, אוטומטית.',
-    feat6Title: 'מצב היסטורי',
-    feat6Desc: 'קבל התראה על הופעות סטטיסטיות נדירות: 40+ נקודות לפני ההפסקה, 12+ שלשות, או איום קוואדרופל דאבל.',
+    feat4Desc: 'התראות במסך מלא שעוקפות את מצב השתק ו"נא לא להפריע".* המסך שלכם נדלק, ואזעקה חזקה מופעלת דרך ערוץ השעון המעורר של המערכת.',
+    feat5Title: 'קבוצות ושחקנים אהובים',
+    feat5Desc: 'שמרו את הקבוצות והשחקנים האהובים עליכם עם רפים מותאמים אישית. האפליקציה עוקבת אחרי כל משחק שלהם באופן אוטומטי.',
+    feat6Title: 'מצב היסטוריה',
+    feat6Desc: 'קבלו התראות על שורות סטטיסטיקה של פעם בדור: 40+ נקודות לפני המחצית, 12+ שלשות, או איום על קוואדרופל-דאבל שמתפתח.',
 
     howLabel: 'איך זה עובד',
-    howTitle: 'מהגדרה להתראה בשניות',
-    step1Title: 'בחר משחק',
-    step1Desc: 'עיין בלוח המשחקים של היום. הקש על כל משחק חי או מתוכנן כדי להגדיר התראה.',
-    step2Title: 'הגדר תנאים',
-    step2Desc: 'בחר הפרש ניקוד, יעד סטטיסטי של שחקן, או תן לרדאר לטפל בזה. שלב ומזג — כל תנאי מופעל בנפרד.',
-    step3Title: 'לך לישון',
-    step3Desc: 'השרת שלנו עוקב אחרי כל משחק בזמן אמת. לא צריך שהאפליקציה תהיה פתוחה — שים את הטלפון ותנוח. נעיר אותך כשצריך.',
-    step4Title: 'קבל את ההתראה',
-    step4Desc: 'כשהתנאי מתקיים, התראת מסך מלא מעירה את המכשיר עם אזעקה חזקה — גם במצב שקט או לא להפריע.*',
-    androidNote: '* עקיפת מצב שקט ולא להפריע, התראות מסך מלא והערת מסך זמינות באנדרואיד בלבד.',
+    howTitle: 'מהגדרה להתראת קלאצ\' בשניות',
+    step1Title: 'בחרו משחק',
+    step1Desc: 'עיינו בלוח משחקי ה-NBA של היום. לחצו על כל משחק חי או עתידי כדי להגדיר את האזעקה שלכם.',
+    step2Title: 'הגדירו את התנאים שלכם',
+    step2Desc: 'בחרו הפרש נקודות, יעד סטטיסטי של שחקן, או תנו לרדאר לטפל בזה. שלבו והתאימו — כל תנאי פועל בפני עצמו.',
+    step3Title: 'לכו לישון',
+    step3Desc: 'השרת שלנו עוקב אחרי כל משחק בזמן אמת. אתם לא צריכים להשאיר את האפליקציה פתוחה — הניחו את הטלפון ולכו לנוח. אנחנו נעיר אתכם כשזה באמת משנה.',
+    step4Title: 'קבלו את ההתראה',
+    step4Desc: 'כשהתנאי שלכם מתקיים, התראה במסך מלא תעיר את המכשיר שלכם עם אזעקה חזקה — גם במצב השתק או "נא לא להפריע".*',
+    androidNote: '* עקיפת מצב השתק ו"נא לא להפריע", התראות מסך מלא, והדלקת המסך הן תכונות הזמינות למכשירי אנדרואיד בלבד.',
 
     notifLabel: 'התראות',
-    notifTitle: 'שני מצבים, הבחירה שלך',
+    notifTitle: 'שני מצבים, הבחירה שלכם',
     notifAlarmTitle: 'מצב אזעקה',
-    notifAlarm1: 'צליל אזעקה חוזר מופעל גם אם הטלפון על שקט או רטט*',
-    notifAlarm2: 'המסך מתעורר ומציג התראת מסך מלא על מסך הנעילה*',
-    notifAlarm3: 'עוקף מצב לא להפריע — מנותב דרך ערוץ האזעקות של המערכת*',
+    notifAlarm1: 'צליל אזעקה מתנגן בלופ גם אם הטלפון שלכם על השתק או רטט*',
+    notifAlarm2: 'המסך נדלק ומציג התראה במסך מלא על גבי מסך הנעילה שלכם*',
+    notifAlarm3: 'עוקף את מצב "נא לא להפריע" — מנותב דרך ערוץ השעון המעורר של המערכת*',
     notifSilentTitle: 'מצב שקט',
-    notifSilent1: 'התראה רגילה עם פרטי המשחק או השחקן',
-    notifSilent2: 'ללא צליל — מושלם כשאתה בפגישה אבל עדיין רוצה עדכונים',
+    notifSilent1: 'התראת פוש רגילה עם פרטי המשחק או השחקן',
+    notifSilent2: 'ללא צליל — מושלם לזמן פגישה כשאתם עדיין רוצים לקבל עדכונים',
 
     ctaLabel: 'הורדה',
-    ctaTitle: 'מוכן לתפוס כל רגע קלאצ\'?',
-    ctaSub: 'חינם להורדה. הגדר את ההתראה הראשונה שלך תוך 30 שניות.',
-    ctaAndroidNote: '* עקיפת מצב שקט ולא להפריע, התראות מסך מלא והערת מסך זמינות באנדרואיד בלבד.',
-    footer: 'Clutch Alarm &copy; 2026 &mdash; <a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a> &mdash; <a href="privacy.html" target="_blank">מדיניות פרטיות</a><br><span style="font-size:11px;opacity:0.5">אינה קשורה, ממומנת או מחוברת לליגה הלאומית לכדורסל (NBA) או לאף אחת מקבוצותיה.<br>כל השמות והסימנים הקשורים ל-NBA הם רכושם של בעליהם בהתאמה. נתוני משחקים מסופקים ממקורות ציבוריים.</span>'
+    ctaTitle: 'מוכנים לתפוס כל רגע קלאצ\'?',
+    ctaSub: 'הורדה בחינם. הגדירו את האזעקה הראשונה שלכם בפחות מ-30 שניות.',
+    ctaAndroidNote: '* עקיפת מצב השתק ו"נא לא להפריע", התראות מסך מלא, והדלקת המסך הן תכונות הזמינות למכשירי אנדרואיד בלבד.',
+    footer: 'Clutch Alarm &copy; 2026 &mdash; <a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a> &mdash; <a href="privacy.html" target="_blank">מדיניות פרטיות</a><br><span style="font-size:11px;opacity:0.5">אינו קשור, ממומן או קשור לליגת הכדורסל הלאומית (NBA) או לאף אחת מקבוצותיה.<br>כל השמות והסימנים הקשורים ל-NBA הם רכושם של בעליהם בהתאמה. נתוני משחקים מסופקים על ידי מקורות גלויים לציבור.</span>'
   }
 };
 
@@ -903,4 +897,3 @@ setLang(detectedLang);
 
 </body>
 </html>
-<!-- deployed Sun Mar 29 20:09:36 IDT 2026 -->
