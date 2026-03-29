@@ -792,7 +792,7 @@ async def _alarm_poller() -> None:
                         gid = alarm.game_id or alarm.target_id
                         pid = alarm.target_id
                         if alarm.condition_type == "score_diff":
-                            dedup_key = f"{gid}_game"
+                            dedup_key = f"{gid}_game_q{alarm.start_quarter or 4}_id{alarm.id}"
                         elif alarm.condition_type == "points" and (alarm.start_quarter or 0) > 0:
                             dedup_key = f"{gid}_{pid}_early_pts_q{alarm.start_quarter}"
                         elif alarm.condition_type == "points":

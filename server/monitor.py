@@ -1144,12 +1144,12 @@ def _run_radar_tick_for_user(
                     if notify_start and diff > max_d:
                         label = t_title("period_starting", language)
                         body_text = t_body_period_start(game_name, quarter, diff, language)
-                        dedup_key = f"{game_id}_game"
+                        dedup_key = f"{game_id}_fav_start_q{start_q}"
                     else:
                         title_key = "fav_team" if "team_name" in criteria else "radar"
                         label = t_title(title_key, language)
                         body_text = t_body_game(game_name, quarter, diff, language)
-                        dedup_key = f"{game_id}_game"
+                        dedup_key = f"{game_id}_fav_q{start_q}"
                     if _fire_once(dedup_key, token):
                         log.info("RADAR ALARM  fire   | %s | Q%d diff=%d | %s | %s", game_name, quarter, diff, label, _tid(push_token))
                         _send_push_notification(
