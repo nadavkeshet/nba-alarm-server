@@ -1,5 +1,5 @@
 """
-Notification text translations for NBA Smart Alarm.
+Notification text translations for Clutch Alarm.
 """
 
 # Hebrew team name map (English full name → Hebrew full name)
@@ -138,8 +138,8 @@ def t_body_triple_double(player_name: str, hot_stats: str, game_name: str, lang:
 
 def t_body_test(lang: str) -> str:
     if lang == "he":
-        return "ה-NBA Smart Alarm שלך עובד!"
-    return "Your NBA Smart Alarm is working!"
+        return "ה-Clutch Alarm שלך עובד!"
+    return "Your Clutch Alarm is working!"
 
 
 def t_body_historic_scoring(player_name: str, pts: int, quarter: int, game_name: str, lang: str) -> str:

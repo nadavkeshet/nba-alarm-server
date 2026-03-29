@@ -894,7 +894,7 @@ async def lifespan(_app: FastAPI):
 
 # ── App Instance ───────────────────────────────────────────────────────────────
 
-app = FastAPI(title="NBA Smart Alarm Server", lifespan=lifespan)
+app = FastAPI(title="Clutch Alarm Server", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
