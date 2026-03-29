@@ -1,5 +1,5 @@
 """
-NBA Smart Alarm – Monitoring Logic
+Clutch Alarm – Monitoring Logic
 ===================================
 
 Alarm types:

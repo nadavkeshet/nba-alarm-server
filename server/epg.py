@@ -1,5 +1,5 @@
 """
-NBA Smart Alarm – EPG (Electronic Program Guide) Service
+Clutch Alarm – EPG (Electronic Program Guide) Service
 =========================================================
 
 Fetches TV channel schedules from iptv-epg.org and matches NBA games
