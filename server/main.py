@@ -852,14 +852,34 @@ async def _alarm_poller() -> None:
 
 def _restart_alarm_threads_from_db() -> None:
     """
-    No-op since thread-based monitoring was removed.
-    All active DB alarms are now handled exclusively by the async _alarm_poller,
-    which picks them up within 60 s of startup.
+    On startup: expire stale alarms (created before today ET that are still
+    is_active=True — game is guaranteed to be over) then count remaining ones.
+    This handles the case where the server crashed mid-game and the poller
+    never got a chance to mark alarms as expired.
     """
     if engine is None:
         return
     try:
+        # "Today" in Eastern time (games never span past ~4am ET)
+        today_et = (datetime.now(timezone.utc) - timedelta(hours=5)).date()
+        today_start_utc = datetime(
+            today_et.year, today_et.month, today_et.day,
+            tzinfo=timezone.utc
+        ) + timedelta(hours=5)  # midnight ET in UTC
+
         with Session(engine) as session:
+            stale = (
+                session.query(Alarm)
+                .filter(Alarm.is_active.is_(True))
+                .filter(Alarm.created_at < today_start_utc)
+                .all()
+            )
+            if stale:
+                for row in stale:
+                    row.is_active = False
+                session.commit()
+                log.info("STARTUP: expired %d stale alarm(s) from previous day(s).", len(stale))
+
             count = session.query(Alarm).filter(Alarm.is_active.is_(True)).count()
         if count:
             log.info("STARTUP: %d active DB alarm(s) will be handled by the poller.", count)
