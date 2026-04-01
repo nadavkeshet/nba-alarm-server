@@ -422,6 +422,25 @@ def _load_fired_alerts_from_db() -> None:
         log.error("DB: _load_fired_alerts_from_db failed – %s", exc)
 
 
+def _purge_old_alarms() -> None:
+    """Delete inactive alarms older than 7 days to keep the table lean."""
+    if engine is None:
+        return
+    try:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        with Session(engine) as session:
+            deleted = (
+                session.query(Alarm)
+                .filter(Alarm.is_active.is_(False))
+                .filter(Alarm.created_at < cutoff)
+                .delete(synchronize_session=False)
+            )
+            session.commit()
+        if deleted:
+            log.info("STARTUP: purged %d old inactive alarm(s).", deleted)
+    except Exception as exc:
+        log.error("DB: _purge_old_alarms failed – %s", exc)
+
 
 # ── Multi-user radar feed ─────────────────────────────────────────────────────
 
@@ -900,6 +919,7 @@ async def lifespan(_app: FastAPI):
     # ── Startup ──
     _init_db()
     _load_fired_alerts_from_db()   # hydrate dedup set before radar starts
+    _purge_old_alarms()            # delete inactive alarms older than 7 days
     clear_stale_state()
     _restart_alarm_threads_from_db()
     threading.Thread(target=update_all_rosters, daemon=True).start()
