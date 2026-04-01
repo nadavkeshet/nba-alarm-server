@@ -1392,6 +1392,11 @@ _games_cache: list[dict] = []
 _games_cache_time: float = 0.0
 _GAMES_CACHE_TTL: int = 60  # seconds
 
+def _eastern_today() -> str:
+    """Current US Eastern date as YYYYMMDD string."""
+    return (datetime.now(timezone.utc) - timedelta(hours=5)).strftime("%Y%m%d")
+
+
 def get_today_games() -> list[dict]:
     """Return today's NBA games from ESPN (US Eastern date), cached for 60 s."""
     global _games_cache, _games_cache_time
@@ -1399,7 +1404,7 @@ def get_today_games() -> list[dict]:
     if _games_cache and now - _games_cache_time < _GAMES_CACHE_TTL:
         return _games_cache
     try:
-        eastern_date = (datetime.now(timezone.utc) - timedelta(hours=5)).strftime("%Y%m%d")
+        eastern_date = _eastern_today()
         resp = requests.get(f"{ESPN_NBA_URL}?dates={eastern_date}", timeout=10)
         resp.raise_for_status()
         events = resp.json().get("events", [])
@@ -1410,4 +1415,21 @@ def get_today_games() -> list[dict]:
     except Exception as exc:
         log.warning("NBA games fetch failed: %s", exc)
         return _games_cache  # return stale cache on error rather than empty list
+
+
+def get_games_for_date(date: str | None) -> list[dict]:
+    """Return NBA games for the given YYYYMMDD date string (or today if None)."""
+    eastern_date = date if date else _eastern_today()
+    # If requesting today, use the cached path
+    if eastern_date == _eastern_today():
+        return get_today_games()
+    try:
+        resp = requests.get(f"{ESPN_NBA_URL}?dates={eastern_date}", timeout=10)
+        resp.raise_for_status()
+        events = resp.json().get("events", [])
+        log.info("NBA: %d games fetched for %s (non-today)", len(events), eastern_date)
+        return events
+    except Exception as exc:
+        log.warning("NBA games fetch failed for %s: %s", eastern_date, exc)
+        return []
 

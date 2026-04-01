@@ -44,6 +44,7 @@ from monitor import (
     _clock_minutes_remaining,
     # Data
     get_today_games,
+    get_games_for_date,
     # Startup
     clear_stale_state,
     # DB deactivation registration
@@ -102,6 +103,7 @@ class Alarm(_Base):
     away_team_id   = Column(String,  nullable=True)
     alert_type       = Column(String,  nullable=True, default="alarm")
     notify_at_start  = Column(Boolean, default=False, nullable=False)
+    game_date        = Column(String,  nullable=True)   # "YYYYMMDD" — None means today
     is_active        = Column(Boolean, default=True, nullable=False)
     created_at     = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
@@ -216,6 +218,7 @@ def _init_db() -> None:
         "ALTER TABLE alarms ADD COLUMN notify_at_start BOOLEAN DEFAULT FALSE NOT NULL",
         "ALTER TABLE favorite_teams ADD COLUMN notify_at_start BOOLEAN DEFAULT FALSE NOT NULL",
         "ALTER TABLE user_preferences ADD COLUMN language VARCHAR NOT NULL DEFAULT 'en'",
+        "ALTER TABLE alarms ADD COLUMN game_date VARCHAR",
     ]
     for sql in migrations:
         try:
@@ -800,8 +803,14 @@ async def _alarm_poller() -> None:
             for gid in player_game_ids:
                 summaries[gid] = await asyncio.to_thread(_fetch_game_summary, gid)
 
+            from monitor import _eastern_today as _et
+            today_str = _et()
+
             for alarm in alarms:
                 try:
+                    # Skip alarms scheduled for a future date — wait until their day
+                    if alarm.game_date and alarm.game_date > today_str:
+                        continue
                     summary = summaries.get(alarm.game_id) if alarm.game_id else None
                     alarm_lang = _get_user_language_from_db(alarm.user_token)
                     result = _check_and_fire(alarm, events, summary, language=alarm_lang)
@@ -896,9 +905,15 @@ def _restart_alarm_threads_from_db() -> None:
             except Exception:
                 today_game_ids = None  # ESPN unavailable — skip cleanup, be safe
 
+            from monitor import _eastern_today as _et
+            today_str = _et()
+
             expired = 0
             if today_game_ids is not None:
                 for row in active_alarms:
+                    # Never expire alarms scheduled for a future date
+                    if row.game_date and row.game_date > today_str:
+                        continue
                     game_id = str(row.game_id or row.target_id or "")
                     if game_id and game_id not in today_game_ids:
                         row.is_active = False
@@ -1055,6 +1070,7 @@ class AlarmRequest(BaseModel):
     home_team_id: str       = ""
     away_team_id: str       = ""
     notify_at_start: bool   = False
+    game_date: Optional[str] = None   # "YYYYMMDD" for future-day alarms
 
 
 @app.post("/start-alarm")
@@ -1086,6 +1102,7 @@ async def start_alarm(req: AlarmRequest):
                     away_team_id     = req.away_team_id or None,
                     alert_type       = req.alert_type,
                     notify_at_start  = req.notify_at_start,
+                    game_date        = req.game_date or None,
                 ))
                 session.commit()
         except Exception as exc:
@@ -1114,6 +1131,7 @@ class PlayerAlarmRequest(BaseModel):
     pts_threshold: int    = 20
     quarter_deadline: int = 3
     alert_type: str       = "alarm"
+    game_date: Optional[str] = None   # "YYYYMMDD" for future-day alarms
 
 
 @app.post("/start-player-alarm")
@@ -1157,6 +1175,7 @@ async def start_player_alarm(req: PlayerAlarmRequest):
                     game_id        = req.game_id,
                     game_name      = req.game_name,
                     alert_type     = req.alert_type,
+                    game_date      = req.game_date or None,
                 ))
                 session.commit()
         except Exception as exc:
@@ -1581,8 +1600,9 @@ def register_token(req: RegisterTokenRequest):
 # ── Data Endpoints ─────────────────────────────────────────────────────────────
 
 @app.get("/games")
-def games():
-    return {"games": get_today_games()}
+def games(date: Optional[str] = None):
+    """Return games for a given date (YYYYMMDD). Defaults to today (US Eastern)."""
+    return {"games": get_games_for_date(date)}
 
 
 # ── EPG (TV Broadcast Guide) ─────────────────────────────────────────────────

@@ -8,11 +8,15 @@ export const en = {
   // ── Home ────────────────────────────────────────────────────────
   'home.title':            'Clutch Alarm',
   'home.todaysGames':      "TODAY'S GAMES",
+  'home.dateGames':        'GAMES',
+  'home.today':            'Today',
+  'home.tomorrow':         'Tomorrow',
+  'home.yesterday':        'Yesterday',
   'home.connectionError':  'Connection Error',
   'home.connectionErrorSub':'Could not reach the server.',
   'home.retry':            'Retry',
-  'home.noGames':          'No Games Today',
-  'home.noGamesSub':       'Check back tomorrow for the next slate of games.',
+  'home.noGames':          'No Games',
+  'home.noGamesSub':       'No NBA games scheduled for this day.',
 
   // ── Game status ─────────────────────────────────────────────────
   'status.live':      'LIVE',

@@ -8,11 +8,15 @@ export const he = {
   // ── Home ────────────────────────────────────────────────────────
   'home.title':            'Clutch Alarm',
   'home.todaysGames':      'משחקי היום',
+  'home.dateGames':        'משחקים',
+  'home.today':            'היום',
+  'home.tomorrow':         'מחר',
+  'home.yesterday':        'אתמול',
   'home.connectionError':  'שגיאת חיבור',
   'home.connectionErrorSub':'לא ניתן לטעון את משחקי היום. בדוק את החיבור ונסה שוב.',
   'home.retry':            'נסה שוב',
-  'home.noGames':          'אין משחקים לצפייה היום',
-  'home.noGamesSub':       'בדוק מחר!',
+  'home.noGames':          'אין משחקים',
+  'home.noGamesSub':       'אין משחקי NBA ביום זה.',
 
   // ── Game status ─────────────────────────────────────────────────
   'status.live':      'לייב',

@@ -261,7 +261,48 @@ async function sendTokenToServer(token: string): Promise<boolean> {
 export default function HomeScreen() {
   const { colors: C } = useTheme();
   const styles = useMemo(() => makeStyles(C), [C]);
-  const { t } = useLanguage();
+  const { t, isHebrew } = useLanguage();
+
+  // ── Date navigation ──────────────────────────────────────────────
+  const [selectedDate, setSelectedDate] = useState<Date>(() => {
+    const now = new Date();
+    const eastern = new Date(now.getTime() - 5 * 60 * 60 * 1000);
+    return new Date(eastern.getUTCFullYear(), eastern.getUTCMonth(), eastern.getUTCDate());
+  });
+
+  const toDateStr = (d: Date): string => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}${m}${day}`;
+  };
+
+  const todayDate = (): Date => {
+    const now = new Date();
+    const eastern = new Date(now.getTime() - 5 * 60 * 60 * 1000);
+    return new Date(eastern.getUTCFullYear(), eastern.getUTCMonth(), eastern.getUTCDate());
+  };
+
+  const dayOffset = (d: Date): number => {
+    const today = todayDate();
+    return Math.round((d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+  };
+
+  const dateLabelFor = (d: Date): string => {
+    const offset = dayOffset(d);
+    if (offset === 0) return t('home.today');
+    if (offset === 1) return t('home.tomorrow');
+    if (offset === -1) return t('home.yesterday');
+    return d.toLocaleDateString(isHebrew ? 'he-IL' : 'en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  };
+
+  const shiftDate = (days: number) =>
+    setSelectedDate(prev => {
+      const next = new Date(prev);
+      next.setDate(prev.getDate() + days);
+      return next;
+    });
+
   // ── Games state ───────────────────────────────────────────────────
   const [games, setGames]       = useState<any[]>([]);
   const [loading, setLoading]   = useState(true);
@@ -327,12 +368,13 @@ export default function HomeScreen() {
   };
 
   // ── Fetch games ──────────────────────────────────────────────────
-  const fetchGames = async (silent = false) => {
+  const fetchGames = async (silent = false, dateOverride?: Date) => {
     if (!silent) setLoading(true);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10_000);
+    const dateStr = toDateStr(dateOverride ?? selectedDate);
     try {
-      const resp = await fetch(`${SERVER_URL}/games`, { signal: controller.signal });
+      const resp = await fetch(`${SERVER_URL}/games?date=${dateStr}`, { signal: controller.signal });
       if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
       const data = await resp.json();
       if (!silent) LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -461,8 +503,10 @@ export default function HomeScreen() {
     // Register stop handler so _layout.tsx can stop the alarm sound on DISMISS
     registerStopHandler(stopAlarmSound);
 
-    // 60-second live-score auto-refresh
-    const refreshInterval = setInterval(() => fetchGames(true), 60_000);
+    // 60-second live-score auto-refresh (today only)
+    const refreshInterval = setInterval(() => {
+      if (dayOffset(selectedDate) === 0) fetchGames(true);
+    }, 60_000);
 
     return () => {
       unsubMessage();
@@ -471,6 +515,11 @@ export default function HomeScreen() {
       if (gamesRetryRef.current) clearInterval(gamesRetryRef.current);
     };
   }, []);
+
+  // Re-fetch when selected date changes
+  useEffect(() => {
+    fetchGames(false, selectedDate);
+  }, [selectedDate]);
 
   // Auto-load roster when switching to player tab
   useEffect(() => {
@@ -524,6 +573,7 @@ export default function HomeScreen() {
           alert_type:      alertType,
           home_team_id:    gameHome?.team?.abbreviation ?? '',
           away_team_id:    gameAway?.team?.abbreviation ?? '',
+          game_date:       toDateStr(selectedDate),
         }),
       });
       if (response.ok) {
@@ -592,6 +642,7 @@ export default function HomeScreen() {
             pts_threshold:    cond.pts_threshold,
             quarter_deadline: cond.quarter_deadline,
             alert_type:       alertType,
+            game_date:        toDateStr(selectedDate),
           }),
         });
         if (!response.ok) continue;
@@ -617,9 +668,36 @@ export default function HomeScreen() {
       {/* Header */}
       <Text style={styles.header}>{t('home.title')}</Text>
 
-      {/* Game list */}
+      {/* Date navigation strip */}
+      <View style={styles.dateStrip}>
+        <TouchableOpacity
+          style={styles.dateArrow}
+          onPress={() => shiftDate(-1)}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        >
+          <Ionicons name="chevron-back" size={22} color={C.accentBlue} />
+        </TouchableOpacity>
+
+        <TouchableOpacity onPress={() => setSelectedDate(todayDate())} activeOpacity={0.7}>
+          <Text style={styles.dateLabel}>{dateLabelFor(selectedDate)}</Text>
+          {dayOffset(selectedDate) !== 0 && (
+            <Text style={styles.dateSub}>{t('home.today')}</Text>
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.dateArrow}
+          onPress={() => shiftDate(1)}
+          disabled={dayOffset(selectedDate) >= 7}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        >
+          <Ionicons name="chevron-forward" size={22} color={dayOffset(selectedDate) >= 7 ? C.border : C.accentBlue} />
+        </TouchableOpacity>
+      </View>
+
+      {/* Game list label */}
       <Text style={[styles.sectionLabel, { paddingHorizontal: 16, marginBottom: 8 }]}>
-        {t('home.todaysGames')}
+        {dayOffset(selectedDate) === 0 ? t('home.todaysGames') : t('home.dateGames')}
       </Text>
 
       {loading ? (
@@ -956,6 +1034,20 @@ const makeStyles = (C: AppColors) => StyleSheet.create({
   sectionLabel: {
     fontSize: 11, fontWeight: '700', color: C.textMuted,
     letterSpacing: 1.5, marginBottom: 10,
+  },
+
+  dateStrip: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 8, paddingVertical: 6, marginBottom: 4,
+  },
+  dateArrow: { padding: 6 },
+  dateLabel: {
+    fontSize: 16, fontWeight: '800', color: C.textPrimary,
+    textAlign: 'center', letterSpacing: 0.3,
+  },
+  dateSub: {
+    fontSize: 11, color: C.accentBlue, textAlign: 'center',
+    fontWeight: '600', marginTop: 1,
   },
 
   centeredMessage: { flex: 1, justifyContent: 'center', alignItems: 'center' },
