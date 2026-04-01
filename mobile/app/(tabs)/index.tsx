@@ -283,16 +283,21 @@ export default function HomeScreen() {
     return new Date(eastern.getUTCFullYear(), eastern.getUTCMonth(), eastern.getUTCDate());
   };
 
+  const isToday = (d: Date): boolean => toDateStr(d) === toDateStr(todayDate());
+
   const dayOffset = (d: Date): number => {
     const today = todayDate();
     return Math.round((d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
   };
 
   const dateLabelFor = (d: Date): string => {
-    const offset = dayOffset(d);
-    if (offset === 0) return t('home.today');
-    if (offset === 1) return t('home.tomorrow');
-    if (offset === -1) return t('home.yesterday');
+    const dStr = toDateStr(d);
+    const today = todayDate();
+    if (dStr === toDateStr(today)) return t('home.today');
+    const tom = new Date(today); tom.setDate(today.getDate() + 1);
+    const yest = new Date(today); yest.setDate(today.getDate() - 1);
+    if (dStr === toDateStr(tom)) return t('home.tomorrow');
+    if (dStr === toDateStr(yest)) return t('home.yesterday');
     return d.toLocaleDateString(isHebrew ? 'he-IL' : 'en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   };
 
@@ -505,7 +510,7 @@ export default function HomeScreen() {
 
     // 60-second live-score auto-refresh (today only)
     const refreshInterval = setInterval(() => {
-      if (dayOffset(selectedDate) === 0) fetchGames(true);
+      if (isToday(selectedDate)) fetchGames(true);
     }, 60_000);
 
     return () => {
@@ -680,7 +685,7 @@ export default function HomeScreen() {
 
         <TouchableOpacity onPress={() => setSelectedDate(todayDate())} activeOpacity={0.7}>
           <Text style={styles.dateLabel}>{dateLabelFor(selectedDate)}</Text>
-          {dayOffset(selectedDate) !== 0 && (
+          {!isToday(selectedDate) && (
             <Text style={styles.dateSub}>{t('home.today')}</Text>
           )}
         </TouchableOpacity>
@@ -697,7 +702,7 @@ export default function HomeScreen() {
 
       {/* Game list label */}
       <Text style={[styles.sectionLabel, { paddingHorizontal: 16, marginBottom: 8 }]}>
-        {dayOffset(selectedDate) === 0 ? t('home.todaysGames') : t('home.dateGames')}
+        {isToday(selectedDate) ? t('home.todaysGames') : t('home.dateGames')}
       </Text>
 
       {loading ? (

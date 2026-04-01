@@ -1771,6 +1771,7 @@ def active_monitors(user_token: str = ""):
                             "home_team_id":    r.home_team_id or "",
                             "away_team_id":    r.away_team_id or "",
                             "notify_at_start": getattr(r, 'notify_at_start', False),
+                            "game_date":       getattr(r, 'game_date', None) or "",
                         }
                         for r in alarm_rows
                     ]

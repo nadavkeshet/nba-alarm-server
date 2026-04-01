@@ -83,6 +83,7 @@ interface DbAlarm {
   home_team_id?:    string;
   away_team_id?:    string;
   notify_at_start?: boolean;
+  game_date?:       string;  // "YYYYMMDD" — present for future-day alarms
 }
 
 interface HistoricalCats {
@@ -173,6 +174,21 @@ const LivePill = React.memo(function LivePill({ label, color, bg }: { label: str
 /** Returns "Last 5'" for start_quarter=5, otherwise "Q{n}" */
 function qLabel(q: number | string | undefined | null): string {
   return String(q) === '5' ? "Last 5'" : `Q${q ?? '?'}`;
+}
+
+/** Format "YYYYMMDD" → e.g. "Apr 4" */
+function formatGameDate(s: string | undefined | null): string | null {
+  if (!s || s.length !== 8) return null;
+  const year  = parseInt(s.slice(0, 4), 10);
+  const month = parseInt(s.slice(4, 6), 10) - 1;
+  const day   = parseInt(s.slice(6, 8), 10);
+  const today = new Date();
+  const d     = new Date(year, month, day);
+  // If same calendar day as today, return null (no badge needed)
+  if (d.getFullYear() === today.getFullYear() &&
+      d.getMonth()    === today.getMonth()    &&
+      d.getDate()     === today.getDate()) return null;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 // ─── ActiveScreen ─────────────────────────────────────────────────────────────
@@ -456,10 +472,17 @@ export default function ActiveScreen() {
                     </View>
                   )}
                   <View style={styles.alarmCardLeft}>
-                    <LivePill label={t('active.saved')} color={C.accentBlue} bg="rgba(77,140,245,0.12)" />
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <LivePill label={t('active.saved')} color={C.accentBlue} bg="rgba(77,140,245,0.12)" />
+                      {formatGameDate(alarm.game_date) && (
+                        <View style={styles.dateBadge}>
+                          <Text style={styles.dateBadgeText}>{formatGameDate(alarm.game_date)}</Text>
+                        </View>
+                      )}
+                    </View>
                     <Text style={styles.alarmGame}>{isHebrew ? translateGameName(alarm.target_name || '') || alarm.target_id || t('active.unknownGame') : (alarm.target_name || alarm.target_id || t('active.unknownGame'))}</Text>
                     <Text style={styles.alarmSub}>
-                      {`≤ ${alarm.threshold ?? '?'} pts · From ${qLabel(alarm.start_quarter ?? 4)}`}
+                      {alarm.notify_at_start ? `Any score · From ${qLabel(alarm.start_quarter ?? 4)}` : `≤ ${alarm.threshold ?? '?'} pts · From ${qLabel(alarm.start_quarter ?? 4)}`}
                     </Text>
                   </View>
                   <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelDbAlarm(alarm)}>
@@ -786,6 +809,12 @@ const makeStyles = (C: AppColors) => StyleSheet.create({
 
   alarmGame: { fontSize: 14, fontWeight: '700', color: C.textPrimary },
   alarmSub:  { fontSize: 12, color: C.textMuted, marginTop: 2 },
+
+  dateBadge: {
+    paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6,
+    backgroundColor: 'rgba(255,107,0,0.12)', borderWidth: 1, borderColor: 'rgba(255,107,0,0.3)',
+  },
+  dateBadgeText: { fontSize: 11, fontWeight: '700', color: C.orange },
 
   cancelBtn: {
     paddingHorizontal: 12, paddingVertical: 7,
