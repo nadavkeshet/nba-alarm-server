@@ -1,8 +1,9 @@
 export const en = {
   // ── Tabs ────────────────────────────────────────────────────────
-  'tab.home':    'Home',
-  'tab.active':  'Active',
-  'tab.settings':'Settings',
+  'tab.home':      'Home',
+  'tab.active':    'Active',
+  'tab.favorites': 'Favorites',
+  'tab.settings':  'Settings',
 
   // ── Home ────────────────────────────────────────────────────────
   'home.title':            'Clutch Alarm',

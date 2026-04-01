@@ -58,6 +58,13 @@ function TabLayoutInner() {
           }}
         />
         <Tabs.Screen
+          name="favorites"
+          options={{
+            title: t('tab.favorites'),
+            tabBarIcon: ({ color }) => <Ionicons name="star" size={26} color={color} />,
+          }}
+        />
+        <Tabs.Screen
           name="settings"
           options={{
             title: t('tab.settings'),
