@@ -852,33 +852,41 @@ async def _alarm_poller() -> None:
 
 def _restart_alarm_threads_from_db() -> None:
     """
-    On startup: expire stale alarms (created before today ET that are still
-    is_active=True — game is guaranteed to be over) then count remaining ones.
+    On startup: expire stale alarms whose game_id is no longer in today's
+    ESPN schedule (game is over or postponed). Alarms whose game_id IS in
+    today's schedule are left active — the poller will handle them normally.
     This handles the case where the server crashed mid-game and the poller
-    never got a chance to mark alarms as expired.
+    never got a chance to mark those alarms as expired.
     """
     if engine is None:
         return
     try:
-        # "Today" in Eastern time (games never span past ~4am ET)
-        today_et = (datetime.now(timezone.utc) - timedelta(hours=5)).date()
-        today_start_utc = datetime(
-            today_et.year, today_et.month, today_et.day,
-            tzinfo=timezone.utc
-        ) + timedelta(hours=5)  # midnight ET in UTC
-
         with Session(engine) as session:
-            stale = (
+            active_alarms = (
                 session.query(Alarm)
                 .filter(Alarm.is_active.is_(True))
-                .filter(Alarm.created_at < today_start_utc)
                 .all()
             )
-            if stale:
-                for row in stale:
-                    row.is_active = False
-                session.commit()
-                log.info("STARTUP: expired %d stale alarm(s) from previous day(s).", len(stale))
+            if not active_alarms:
+                return
+
+            # Fetch today's game IDs from ESPN (already cached if pre-warm ran first)
+            try:
+                today_games = get_today_games()
+                today_game_ids = {str(g["id"]) for g in today_games}
+            except Exception:
+                today_game_ids = None  # ESPN unavailable — skip cleanup, be safe
+
+            expired = 0
+            if today_game_ids is not None:
+                for row in active_alarms:
+                    game_id = str(row.game_id or row.target_id or "")
+                    if game_id and game_id not in today_game_ids:
+                        row.is_active = False
+                        expired += 1
+                if expired:
+                    session.commit()
+                    log.info("STARTUP: expired %d stale alarm(s) not in today's schedule.", expired)
 
             count = session.query(Alarm).filter(Alarm.is_active.is_(True)).count()
         if count:
