@@ -124,7 +124,7 @@ function GameCard({
   }, [isLive]);
 
   return (
-    <TouchableOpacity style={styles.gameCard} onPress={onPress} activeOpacity={0.75}>
+    <TouchableOpacity style={styles.gameCard} onPress={isFinal ? undefined : onPress} activeOpacity={isFinal ? 1 : 0.75} disabled={isFinal}>
       <View style={styles.cardHeader}>
         {isLive ? (
           <View style={styles.liveBadge}>
@@ -685,9 +685,6 @@ export default function HomeScreen() {
 
         <TouchableOpacity onPress={() => setSelectedDate(todayDate())} activeOpacity={0.7}>
           <Text style={styles.dateLabel}>{dateLabelFor(selectedDate)}</Text>
-          {!isToday(selectedDate) && (
-            <Text style={styles.dateSub}>{t('home.today')}</Text>
-          )}
         </TouchableOpacity>
 
         <TouchableOpacity
