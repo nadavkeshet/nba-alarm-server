@@ -4,6 +4,7 @@ import messaging from '@react-native-firebase/messaging';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Updates from 'expo-updates';
 import React, { useEffect, useRef, useState } from 'react';
 import { AppState, I18nManager, NativeModules, Platform, StyleSheet, View } from 'react-native';
 
@@ -36,6 +37,20 @@ export default function RootLayout() {
     setConfetti(true);
     confettiTimer.current = setTimeout(() => setConfetti(false), 3500);
   };
+
+  // Check for OTA updates on every cold start and reload immediately when found
+  useEffect(() => {
+    if (__DEV__) return;
+    (async () => {
+      try {
+        const update = await Updates.checkForUpdateAsync();
+        if (update.isAvailable) {
+          await Updates.fetchUpdateAsync();
+          await Updates.reloadAsync();
+        }
+      } catch {}
+    })();
+  }, []);
 
   // Show onboarding once on first launch (Android only)
   useEffect(() => {
