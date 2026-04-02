@@ -678,9 +678,10 @@ export default function HomeScreen() {
         <TouchableOpacity
           style={styles.dateArrow}
           onPress={() => shiftDate(-1)}
+          disabled={dayOffset(selectedDate) <= -3}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
-          <Ionicons name="chevron-back" size={22} color={C.accentBlue} />
+          <Ionicons name="chevron-back" size={22} color={dayOffset(selectedDate) <= -3 ? C.border : C.accentBlue} />
         </TouchableOpacity>
 
         <TouchableOpacity onPress={() => setSelectedDate(todayDate())} activeOpacity={0.7}>
