@@ -72,15 +72,20 @@ export default function SettingsScreen() {
   }, []);
 
   const handlePreview = (id: string) => {
-    if (previewingSound === id) {
-      NativeModules.AlarmChannel?.stopAlarmSound();
-      setPreviewingSound(null);
-    } else {
-      NativeModules.AlarmChannel?.stopAlarmSound();
-      NativeModules.AlarmChannel?.playAlarmSound(id + '.wav');
-      setPreviewingSound(id);
+    try {
+      if (previewingSound === id) {
+        NativeModules.AlarmChannel?.stopAlarmSound();
+        setPreviewingSound(null);
+      } else {
+        NativeModules.AlarmChannel?.stopAlarmSound();
+        NativeModules.AlarmChannel?.playAlarmSound(id + '.wav');
+        setPreviewingSound(id);
+      }
+      setPendingSound(id);
+    } catch (e: any) {
+      setPendingSound(id);
+      throw e; // re-throw so ErrorUtils global handler shows the debug screen
     }
-    setPendingSound(id);
   };
 
   const saveAlarmSound = async () => {

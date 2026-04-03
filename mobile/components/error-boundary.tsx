@@ -1,10 +1,57 @@
 import React from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { Clipboard, ScrollView, Text, TouchableOpacity } from 'react-native'; // eslint-disable-line deprecation/deprecation
 
 interface State { error: Error | null }
 
+// ─── Shared global error state (for ErrorUtils handler) ──────────────────────
+
+let _globalSetError: ((e: Error) => void) | null = null;
+
+export function reportGlobalError(error: Error) {
+  _globalSetError?.(error);
+}
+
+// ─── Debug screen ─────────────────────────────────────────────────────────────
+
+function DebugScreen({ error }: { error: Error }) {
+  const text = `${error?.toString()}\n\n${error?.stack ?? ''}`;
+  return (
+    <ScrollView style={{ flex: 1, backgroundColor: '#0B1623', padding: 20 }}>
+      <Text style={{ color: '#FF6B00', fontSize: 16, fontWeight: 'bold', marginTop: 40 }}>
+        ⚠️ CRASH — copy and send to dev:
+      </Text>
+      <TouchableOpacity
+        onPress={() => Clipboard.setString(text)}
+        style={{
+          marginTop: 12, marginBottom: 8,
+          backgroundColor: 'rgba(255,107,0,0.15)',
+          padding: 10, borderRadius: 8,
+          borderWidth: 1, borderColor: 'rgba(255,107,0,0.4)',
+        }}
+      >
+        <Text style={{ color: '#FF6B00', fontWeight: '700', fontSize: 13, textAlign: 'center' }}>
+          📋 Copy error to clipboard
+        </Text>
+      </TouchableOpacity>
+      <Text style={{ color: '#e6edf3', fontSize: 11, marginTop: 8, lineHeight: 17, fontFamily: 'monospace' }}>
+        {text}
+      </Text>
+    </ScrollView>
+  );
+}
+
+// ─── ErrorBoundary (catches render errors) ────────────────────────────────────
+
 export class ErrorBoundary extends React.Component<{ children: React.ReactNode }, State> {
   state: State = { error: null };
+
+  componentDidMount() {
+    _globalSetError = (e: Error) => this.setState({ error: e });
+  }
+
+  componentWillUnmount() {
+    _globalSetError = null;
+  }
 
   static getDerivedStateFromError(error: Error): State {
     return { error };
@@ -12,18 +59,7 @@ export class ErrorBoundary extends React.Component<{ children: React.ReactNode }
 
   render() {
     if (this.state.error) {
-      return (
-        <ScrollView style={{ flex: 1, backgroundColor: '#0B1623', padding: 20 }}>
-          <Text style={{ color: '#FF6B00', fontSize: 16, fontWeight: 'bold', marginTop: 40 }}>
-            CRASH — copy this and send:
-          </Text>
-          <Text style={{ color: '#e6edf3', fontSize: 12, marginTop: 12, lineHeight: 18 }}>
-            {this.state.error?.toString()}
-            {'\n\n'}
-            {this.state.error?.stack}
-          </Text>
-        </ScrollView>
-      );
+      return <DebugScreen error={this.state.error} />;
     }
     return this.props.children;
   }

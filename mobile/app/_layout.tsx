@@ -6,7 +6,7 @@ import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Updates from 'expo-updates';
 import React, { useEffect, useRef, useState } from 'react';
-import { AppState, I18nManager, NativeModules, Platform, StyleSheet, View } from 'react-native';
+import { AppState, ErrorUtils, I18nManager, NativeModules, Platform, StyleSheet, View } from 'react-native';
 
 import { SERVER_URL } from '../config';
 import ConfettiCannon from 'react-native-confetti-cannon';
@@ -15,6 +15,7 @@ import 'react-native-reanimated';
 import { triggerStop } from '../alarmSoundHandler';
 import { useColorScheme } from '../hooks/use-color-scheme';
 import { PermissionsOnboarding } from '../components/permissions-onboarding';
+import { ErrorBoundary, reportGlobalError } from '../components/error-boundary';
 
 // Force LTR layout regardless of device locale (app content is always LTR)
 I18nManager.allowRTL(false);
@@ -37,6 +38,16 @@ export default function RootLayout() {
     setConfetti(true);
     confettiTimer.current = setTimeout(() => setConfetti(false), 3500);
   };
+
+  // Global JS error handler — routes unhandled errors to the ErrorBoundary debug screen
+  useEffect(() => {
+    const prev = ErrorUtils.getGlobalHandler();
+    ErrorUtils.setGlobalHandler((error, isFatal) => {
+      reportGlobalError(error);
+      prev?.(error, isFatal);
+    });
+    return () => { ErrorUtils.setGlobalHandler(prev); };
+  }, []);
 
   // Pre-fetch OTA updates on cold start so they apply on next launch
   useEffect(() => {
@@ -146,6 +157,7 @@ export default function RootLayout() {
   }, []);
 
   return (
+    <ErrorBoundary>
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
       <PermissionsOnboarding visible={showOnboarding} onDone={handleOnboardingDone} />
       <Stack>
@@ -168,5 +180,6 @@ export default function RootLayout() {
         </View>
       )}
     </ThemeProvider>
+    </ErrorBoundary>
   );
 }
