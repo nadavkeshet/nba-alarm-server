@@ -113,8 +113,13 @@ def _is_nba_programme(title: str, desc: str) -> bool:
     """Check if a programme is an NBA game (not just NBA-related show)."""
     combined = title + " " + desc
     combined_lower = combined.lower()
-    # Must mention NBA
-    if "nba" not in combined_lower and "ליגת" not in combined and "כדורסל" not in combined:
+    # Reject any non-basketball sport immediately
+    non_nba = ["hockey", "הוקי", "nhl", "כדורגל", "soccer", "football", "nfl",
+               "baseball", "mlb", "tennis", "rugby", "cricket", "golf"]
+    if any(s in combined_lower for s in non_nba):
+        return False
+    # Must mention NBA or basketball (Hebrew: כדורסל). "ליגת" alone is too broad.
+    if "nba" not in combined_lower and "כדורסל" not in combined_lower and "ליגת nba" not in combined_lower:
         return False
     # Must have at least one team name
     if not _match_teams(combined):
