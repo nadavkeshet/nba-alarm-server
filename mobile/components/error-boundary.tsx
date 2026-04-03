@@ -3,16 +3,6 @@ import { Clipboard, ScrollView, Text, TouchableOpacity } from 'react-native'; //
 
 interface State { error: Error | null }
 
-// ─── Shared global error state (for ErrorUtils handler) ──────────────────────
-
-let _globalSetError: ((e: Error) => void) | null = null;
-
-export function reportGlobalError(error: Error) {
-  _globalSetError?.(error);
-}
-
-// ─── Debug screen ─────────────────────────────────────────────────────────────
-
 function DebugScreen({ error }: { error: Error }) {
   const text = `${error?.toString()}\n\n${error?.stack ?? ''}`;
   return (
@@ -40,18 +30,8 @@ function DebugScreen({ error }: { error: Error }) {
   );
 }
 
-// ─── ErrorBoundary (catches render errors) ────────────────────────────────────
-
 export class ErrorBoundary extends React.Component<{ children: React.ReactNode }, State> {
   state: State = { error: null };
-
-  componentDidMount() {
-    _globalSetError = (e: Error) => this.setState({ error: e });
-  }
-
-  componentWillUnmount() {
-    _globalSetError = null;
-  }
 
   static getDerivedStateFromError(error: Error): State {
     return { error };

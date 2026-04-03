@@ -83,8 +83,8 @@ export default function SettingsScreen() {
       }
       setPendingSound(id);
     } catch (e: any) {
+      console.error('AlarmChannel error:', e);
       setPendingSound(id);
-      throw e; // re-throw so ErrorUtils global handler shows the debug screen
     }
   };
 
