@@ -439,6 +439,7 @@ export default function HomeScreen() {
   // ── Startup effect ────────────────────────────────────────────────
   const retryIntervalRef   = useRef<ReturnType<typeof setInterval> | null>(null);
   const gamesRetryRef      = useRef<ReturnType<typeof setInterval> | null>(null);
+  const selectedDateRef    = useRef<Date>(selectedDate);
 
   useEffect(() => {
     // Set up Notifee channels + get FCM token, then register with server
@@ -510,7 +511,8 @@ export default function HomeScreen() {
 
     // 60-second live-score auto-refresh (today only)
     const refreshInterval = setInterval(() => {
-      if (isToday(selectedDate)) fetchGames(true);
+      const cur = selectedDateRef.current;
+      if (isToday(cur)) fetchGames(true, cur);
     }, 60_000);
 
     return () => {
@@ -520,6 +522,11 @@ export default function HomeScreen() {
       if (gamesRetryRef.current) clearInterval(gamesRetryRef.current);
     };
   }, []);
+
+  // Keep ref in sync so the 60s interval always sees the current date
+  useEffect(() => {
+    selectedDateRef.current = selectedDate;
+  }, [selectedDate]);
 
   // Re-fetch when selected date changes
   useEffect(() => {
