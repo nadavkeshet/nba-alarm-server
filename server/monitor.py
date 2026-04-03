@@ -65,6 +65,59 @@ def _tid(token: str) -> str:
 MOCK_STATS = {"PTS": 25, "REB": 9, "AST": 9, "STL": 2, "BLK": 9}
 
 ESPN_NBA_URL          = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
+
+# ── ESPN schema canary ────────────────────────────────────────────────────────
+
+ADMIN_FCM_TOKEN = os.environ.get("ADMIN_FCM_TOKEN", "fMnOc5gAT9K0zZixXZ7arm:APA91bFQ0gWM1CnlsprB__6YIFp7xSNOi_LhgdNhbnAIixAn-mClMXM5Aj0F7p0FVDKRT8i9qeKLJCvp_gR3LIgxZ69tu9VVLn2ryEdly2WRRFy7T7z-sls")
+_CANARY_LAST_ALERT: float = 0.0
+_CANARY_COOLDOWN   = 6 * 3600  # one alert per 6 hours max
+_VALID_STATES      = {"pre", "in", "post"}
+
+def _validate_espn_event(event: dict) -> list[str]:
+    """Return list of missing/unexpected fields for a single ESPN game object."""
+    issues = []
+    if not event.get("id"):
+        issues.append("missing id")
+    comp = (event.get("competitions") or [{}])[0]
+    competitors = comp.get("competitors", [])
+    if len(competitors) < 2:
+        issues.append("competitors < 2")
+    else:
+        for c in competitors:
+            if not c.get("team", {}).get("abbreviation"):
+                issues.append("missing team abbreviation")
+            if c.get("score") is None:
+                issues.append("missing score")
+    state = event.get("status", {}).get("type", {}).get("state")
+    if state not in _VALID_STATES:
+        issues.append(f"unexpected state: {state!r}")
+    return issues
+
+def _check_espn_schema(events: list[dict]) -> None:
+    """Validate a batch of ESPN events. Alert admin if structure looks broken."""
+    global _CANARY_LAST_ALERT
+    if not events:
+        return
+    failed = sum(1 for e in events if _validate_espn_event(e))
+    if failed < len(events) / 2:
+        return  # less than half broken — probably a single bad game, ignore
+    now = time.time()
+    if now - _CANARY_LAST_ALERT < _CANARY_COOLDOWN:
+        return  # already alerted recently
+    _CANARY_LAST_ALERT = now
+    msg = f"{failed}/{len(events)} games failed schema validation — ESPN may have changed their API."
+    log.error("ESPN SCHEMA CANARY: %s", msg)
+    if ADMIN_FCM_TOKEN and _firebase_ready:
+        try:
+            fb_messaging.send(fb_messaging.Message(
+                data={"title": "⚠️ ESPN Schema Alert", "body": msg,
+                      "alert_type": "silent", "channel_id": "silent", "sound": ""},
+                android=fb_messaging.AndroidConfig(priority="high"),
+                token=ADMIN_FCM_TOKEN,
+            ))
+            log.info("ESPN canary alert sent to admin.")
+        except Exception as exc:
+            log.warning("ESPN canary alert FCM failed: %s", exc)
 ESPN_SUMMARY_URL      = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary"
 ESPN_TEAMS_URL        = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams"
 ESPN_ATHLETE_STATS_URL = "https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes"
@@ -1409,6 +1462,7 @@ def get_today_games() -> list[dict]:
         resp.raise_for_status()
         events = resp.json().get("events", [])
         log.info("NBA: %d games fetched for %s", len(events), eastern_date)
+        _check_espn_schema(events)
         _games_cache = events
         _games_cache_time = now
         return events
