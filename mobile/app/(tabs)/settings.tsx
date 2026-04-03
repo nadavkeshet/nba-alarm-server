@@ -49,6 +49,7 @@ export default function SettingsScreen() {
   const [pendingSound, setPendingSound]     = useState('classic_alarm');
   const [previewingSound, setPreviewingSound] = useState<string | null>(null);
   const [infoModal, setInfoModal] = useState<{ visible: boolean; title: string; message: string }>({ visible: false, title: '', message: '' });
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const showInfo = (title: string, message: string) => setInfoModal({ visible: true, title, message });
 
@@ -78,12 +79,14 @@ export default function SettingsScreen() {
         setPreviewingSound(null);
       } else {
         NativeModules.AlarmChannel?.stopAlarmSound();
-        NativeModules.AlarmChannel?.playAlarmSound(id + '.wav');
+        NativeModules.AlarmChannel?.startAlarmSound(id);
         setPreviewingSound(id);
       }
       setPendingSound(id);
     } catch (e: any) {
-      console.error('AlarmChannel error:', e);
+      const msg = e?.message ?? String(e);
+      console.error('AlarmChannel error:', msg);
+      setPreviewError(msg);
       setPendingSound(id);
     }
   };
@@ -190,6 +193,11 @@ export default function SettingsScreen() {
             </TouchableOpacity>
           ))}
 
+          {previewError && (
+            <Text style={{ color: '#FF6B00', fontSize: 11, marginBottom: 8, fontFamily: 'monospace' }}>
+              ⚠️ {previewError}
+            </Text>
+          )}
           <TouchableOpacity
             style={[styles.updateBtn, { marginTop: 12 }]}
             onPress={saveAlarmSound}
