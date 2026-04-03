@@ -38,7 +38,7 @@ export default function RootLayout() {
     confettiTimer.current = setTimeout(() => setConfetti(false), 3500);
   };
 
-  // Check for OTA updates on every cold start and reload immediately when found
+  // Pre-fetch OTA updates on cold start so they apply on next launch
   useEffect(() => {
     if (__DEV__) return;
     (async () => {
@@ -46,7 +46,9 @@ export default function RootLayout() {
         const update = await Updates.checkForUpdateAsync();
         if (update.isAvailable) {
           await Updates.fetchUpdateAsync();
-          await Updates.reloadAsync();
+          // Intentionally not calling reloadAsync() — applying immediately
+          // would leave native modules (AlarmChannel) in an invalid state.
+          // The update will be applied on the next cold start automatically.
         }
       } catch {}
     })();
