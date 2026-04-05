@@ -1665,6 +1665,29 @@ def epg_all_games(country: str = "il"):
     return {"broadcasts": get_all_broadcasts(country=country, games=today_games)}
 
 
+@app.get("/watch-score")
+def watch_score(home: str, away: str, date: str = ""):
+    """
+    Calculate the smart watch score (1-10) for a finished game.
+    Query params: home (team abbr), away (team abbr), date (YYYYMMDD, default today).
+    """
+    from watch_score import calculate_watch_score_by_teams
+    from monitor import _eastern_today
+    game_date = date if date else _eastern_today()
+    result = calculate_watch_score_by_teams(home_abbr=home, away_abbr=away, date_yyyymmdd=game_date)
+    if result is None:
+        return {"error": "Game not found or play-by-play unavailable", "score": None}
+    return {
+        "score": result.score,
+        "tension": result.tension_score,
+        "flow": result.flow_score,
+        "clutch": result.clutch_score,
+        "overtime": result.overtime,
+        "buzzer_beater": result.buzzer_beater,
+        "details": result.details,
+    }
+
+
 @app.get("/trophy-room")
 def trophy_room(user_token: str = ""):
     """Get notification history for a user (Trophy Room)."""
