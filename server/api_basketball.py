@@ -38,6 +38,7 @@ LEAGUES = {
     "euroleague": {
         "id": 120,
         "season": "2025",
+        "player_season": "2025-2026",  # players endpoint uses different season format
         "name": "Euroleague",
         "country": "Europe",
         "periods": 4,
@@ -498,16 +499,20 @@ def fetch_team_players(team_id: int | str, league: str = "nba") -> list[dict]:
     """
     Fetch roster for a team. Returns list matching the player schema:
     {id, name, jersey, position}
+    Uses player_season if defined (Euroleague uses different season format for players).
     """
     cfg = LEAGUES.get(league, LEAGUES["nba"])
-    players = _api_get("players", {"team": int(team_id), "season": cfg["season"]})
+    season = cfg.get("player_season", cfg["season"])
+    players = _api_get("players", {
+        "team": int(team_id),
+        "season": season,
+    })
     result = []
     for p in players:
         position = p.get("position") or ""
-        number = p.get("number")
-        # Only include players with both position AND jersey number (active roster)
-        if not position or number is None:
+        if not position:
             continue
+        number = p.get("number")
         raw_name = p.get("name", "?")
         display_name = _flip_name(raw_name)
         pos_map = {"Guard": "G", "Forward": "F", "Center": "C",
@@ -518,7 +523,7 @@ def fetch_team_players(team_id: int | str, league: str = "nba") -> list[dict]:
         result.append({
             "id": str(p.get("id", "")),
             "name": display_name,
-            "jersey": str(number),
+            "jersey": str(number) if number is not None else "",
             "position": pos_abbr,
         })
     return result
