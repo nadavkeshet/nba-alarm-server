@@ -2,9 +2,11 @@
 Clutch Alarm – API-Basketball Adapter
 ======================================
 
-Single source of truth for all NBA data. Fetches from api-sports.io
+Single source of truth for all basketball data. Fetches from api-sports.io
 and transforms responses into the ESPN-compatible format that the rest
 of the server (main.py, monitor.py, epg.py) and mobile apps expect.
+
+Supports multiple leagues (NBA, Euroleague, etc.) via league configs.
 """
 
 import os
@@ -20,8 +22,33 @@ log = logging.getLogger("nba_monitor")
 
 API_BASE = "https://v1.basketball.api-sports.io"
 API_KEY = os.environ.get("API_BASKETBALL_KEY", "")
+
+# ── League configs ───────────────────────────────────────────────────────────
+
+LEAGUES = {
+    "nba": {
+        "id": 12,
+        "season": os.environ.get("API_BASKETBALL_SEASON", "2025-2026"),
+        "name": "NBA",
+        "country": "USA",
+        "periods": 4,
+        "period_minutes": 12,
+        "ot_minutes": 5,
+    },
+    "euroleague": {
+        "id": 120,
+        "season": "2025",
+        "name": "Euroleague",
+        "country": "Europe",
+        "periods": 4,
+        "period_minutes": 10,
+        "ot_minutes": 5,
+    },
+}
+
+# Backwards compat
 NBA_LEAGUE_ID = 12
-SEASON = os.environ.get("API_BASKETBALL_SEASON", "2025-2026")
+SEASON = LEAGUES["nba"]["season"]
 
 # ── Team ID → ESPN abbreviation / display name mapping ───────────────────────
 # API-Basketball team IDs mapped to ESPN abbreviations used throughout
@@ -58,6 +85,27 @@ _TEAM_MAP: dict[int, dict] = {
     159: {"abbreviation": "TOR", "displayName": "Toronto Raptors",          "name": "Raptors"},
     160: {"abbreviation": "UTAH","displayName": "Utah Jazz",                "name": "Jazz"},
     161: {"abbreviation": "WSH", "displayName": "Washington Wizards",       "name": "Wizards"},
+    # ── Euroleague ──
+    1263: {"abbreviation": "EFE", "displayName": "Anadolu Efes",            "name": "Efes"},
+    2329: {"abbreviation": "BAR", "displayName": "FC Barcelona",            "name": "Barcelona"},
+    2331: {"abbreviation": "BAS", "displayName": "Baskonia",                "name": "Baskonia"},
+     522: {"abbreviation": "BAY", "displayName": "Bayern Munich",           "name": "Bayern"},
+    1065: {"abbreviation": "CZV", "displayName": "Crvena Zvezda",           "name": "Zvezda"},
+    6496: {"abbreviation": "DUB", "displayName": "Dubai BC",                "name": "Dubai"},
+    1270: {"abbreviation": "FEN", "displayName": "Fenerbahce",              "name": "Fenerbahce"},
+     682: {"abbreviation": "HTA", "displayName": "Hapoel Tel Aviv",         "name": "Hapoel TA"},
+      26: {"abbreviation": "LYN", "displayName": "LDLC ASVEL Villeurbanne", "name": "ASVEL"},
+     687: {"abbreviation": "MTA", "displayName": "Maccabi Tel Aviv",        "name": "Maccabi TA"},
+      16: {"abbreviation": "MON", "displayName": "AS Monaco",               "name": "Monaco"},
+     722: {"abbreviation": "MIL", "displayName": "Olimpia Milano",          "name": "Milano"},
+    1542: {"abbreviation": "OLY", "displayName": "Olympiacos",              "name": "Olympiacos"},
+     614: {"abbreviation": "PAN", "displayName": "Panathinaikos",           "name": "Panathinaikos"},
+     108: {"abbreviation": "PAR", "displayName": "Paris Basketball",        "name": "Paris"},
+    1068: {"abbreviation": "PAT", "displayName": "Partizan",                "name": "Partizan"},
+    2338: {"abbreviation": "RMA", "displayName": "Real Madrid",             "name": "Real Madrid"},
+    2341: {"abbreviation": "VAL", "displayName": "Valencia Basket",         "name": "Valencia"},
+     732: {"abbreviation": "VIR", "displayName": "Virtus Bologna",          "name": "Virtus"},
+     796: {"abbreviation": "ZAL", "displayName": "Zalgiris Kaunas",         "name": "Zalgiris"},
 }
 
 # Reverse lookup: abbreviation → API-Basketball team ID
@@ -254,21 +302,23 @@ def _make_team_obj(team: dict) -> dict:
 
 # ── Games (scoreboard) ──────────────────────────────────────────────────────
 
-def fetch_games(date_str: str) -> list[dict]:
+def fetch_games(date_str: str, league: str = "nba") -> list[dict]:
     """
-    Fetch NBA games for a date and return them in ESPN event format.
+    Fetch games for a date and league, return in ESPN event format.
     date_str can be YYYYMMDD or YYYY-MM-DD.
+    league: "nba", "euroleague", etc.
     """
+    cfg = LEAGUES.get(league, LEAGUES["nba"])
     date_api = _normalize_date(date_str)
     games = _api_get("games", {
         "date": date_api,
-        "league": NBA_LEAGUE_ID,
-        "season": SEASON,
+        "league": cfg["id"],
+        "season": cfg["season"],
     })
-    return [_transform_game(g) for g in games if g.get("league", {}).get("id") == NBA_LEAGUE_ID or True]
+    return [_transform_game(g, league=league) for g in games]
 
 
-def _transform_game(game: dict) -> dict:
+def _transform_game(game: dict, league: str = "nba") -> dict:
     """Transform one API-Basketball game into ESPN event format."""
     game_id = str(game.get("id", ""))
     date_str = game.get("date", "")
@@ -299,6 +349,7 @@ def _transform_game(game: dict) -> dict:
         "date": date_str,
         "name": full_name,
         "shortName": short_name,
+        "league": league,
         "status": status,
         "competitions": [{
             "status": status,
@@ -419,13 +470,14 @@ def fetch_player_boxscore(game_id: str) -> dict | None:
 
 # ── Teams & Rosters ──────────────────────────────────────────────────────────
 
-def fetch_all_teams() -> list[dict]:
+def fetch_all_teams(league: str = "nba") -> list[dict]:
     """
-    Fetch all NBA teams from API-Basketball.
+    Fetch all teams for a league from API-Basketball.
     Returns list of dicts matching the _ROSTER_CACHE schema:
     {id, name, abbreviation, logo, players: []}
     """
-    teams = _api_get("teams", {"league": NBA_LEAGUE_ID, "season": SEASON})
+    cfg = LEAGUES.get(league, LEAGUES["nba"])
+    teams = _api_get("teams", {"league": cfg["id"], "season": cfg["season"]})
     result = []
     for t in teams:
         tid = t.get("id", 0)
@@ -442,12 +494,13 @@ def fetch_all_teams() -> list[dict]:
     return result
 
 
-def fetch_team_players(team_id: int | str) -> list[dict]:
+def fetch_team_players(team_id: int | str, league: str = "nba") -> list[dict]:
     """
     Fetch roster for a team. Returns list matching the player schema:
     {id, name, jersey, position}
     """
-    players = _api_get("players", {"team": int(team_id), "season": SEASON})
+    cfg = LEAGUES.get(league, LEAGUES["nba"])
+    players = _api_get("players", {"team": int(team_id), "season": cfg["season"]})
     result = []
     for p in players:
         position = p.get("position") or ""

@@ -1388,17 +1388,17 @@ def get_today_games() -> list[dict]:
         return _games_cache  # return stale cache on error rather than empty list
 
 
-def get_games_for_date(date: str | None) -> list[dict]:
-    """Return NBA games for the given YYYYMMDD date string (or today if None)."""
+def get_games_for_date(date: str | None, league: str = "nba") -> list[dict]:
+    """Return games for the given YYYYMMDD date string (or today if None)."""
     eastern_date = date if date else _eastern_today()
-    # If requesting today, use the cached path
-    if eastern_date == _eastern_today():
+    # If requesting today's NBA, use the cached path
+    if eastern_date == _eastern_today() and league == "nba":
         return get_today_games()
     try:
-        events = api_fetch_games(eastern_date)
-        log.info("NBA: %d games fetched for %s (non-today)", len(events), eastern_date)
+        events = api_fetch_games(eastern_date, league=league)
+        log.info("%s: %d games fetched for %s", league.upper(), len(events), eastern_date)
         return events
     except Exception as exc:
-        log.warning("NBA games fetch failed for %s: %s", eastern_date, exc)
+        log.warning("%s games fetch failed for %s: %s", league.upper(), eastern_date, exc)
         return []
 

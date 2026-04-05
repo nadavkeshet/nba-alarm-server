@@ -1647,10 +1647,20 @@ def register_token(req: RegisterTokenRequest):
 
 # ── Data Endpoints ─────────────────────────────────────────────────────────────
 
+@app.get("/leagues")
+def leagues():
+    """Return available leagues."""
+    from api_basketball import LEAGUES
+    return {"leagues": [
+        {"id": key, "name": cfg["name"], "country": cfg["country"]}
+        for key, cfg in LEAGUES.items()
+    ]}
+
+
 @app.get("/games")
-def games(date: Optional[str] = None):
-    """Return games for a given date (YYYYMMDD). Defaults to today (US Eastern)."""
-    return {"games": get_games_for_date(date)}
+def games(date: Optional[str] = None, league: str = "nba"):
+    """Return games for a given date (YYYYMMDD) and league. Defaults to today NBA."""
+    return {"games": get_games_for_date(date, league=league)}
 
 
 # ── EPG (TV Broadcast Guide) ─────────────────────────────────────────────────
@@ -1724,6 +1734,7 @@ def _get_cached_watch_score(home: str, away: str, date_str: str) -> dict | None:
 
 
 def _cache_watch_score(home: str, away: str, date_str: str, result) -> dict:
+    from watch_score import WatchScoreResult
     entry = {
         "score": result.score,
         "tension": result.tension_score,
@@ -1760,11 +1771,13 @@ def watch_scores(date: str = ""):
     """
     Batch: return watch scores for all finished games on a date.
     Returns: { "scores": { "DEN_SA": { "score": 8.8, ... }, ... } }
+    Cached in-memory — subsequent requests are instant.
     """
     from watch_score import calculate_watch_score_by_teams
     from monitor import _eastern_today
     game_date = date if date else _eastern_today()
 
+    # Get all games for this date
     events = get_games_for_date(game_date)
     results: dict[str, dict] = {}
 
