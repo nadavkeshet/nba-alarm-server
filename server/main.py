@@ -1665,6 +1665,30 @@ def epg_all_games(country: str = "il"):
     return {"broadcasts": get_all_broadcasts(country=country, games=today_games)}
 
 
+# ── Watch Score (in-memory cache, keyed by "DATE_HOME_AWAY") ─────────────────
+
+_watch_score_cache: dict[str, dict] = {}
+
+
+def _get_cached_watch_score(home: str, away: str, date_str: str) -> dict | None:
+    key = f"{date_str}_{home}_{away}"
+    return _watch_score_cache.get(key)
+
+
+def _cache_watch_score(home: str, away: str, date_str: str, result) -> dict:
+    entry = {
+        "score": result.score,
+        "tension": result.tension_score,
+        "flow": result.flow_score,
+        "clutch": result.clutch_score,
+        "overtime": result.overtime,
+        "buzzer_beater": result.buzzer_beater,
+    }
+    key = f"{date_str}_{home}_{away}"
+    _watch_score_cache[key] = entry
+    return entry
+
+
 @app.get("/watch-score")
 def watch_score(home: str, away: str, date: str = ""):
     """
@@ -1674,18 +1698,55 @@ def watch_score(home: str, away: str, date: str = ""):
     from watch_score import calculate_watch_score_by_teams
     from monitor import _eastern_today
     game_date = date if date else _eastern_today()
+    cached = _get_cached_watch_score(home, away, game_date)
+    if cached:
+        return cached
     result = calculate_watch_score_by_teams(home_abbr=home, away_abbr=away, date_yyyymmdd=game_date)
     if result is None:
         return {"error": "Game not found or play-by-play unavailable", "score": None}
-    return {
-        "score": result.score,
-        "tension": result.tension_score,
-        "flow": result.flow_score,
-        "clutch": result.clutch_score,
-        "overtime": result.overtime,
-        "buzzer_beater": result.buzzer_beater,
-        "details": result.details,
-    }
+    return _cache_watch_score(home, away, game_date, result)
+
+
+@app.get("/watch-scores")
+def watch_scores(date: str = ""):
+    """
+    Batch: return watch scores for all finished games on a date.
+    Returns: { "scores": { "DEN_SA": { "score": 8.8, ... }, ... } }
+    """
+    from watch_score import calculate_watch_score_by_teams
+    from monitor import _eastern_today
+    game_date = date if date else _eastern_today()
+
+    events = get_games_for_date(game_date)
+    results: dict[str, dict] = {}
+
+    for event in events:
+        state = event.get("status", {}).get("type", {}).get("state", "")
+        if state != "post":
+            continue
+        comp = (event.get("competitions") or [{}])[0]
+        home_abbr, away_abbr = "", ""
+        for c in comp.get("competitors", []):
+            abbr = c.get("team", {}).get("abbreviation", "")
+            if c.get("homeAway") == "home":
+                home_abbr = abbr
+            else:
+                away_abbr = abbr
+        if not home_abbr or not away_abbr:
+            continue
+
+        key = f"{home_abbr}_{away_abbr}"
+        cached = _get_cached_watch_score(home_abbr, away_abbr, game_date)
+        if cached:
+            results[key] = cached
+            continue
+
+        result = calculate_watch_score_by_teams(
+            home_abbr=home_abbr, away_abbr=away_abbr, date_yyyymmdd=game_date)
+        if result:
+            results[key] = _cache_watch_score(home_abbr, away_abbr, game_date, result)
+
+    return {"scores": results}
 
 
 @app.get("/trophy-room")
