@@ -117,26 +117,28 @@ _CACHE_LOCK   = threading.Lock()
 
 
 def update_all_rosters() -> None:
-    log.info("Roster cache: refreshing all 30 teams...")
-
-    teams = api_fetch_all_teams()
-    if not teams:
-        log.warning("Roster cache: failed to fetch team list from API-Basketball.")
-        return
+    from api_basketball import LEAGUES
+    all_leagues = list(LEAGUES.keys())
+    log.info("Roster cache: refreshing teams for %d league(s)...", len(all_leagues))
 
     new_cache: dict[str, dict] = {}
 
-    for team in teams:
-        team_id = team.get("id", "")
-        if not team_id:
+    for league in all_leagues:
+        teams = api_fetch_all_teams(league=league)
+        if not teams:
+            log.warning("Roster cache: no teams for %s", league)
             continue
-        try:
-            players = api_fetch_team_players(int(team_id))
-            team["players"] = players
-            new_cache[team_id] = team
-            time.sleep(0.15)
-        except Exception as exc:
-            log.warning("Roster cache failed for team %s: %s", team_id, exc)
+        for team in teams:
+            team_id = team.get("id", "")
+            if not team_id:
+                continue
+            try:
+                players = api_fetch_team_players(int(team_id), league=league)
+                team["players"] = players
+                new_cache[team_id] = team
+                time.sleep(0.15)
+            except Exception as exc:
+                log.warning("Roster cache failed for team %s: %s", team_id, exc)
 
     with _CACHE_LOCK:
         _ROSTER_CACHE.clear()
@@ -550,17 +552,36 @@ def fetch_game_summary_roster(game_id: str) -> dict:
     """
     Return cached rosters for both teams in game_id.
 
-    Step 1 – identify the two teams from today's scoreboard cache.
+    Step 1 – identify the two teams from scoreboard (tries all leagues).
     Step 2 – serve each team from _ROSTER_CACHE.
       Cache miss → live fetch from API-Basketball + populate cache.
     """
+    from api_basketball import LEAGUES
     # ── Step 1: collect raw team stubs ─────────────────────────────────────────
     team_stubs: list[dict] = []
 
+    # Try today's NBA cache first
     event = _fetch_nba_game(game_id)
     if event is not None:
         for comp in event.get("competitions", [{}])[0].get("competitors", []):
             team_stubs.append(comp.get("team", {}))
+
+    # If not found, search other leagues for today's date
+    if not team_stubs:
+        for league in LEAGUES:
+            if league == "nba":
+                continue
+            try:
+                games = api_fetch_games(_eastern_today(), league=league)
+                for g in games:
+                    if str(g.get("id")) == str(game_id):
+                        for comp in g.get("competitions", [{}])[0].get("competitors", []):
+                            team_stubs.append(comp.get("team", {}))
+                        break
+            except Exception:
+                pass
+            if team_stubs:
+                break
 
     if not team_stubs:
         log.warning("Game summary: could not identify teams for game %s.", game_id)
