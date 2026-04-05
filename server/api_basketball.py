@@ -509,16 +509,14 @@ def fetch_team_players(team_id: int | str, league: str = "nba") -> list[dict]:
     })
     result = []
     for p in players:
-        position = p.get("position") or ""
-        if not position:
-            continue
-        number = p.get("number")
         raw_name = p.get("name", "?")
         display_name = _flip_name(raw_name)
+        number = p.get("number")
+        position = p.get("position") or ""
         pos_map = {"Guard": "G", "Forward": "F", "Center": "C",
                    "Guard-Forward": "G-F", "Forward-Guard": "F-G",
                    "Forward-Center": "F-C", "Center-Forward": "C-F"}
-        pos_abbr = pos_map.get(position, position)
+        pos_abbr = pos_map.get(position, position) if position else ""
 
         result.append({
             "id": str(p.get("id", "")),
