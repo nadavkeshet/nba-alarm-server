@@ -114,7 +114,7 @@ class FavoritePlayerDB(_Base):
 
     id            = Column(Integer, primary_key=True, index=True)
     user_token    = Column(String,  nullable=False, index=True)
-    target_id     = Column(String,  nullable=False)   # ESPN player id
+    target_id     = Column(String,  nullable=False)   # player id
     target_name   = Column(String,  nullable=True)
     team_name     = Column(String,  nullable=True)
     total_pts     = Column(Integer, nullable=True)    # None = condition disabled
@@ -231,6 +231,59 @@ def _init_db() -> None:
                 conn.commit()
         except Exception:
             pass  # column already exists – safe to ignore
+
+
+def _migrate_espn_to_api_basketball_ids() -> None:
+    """
+    One-time migration: convert ESPN team IDs to API-Basketball team IDs
+    in favorite_teams table, and ESPN player IDs to API-Basketball player IDs
+    in favorites table. Safe to re-run (skips already-migrated rows).
+    """
+    if engine is None:
+        return
+    from api_basketball import ESPN_TO_API_TEAM_ID, search_player_id
+
+    try:
+        with Session(engine) as session:
+            # ── Team ID migration ──
+            teams = session.query(FavoriteTeamDB).all()
+            team_migrated = 0
+            for t in teams:
+                new_id = ESPN_TO_API_TEAM_ID.get(t.team_id)
+                if new_id and new_id != t.team_id:
+                    t.team_id = new_id
+                    team_migrated += 1
+            if team_migrated:
+                session.commit()
+                log.info("ID MIGRATION: migrated %d team ID(s) from ESPN to API-Basketball.", team_migrated)
+
+            # ── Player ID migration ──
+            players = session.query(FavoritePlayerDB).all()
+            player_migrated = 0
+            for p in players:
+                # Skip if already looks like an API-Basketball ID (they're typically < 100000)
+                # ESPN IDs are typically 7+ digits like 3102477
+                try:
+                    pid_int = int(p.target_id)
+                    if pid_int < 100000:
+                        continue  # likely already migrated
+                except ValueError:
+                    pass
+                if p.target_name:
+                    new_pid = search_player_id(p.target_name)
+                    if new_pid:
+                        log.info("ID MIGRATION: player '%s' ESPN=%s → API=%s",
+                                 p.target_name, p.target_id, new_pid)
+                        p.target_id = new_pid
+                        player_migrated += 1
+                    else:
+                        log.warning("ID MIGRATION: could not find API-Basketball ID for player '%s' (ESPN=%s)",
+                                    p.target_name, p.target_id)
+            if player_migrated:
+                session.commit()
+                log.info("ID MIGRATION: migrated %d player ID(s) from ESPN to API-Basketball.", player_migrated)
+    except Exception as exc:
+        log.error("ID MIGRATION failed: %s", exc)
 
 
 # ── DB Alarm Deactivation (called by monitoring threads in monitor.py) ─────────
@@ -552,20 +605,11 @@ register_db_get_all_users(_get_all_users_for_radar)
 
 # ── Background Async Poller ────────────────────────────────────────────────────
 
-ESPN_SCOREBOARD = (
-    "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
-)
-
-
-def _fetch_scoreboard() -> dict:
-    """Blocking ESPN fetch – called from a thread executor."""
-    resp = requests.get(ESPN_SCOREBOARD, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
+from api_basketball import fetch_player_boxscore as api_fetch_boxscore
 
 
 def _get_event_state(event: dict) -> str:
-    """Return ESPN status state: 'pre' | 'in' | 'post'."""
+    """Return game status state: 'pre' | 'in' | 'post'."""
     try:
         return event.get("status", {}).get("type", {}).get("state", "pre")
     except Exception:
@@ -608,7 +652,7 @@ def _extract_player_pts(event: dict, target_id: str) -> int | None:
 def _extract_player_stats(event: dict, target_id: str) -> dict[str, int]:
     """
     Return a dict of stat totals (PTS, REB, AST, STL, BLK) for target_id
-    using the ESPN leaders block. Returns empty dict if player not found.
+    using the scoreboard leaders block. Returns empty dict if player not found.
     """
     stats: dict[str, int] = {}
     try:
@@ -625,20 +669,17 @@ def _extract_player_stats(event: dict, target_id: str) -> dict[str, int]:
     return stats
 
 
-ESPN_SUMMARY_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary"
-
-_summary_cache: dict[str, dict] = {}   # game_id → summary JSON (shared across poller ticks)
+_summary_cache: dict[str, dict] = {}   # game_id → boxscore JSON (shared across poller ticks)
 
 
 def _fetch_game_summary(game_id: str) -> dict | None:
-    """Fetch (and cache) the ESPN game summary boxscore for a specific game."""
+    """Fetch (and cache) the boxscore for a specific game via API-Basketball."""
     if game_id in _summary_cache:
         return _summary_cache[game_id]
     try:
-        resp = requests.get(ESPN_SUMMARY_URL, params={"event": game_id}, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        _summary_cache[game_id] = data
+        data = api_fetch_boxscore(game_id)
+        if data:
+            _summary_cache[game_id] = data
         return data
     except Exception as exc:
         log.warning("_fetch_game_summary failed for %s: %s", game_id, exc)
@@ -646,7 +687,7 @@ def _fetch_game_summary(game_id: str) -> dict | None:
 
 
 def _player_pts_from_summary(summary: dict, player_id: str) -> int | None:
-    """Extract current points for a player from the ESPN boxscore summary."""
+    """Extract current points for a player from the boxscore summary."""
     try:
         for section in summary.get("boxscore", {}).get("players", []):
             for stats_group in section.get("statistics", []):
@@ -661,7 +702,7 @@ def _player_pts_from_summary(summary: dict, player_id: str) -> int | None:
 
 
 def _player_stats_from_summary(summary: dict, player_id: str) -> dict[str, int]:
-    """Extract PTS/REB/AST/STL/BLK for a player from the ESPN boxscore summary."""
+    """Extract PTS/REB/AST/STL/BLK for a player from the boxscore summary."""
     try:
         for section in summary.get("boxscore", {}).get("players", []):
             for stats_group in section.get("statistics", []):
@@ -777,12 +818,12 @@ def _check_and_fire(alarm: Alarm, events: list[dict], summary: dict | None = Non
 async def _alarm_poller() -> None:
     """
     Every 60 s:
-      1. Read the shared ESPN scoreboard cache (populated by monitor.py threads).
+      1. Read the shared scoreboard cache (populated by monitor.py).
       2. Load all is_active alarms from DB.
       3. Check each alarm; fire + deactivate on match.
     """
     while True:
-        await asyncio.sleep(60)
+        await asyncio.sleep(10)
         if engine is None:
             continue
         try:
@@ -885,7 +926,7 @@ async def _alarm_poller() -> None:
 def _restart_alarm_threads_from_db() -> None:
     """
     On startup: expire stale alarms whose game_id is no longer in today's
-    ESPN schedule (game is over or postponed). Alarms whose game_id IS in
+    today's schedule (game is over or postponed). Alarms whose game_id IS in
     today's schedule are left active — the poller will handle them normally.
     This handles the case where the server crashed mid-game and the poller
     never got a chance to mark those alarms as expired.
@@ -902,12 +943,12 @@ def _restart_alarm_threads_from_db() -> None:
             if not active_alarms:
                 return
 
-            # Fetch today's game IDs from ESPN (already cached if pre-warm ran first)
+            # Fetch today's game IDs (already cached if pre-warm ran first)
             try:
                 today_games = get_today_games()
                 today_game_ids = {str(g["id"]) for g in today_games}
             except Exception:
-                today_game_ids = None  # ESPN unavailable — skip cleanup, be safe
+                today_game_ids = None  # API unavailable — skip cleanup, be safe
 
             from monitor import _eastern_today as _et
             today_str = _et()
@@ -937,12 +978,13 @@ def _restart_alarm_threads_from_db() -> None:
 async def lifespan(_app: FastAPI):
     # ── Startup ──
     _init_db()
+    _migrate_espn_to_api_basketball_ids()  # one-time ID migration
     _load_fired_alerts_from_db()   # hydrate dedup set before radar starts
     _purge_old_alarms()            # delete inactive alarms older than 7 days
     clear_stale_state()
     _restart_alarm_threads_from_db()
     threading.Thread(target=update_all_rosters, daemon=True).start()
-    # Pre-warm ESPN cache so /games is ready immediately after startup
+    # Pre-warm games cache so /games is ready immediately after startup
     threading.Thread(target=get_today_games, daemon=True).start()
     # Radar reads all users directly from DB — always start it
     threading.Thread(target=start_radar_job, daemon=True).start()
@@ -1633,7 +1675,7 @@ def epg_for_game(game_id: str = "", country: str = "il"):
     if event is None:
         return {"broadcasts": [], "error": "game not found"}
 
-    # Extract team abbreviations from ESPN event
+    # Extract team abbreviations from game event
     comp = (event.get("competitions") or [{}])[0]
     competitors = comp.get("competitors", [])
     home_abbr = ""
@@ -1662,7 +1704,7 @@ def epg_for_game(game_id: str = "", country: str = "il"):
 @app.get("/epg/all")
 def epg_all_games(country: str = "il"):
     """
-    Get all NBA TV broadcasts for today's games, keyed by ESPN game_id.
+    Get all NBA TV broadcasts for today's games, keyed by game_id.
     Returns: { "broadcasts": { "401810906": [...], "401810907": [...] } }
     """
     if country.lower() not in _ALLOWED_EPG_COUNTRIES:
