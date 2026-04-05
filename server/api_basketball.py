@@ -497,27 +497,21 @@ def fetch_all_teams(league: str = "nba") -> list[dict]:
 
 def fetch_team_players(team_id: int | str, league: str = "nba") -> list[dict]:
     """
-    Return verified roster from the cached roster DB.
-    Falls back to /players endpoint if not cached.
+    Fetch all players for a team from /players endpoint for the current season.
+    Returns list: [{id, name, jersey, position}]
     """
-    tid = str(team_id)
-    with _roster_db_lock:
-        if tid in _roster_db:
-            return _roster_db[tid]
-
-    # Fallback: unverified roster from /players
     cfg = LEAGUES.get(league, LEAGUES["nba"])
     season = cfg.get("player_season", cfg["season"])
     players = _api_get("players", {"team": int(team_id), "season": season})
     result = []
+    pos_map = {"Guard": "G", "Forward": "F", "Center": "C",
+               "Guard-Forward": "G-F", "Forward-Guard": "F-G",
+               "Forward-Center": "F-C", "Center-Forward": "C-F"}
     for p in players:
         raw_name = p.get("name", "?")
         display_name = _flip_name(raw_name)
         number = p.get("number")
         position = p.get("position") or ""
-        pos_map = {"Guard": "G", "Forward": "F", "Center": "C",
-                   "Guard-Forward": "G-F", "Forward-Guard": "F-G",
-                   "Forward-Center": "F-C", "Center-Forward": "C-F"}
         pos_abbr = pos_map.get(position, position) if position else ""
         result.append({
             "id": str(p.get("id", "")),
@@ -526,149 +520,6 @@ def fetch_team_players(team_id: int | str, league: str = "nba") -> list[dict]:
             "position": pos_abbr,
         })
     return result
-
-
-# ── Verified Roster DB ───────────────────────────────────────────────────────
-# Built by checking each player's actual game stats to confirm they play
-# for the team this season. Persisted to roster_db.json.
-
-import json as _json
-import os as _os
-
-_ROSTER_DB_PATH = _os.path.join(_os.path.dirname(__file__), "roster_db.json")
-_roster_db: dict[str, list[dict]] = {}  # team_id → [players]
-_roster_db_lock = threading.Lock()
-
-
-def _load_roster_db() -> None:
-    """Load cached roster DB from disk."""
-    global _roster_db
-    try:
-        if _os.path.exists(_ROSTER_DB_PATH):
-            with open(_ROSTER_DB_PATH, "r") as f:
-                _roster_db = _json.load(f)
-            log.info("Roster DB loaded: %d teams", len(_roster_db))
-    except Exception as exc:
-        log.warning("Roster DB load failed: %s", exc)
-
-
-def _save_roster_db() -> None:
-    """Save roster DB to disk."""
-    try:
-        with open(_ROSTER_DB_PATH, "w") as f:
-            _json.dump(_roster_db, f, ensure_ascii=False, indent=1)
-        log.info("Roster DB saved: %d teams", len(_roster_db))
-    except Exception as exc:
-        log.warning("Roster DB save failed: %s", exc)
-
-
-def build_roster_db() -> dict:
-    """
-    Build verified roster DB for all teams in all leagues.
-    For each team, fetches the last 5 finished games and collects every
-    player who actually appeared in at least one of them.
-    This gives the real active roster — no traded/cut players.
-
-    Budget: ~50 team calls + ~50 game lists + ~250 game stat calls ≈ 350 requests.
-    """
-    global _roster_db
-    new_db: dict[str, list[dict]] = {}
-    total_api_calls = 0
-
-    for league_key, cfg in LEAGUES.items():
-        stat_season = cfg["season"]
-        league_id = cfg["id"]
-
-        # Get all teams
-        teams = _api_get("teams", {"league": league_id, "season": stat_season})
-        total_api_calls += 1
-        log.info("Roster DB: %s — %d teams", league_key, len(teams))
-
-        for team in teams:
-            tid = team.get("id", 0)
-            if tid not in _TEAM_MAP:
-                continue
-            tid_str = str(tid)
-            team_name = _TEAM_MAP[tid].get("displayName", team.get("name", ""))
-
-            # Get team's games this season
-            games = _api_get("games", {
-                "team": tid,
-                "league": league_id,
-                "season": stat_season,
-            })
-            total_api_calls += 1
-
-            # Take last 5 finished games
-            finished = [g for g in games
-                        if (g.get("status") or {}).get("short") in ("FT", "AOT")]
-            recent = finished[-5:] if len(finished) > 5 else finished
-
-            # Collect unique players from these games
-            seen_players: dict[int, dict] = {}  # pid → player info
-            for game in recent:
-                gid = game.get("id")
-                stats = _api_get("games/statistics/players", {"id": gid})
-                total_api_calls += 1
-                for s in stats:
-                    if s.get("team", {}).get("id") != tid:
-                        continue
-                    pid = s.get("player", {}).get("id")
-                    if pid and pid not in seen_players:
-                        seen_players[pid] = {
-                            "name": s["player"].get("name", "?"),
-                            "type": s.get("type", ""),
-                        }
-                time.sleep(0.05)
-
-            # Also get roster info for jersey/position (enrichment)
-            player_season = cfg.get("player_season", stat_season)
-            roster_info = _api_get("players", {"team": tid, "season": player_season})
-            total_api_calls += 1
-            roster_lookup: dict[int, dict] = {}
-            for p in roster_info:
-                roster_lookup[p.get("id", 0)] = p
-
-            # Build final roster
-            pos_map = {"Guard": "G", "Forward": "F", "Center": "C",
-                       "Guard-Forward": "G-F", "Forward-Guard": "F-G",
-                       "Forward-Center": "F-C", "Center-Forward": "C-F"}
-
-            verified: list[dict] = []
-            for pid, info in seen_players.items():
-                display_name = _flip_name(info["name"])
-                # Enrich with roster data if available
-                roster_p = roster_lookup.get(pid, {})
-                position = roster_p.get("position") or ""
-                number = roster_p.get("number")
-                pos_abbr = pos_map.get(position, position) if position else ""
-
-                verified.append({
-                    "id": str(pid),
-                    "name": display_name,
-                    "jersey": str(number) if number is not None else "",
-                    "position": pos_abbr,
-                })
-
-            # Sort: starters first (from most recent game), then alphabetical
-            new_db[tid_str] = verified
-            log.info("Roster DB: %s — %d players (from %d games)", team_name, len(verified), len(recent))
-
-    with _roster_db_lock:
-        _roster_db = new_db
-    _save_roster_db()
-
-    summary = {
-        "teams": len(new_db),
-        "api_calls": total_api_calls,
-        "total_players": sum(len(v) for v in new_db.values()),
-    }
-    log.info("Roster DB build complete: %s", summary)
-    return summary
-
-
-# Load from disk on module import
-_load_roster_db()
 
 
 # ── Player ID lookup (for migration) ────────────────────────────────────────
