@@ -98,7 +98,7 @@ _TEAM_MAP: dict[int, dict] = {
       26: {"abbreviation": "LYN", "displayName": "LDLC ASVEL Villeurbanne", "name": "ASVEL"},
      687: {"abbreviation": "MTA", "displayName": "Maccabi Tel Aviv",        "name": "Maccabi TA"},
       16: {"abbreviation": "MON", "displayName": "AS Monaco",               "name": "Monaco"},
-     722: {"abbreviation": "MIL", "displayName": "Olimpia Milano",          "name": "Milano"},
+     722: {"abbreviation": "MLN", "displayName": "Olimpia Milano",          "name": "Milano"},
     1542: {"abbreviation": "OLY", "displayName": "Olympiacos",              "name": "Olympiacos"},
      614: {"abbreviation": "PAN", "displayName": "Panathinaikos",           "name": "Panathinaikos"},
      108: {"abbreviation": "PAR", "displayName": "Paris Basketball",        "name": "Paris"},
