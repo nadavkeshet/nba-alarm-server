@@ -1839,8 +1839,8 @@ def roster(game_id: str):
 
 
 @app.get("/game-summary")
-def game_summary(gameId: str):
-    return fetch_game_summary_roster(gameId)
+def game_summary(gameId: str, date: Optional[str] = None):
+    return fetch_game_summary_roster(gameId, date=date)
 
 
 @app.get("/all-teams-and-players")

@@ -548,11 +548,11 @@ def _fetch_player_stats(game_id: str, player_id: str) -> dict | None:
     return None
 
 
-def fetch_game_summary_roster(game_id: str) -> dict:
+def fetch_game_summary_roster(game_id: str, date: str | None = None) -> dict:
     """
     Return cached rosters for both teams in game_id.
 
-    Step 1 – identify the two teams from scoreboard (tries all leagues).
+    Step 1 – identify the two teams from scoreboard (tries all leagues + dates).
     Step 2 – serve each team from _ROSTER_CACHE.
       Cache miss → live fetch from API-Basketball + populate cache.
     """
@@ -566,13 +566,14 @@ def fetch_game_summary_roster(game_id: str) -> dict:
         for comp in event.get("competitions", [{}])[0].get("competitors", []):
             team_stubs.append(comp.get("team", {}))
 
-    # If not found, search other leagues for today's date
+    # If not found, search all leagues for the given date (or today)
     if not team_stubs:
+        search_date = date or _eastern_today()
         for league in LEAGUES:
-            if league == "nba":
-                continue
+            if league == "nba" and not date:
+                continue  # already checked via cache
             try:
-                games = api_fetch_games(_eastern_today(), league=league)
+                games = api_fetch_games(search_date, league=league)
                 for g in games:
                     if str(g.get("id")) == str(game_id):
                         for comp in g.get("competitions", [{}])[0].get("competitors", []):

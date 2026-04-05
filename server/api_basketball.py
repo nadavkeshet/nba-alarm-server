@@ -504,12 +504,12 @@ def fetch_team_players(team_id: int | str, league: str = "nba") -> list[dict]:
     result = []
     for p in players:
         position = p.get("position") or ""
-        if not position:
-            continue  # skip players without a position (inactive/two-way)
+        number = p.get("number")
+        # Only include players with both position AND jersey number (active roster)
+        if not position or number is None:
+            continue
         raw_name = p.get("name", "?")
         display_name = _flip_name(raw_name)
-        number = p.get("number")
-        # Map position names to abbreviations
         pos_map = {"Guard": "G", "Forward": "F", "Center": "C",
                    "Guard-Forward": "G-F", "Forward-Guard": "F-G",
                    "Forward-Center": "F-C", "Center-Forward": "C-F"}
@@ -518,7 +518,7 @@ def fetch_team_players(team_id: int | str, league: str = "nba") -> list[dict]:
         result.append({
             "id": str(p.get("id", "")),
             "name": display_name,
-            "jersey": str(number) if number is not None else "",
+            "jersey": str(number),
             "position": pos_abbr,
         })
     return result
