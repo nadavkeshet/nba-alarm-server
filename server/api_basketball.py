@@ -229,11 +229,14 @@ def _translate_status(status: dict) -> dict:
     elif short in ("Q1", "Q2", "Q3", "Q4"):
         period = int(short[1])
         detail = _QUARTER_DETAILS.get(period, f"Q{period}")
+        # timer = minutes elapsed in quarter. Convert to MM:SS remaining.
         display_clock = ""
         if timer is not None:
             try:
-                display_clock = str(timer)
-            except Exception:
+                period_length = 12  # NBA default; Euroleague handled by caller if needed
+                mins_remaining = max(0, period_length - int(timer))
+                display_clock = f"{mins_remaining}:00"
+            except (ValueError, TypeError):
                 pass
         return {
             "type": {"state": "in", "detail": detail},
@@ -247,10 +250,17 @@ def _translate_status(status: dict) -> dict:
             "displayClock": "",
         }
     elif short == "OT":
+        display_clock = ""
+        if timer is not None:
+            try:
+                mins_remaining = max(0, 5 - int(timer))
+                display_clock = f"{mins_remaining}:00"
+            except (ValueError, TypeError):
+                pass
         return {
             "type": {"state": "in", "detail": "Overtime"},
             "period": 5,
-            "displayClock": "",
+            "displayClock": display_clock,
         }
     elif short == "BT":
         return {
