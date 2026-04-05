@@ -1854,6 +1854,14 @@ def refresh_rosters():
     return {"status": "roster_refresh_started"}
 
 
+@app.get("/build-roster-db")
+def build_roster_db_endpoint():
+    """Build verified roster DB — checks each player's game stats. ~1000 API calls."""
+    from api_basketball import build_roster_db
+    threading.Thread(target=build_roster_db, daemon=True).start()
+    return {"status": "roster_db_build_started"}
+
+
 @app.get("/active-monitors")
 def active_monitors(user_token: str = ""):
     # Safe defaults returned on any error so the app never gets a 500
