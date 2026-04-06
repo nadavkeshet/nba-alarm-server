@@ -868,6 +868,7 @@ def start_monitoring_job(
     try:
         if not _wait_for_tipoff(game_id, stop_event):
             log.info("Game already Final or alarm cancelled – stopping.")
+            _deactivate_db_alarm(game_id)
             return
 
         # Game is now live (or imminent) – flip status so UI shows "WATCHING"
@@ -996,6 +997,7 @@ def start_player_monitoring_job(
     try:
         if not _wait_for_tipoff(game_id, stop_event):
             log.info("Game already Final or alarm cancelled – stopping.")
+            _deactivate_db_alarm_for(player_id)
             return
 
         # Game is now live (or imminent) – flip status so UI shows "WATCHING"
@@ -1027,6 +1029,7 @@ def start_player_monitoring_job(
 
             if condition == "pts_early" and quarter >= quarter_deadline:
                 log.info("PLAYER WATCH expire | %s | Q%d deadline passed", player_name, quarter_deadline)
+                _deactivate_db_alarm_for(player_id)
                 return
 
             stats = _fetch_player_stats(game_id, player_id)
