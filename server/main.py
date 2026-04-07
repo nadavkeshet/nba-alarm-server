@@ -13,7 +13,7 @@ from epg import get_broadcasts_for_game, get_all_broadcasts
 from i18n import (t_title, t_body_game, t_body_period_start, t_body_scoring,
                   t_body_early_pts, t_body_triple_double, translate_game_name)
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
@@ -1978,6 +1978,51 @@ def cancel_db_alarm(alarm_id: int, user_token: str = ""):
     else:
         cancel_player_alarm(target_id)
     return {"deleted": True, "alarm_id": alarm_id}
+
+
+# ── Admin: Broadcast push to all users ────────────────────────────────────────
+
+ADMIN_KEY = "clutch_admin_2026"
+
+class BroadcastRequest(BaseModel):
+    title: str
+    body:  str
+    alert_type: str = "info"   # "alarm" plays sound, "info" is silent
+
+@app.post("/admin/broadcast")
+def admin_broadcast(req: BroadcastRequest, x_admin_key: str = Header(default="")):
+    if x_admin_key != ADMIN_KEY:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Database not configured.")
+
+    with Session(engine) as session:
+        tokens: set[str] = set()
+        tokens.update(r[0] for r in session.query(Alarm.user_token).distinct())
+        tokens.update(r[0] for r in session.query(FavoritePlayerDB.user_token).distinct())
+        tokens.update(r[0] for r in session.query(FavoriteTeamDB.user_token).distinct())
+        tokens.update(r[0] for r in session.query(UserPreferenceDB.user_token).distinct())
+        tokens.discard("")
+        tokens.discard(None)
+
+    sent = 0
+    failed = 0
+    for token in tokens:
+        try:
+            _send_push_notification(
+                push_token=token,
+                title=req.title,
+                body=req.body,
+                alert_type=req.alert_type,
+                sound_channel="classic_alarm" if req.alert_type == "alarm" else "silent",
+            )
+            sent += 1
+        except Exception as exc:
+            log.warning("Broadcast: failed for %s: %s", token[-8:], exc)
+            failed += 1
+
+    log.info("Broadcast complete: sent=%d failed=%d", sent, failed)
+    return {"sent": sent, "failed": failed, "total_tokens": len(tokens)}
 
 
 # ── Entry Point ────────────────────────────────────────────────────────────────
