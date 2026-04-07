@@ -62,15 +62,17 @@ interface FavTeam {
   max_diff:        number;
   start_quarter:   number;
   notify_at_start?: boolean;
+  paused?:         boolean;
 }
 
 interface FavPlayer {
   name:          string;
   total_pts:     number;
   early_pts_q:   number;
-  early_pts: number;
+  early_pts:     number;
   td_watch:      boolean;
   alert_type:    string;
+  paused?:       boolean;
 }
 
 interface DbAlarm {
@@ -229,6 +231,36 @@ export default function ActiveScreen() {
       return null;
     }
   }, []);
+
+  const togglePauseFav = useCallback(async (type: 'players' | 'teams', id: string, currentPaused: boolean) => {
+    const token = await resolveToken();
+    if (!token) return;
+    const next = !currentPaused;
+    const endpoint = type === 'players'
+      ? `${SERVER_URL}/settings/players/${id}/pause`
+      : `${SERVER_URL}/settings/teams/${id}/pause`;
+    await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_token: token, paused: next }),
+    });
+    setData(prev => {
+      if (!prev) return prev;
+      if (type === 'players') {
+        return {
+          ...prev,
+          favorite_players: {
+            ...prev.favorite_players,
+            [id]: { ...prev.favorite_players[id], paused: next },
+          },
+        };
+      }
+      return {
+        ...prev,
+        favorite_teams: prev.favorite_teams.map(t => t.team_id === id ? { ...t, paused: next } : t),
+      };
+    });
+  }, [resolveToken]);
 
   // Store received FCM alarm notifications in AsyncStorage for Trophy Room
   useEffect(() => {
@@ -614,16 +646,19 @@ export default function ActiveScreen() {
                 <View key={team.team_id} style={styles.favItem}>
                   <Text style={styles.favIcon}>🏀</Text>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.favName}>{isHebrew ? teamFullToHe(team.team_name) : team.team_name}</Text>
+                    <Text style={[styles.favName, team.paused && { color: C.textMuted }]}>{isHebrew ? teamFullToHe(team.team_name) : team.team_name}</Text>
                     <Text style={styles.rowSub}>{team.notify_at_start ? `Any score · From ${qLabel(team.start_quarter)}` : `≤ ${team.max_diff} pts · From ${qLabel(team.start_quarter)}`}</Text>
                   </View>
+                  <TouchableOpacity onPress={() => togglePauseFav('teams', team.team_id, team.paused ?? false)} style={styles.favPauseBtn}>
+                    <Ionicons name={team.paused ? 'notifications-off' : 'notifications'} size={18} color={team.paused ? C.textMuted : C.accentBlue} />
+                  </TouchableOpacity>
                 </View>
               ))}
               {Object.entries(data?.favorite_players ?? {}).map(([pid, p]) => (
                 <View key={pid} style={styles.favItem}>
                   <Text style={styles.favIcon}>⭐</Text>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.favName}>{p.name}</Text>
+                    <Text style={[styles.favName, p.paused && { color: C.textMuted }]}>{p.name}</Text>
                     <Text style={styles.rowSub}>
                       {[
                         p.total_pts != null && `${p.total_pts} pts`,
@@ -632,6 +667,9 @@ export default function ActiveScreen() {
                       ].filter(Boolean).join(' · ')}
                     </Text>
                   </View>
+                  <TouchableOpacity onPress={() => togglePauseFav('players', pid, p.paused ?? false)} style={styles.favPauseBtn}>
+                    <Ionicons name={p.paused ? 'notifications-off' : 'notifications'} size={18} color={p.paused ? C.textMuted : C.accentBlue} />
+                  </TouchableOpacity>
                 </View>
               ))}
             </>
@@ -836,8 +874,9 @@ const makeStyles = (C: AppColors) => StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
     paddingVertical: 10, borderTopWidth: 1, borderColor: C.border,
   },
-  favIcon: { fontSize: 18, marginRight: 12 },
-  favName: { fontSize: 14, fontWeight: '700', color: C.textPrimary },
+  favIcon:     { fontSize: 18, marginRight: 12 },
+  favName:     { fontSize: 14, fontWeight: '700', color: C.textPrimary },
+  favPauseBtn: { padding: 6, marginLeft: 8 },
 
   catItem: {
     flexDirection: 'row', alignItems: 'center',

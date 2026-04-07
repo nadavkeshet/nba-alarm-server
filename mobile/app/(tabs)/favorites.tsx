@@ -28,7 +28,7 @@ import { teamFullToHe } from '../../utils/teamNames';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface GlobalRadar      { enabled: boolean; max_diff: number; start_quarter: number; alert_type: string }
-interface FavTeam          { team_id: string; team_name: string; max_diff: number; start_quarter: number; alert_type: string; broadcast_only: boolean; notify_at_start?: boolean }
+interface FavTeam          { team_id: string; team_name: string; max_diff: number; start_quarter: number; alert_type: string; broadcast_only: boolean; notify_at_start?: boolean; paused?: boolean }
 interface FavPlayerEntry {
   name:           string;
   total_pts:      number | null;
@@ -37,6 +37,7 @@ interface FavPlayerEntry {
   td_watch:       boolean;
   alert_type:     string;
   broadcast_only: boolean;
+  paused?:        boolean;
 }
 interface HistoricalCats   { scoring_40_half: boolean; threes_11: boolean; quad_double_threat: boolean }
 interface AppSettings {
@@ -283,6 +284,37 @@ export default function FavoritesScreen() {
     setTeamEdits(prev => { const n = { ...prev }; delete n[team_id]; return n; });
   };
 
+  const togglePauseTeam = async (team_id: string, currentPaused: boolean) => {
+    if (!requireToken()) return;
+    const next = !currentPaused;
+    await fetch(`${SERVER_URL}/settings/teams/${team_id}/pause`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_token: userToken, paused: next }),
+    });
+    setSettings(s => s ? {
+      ...s,
+      FavoriteTeams: s.FavoriteTeams.map(ft => ft.team_id === team_id ? { ...ft, paused: next } : ft),
+    } : s);
+  };
+
+  const togglePausePlayer = async (player_id: string, currentPaused: boolean) => {
+    if (!requireToken()) return;
+    const next = !currentPaused;
+    await fetch(`${SERVER_URL}/settings/players/${player_id}/pause`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_token: userToken, paused: next }),
+    });
+    setSettings(s => s ? {
+      ...s,
+      FavoritePlayers: {
+        ...s.FavoritePlayers,
+        [player_id]: { ...s.FavoritePlayers[player_id], paused: next },
+      },
+    } : s);
+  };
+
   const confirmAddTeam = async () => {
     if (!pickedTeam) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -504,6 +536,9 @@ export default function FavoritesScreen() {
                   <View style={styles.favCardHeader}>
                     <TeamBadge abbreviation={allTeams.find(t => t.id === team.team_id)?.abbreviation ?? ''} size={36} />
                     <Text style={styles.favName}>{isHebrew ? teamFullToHe(team.team_name) : team.team_name}</Text>
+                    <TouchableOpacity onPress={() => togglePauseTeam(team.team_id, team.paused ?? false)} style={[styles.pauseBtn, team.paused && styles.pauseBtnActive]}>
+                      <Ionicons name={team.paused ? 'notifications-off' : 'notifications'} size={14} color={team.paused ? C.textMuted : C.accentBlue} />
+                    </TouchableOpacity>
                     <TouchableOpacity onPress={() => removeTeam(team.team_id)} style={styles.removeBtn}>
                       <Text style={styles.removeBtnText}>{t('settings.remove')}</Text>
                     </TouchableOpacity>
@@ -617,6 +652,9 @@ export default function FavoritesScreen() {
                 <View key={pid} style={styles.favCard}>
                   <View style={styles.favCardHeader}>
                     <Text style={styles.favName}>{p.name}</Text>
+                    <TouchableOpacity onPress={() => togglePausePlayer(pid, p.paused ?? false)} style={[styles.pauseBtn, p.paused && styles.pauseBtnActive]}>
+                      <Ionicons name={p.paused ? 'notifications-off' : 'notifications'} size={14} color={p.paused ? C.textMuted : C.accentBlue} />
+                    </TouchableOpacity>
                     <TouchableOpacity onPress={() => removePlayer(pid)} style={styles.removeBtn}>
                       <Text style={styles.removeBtnText}>{t('settings.remove')}</Text>
                     </TouchableOpacity>
@@ -1247,6 +1285,8 @@ const makeStyles = (C: AppColors) => StyleSheet.create({
   savedBtnText:  { color: C.liveGreen },
   removeBtn:     { paddingHorizontal: 10, paddingVertical: 4, backgroundColor: 'rgba(201,8,42,0.15)', borderRadius: 8 },
   removeBtnText: { color: C.red, fontSize: 12, fontWeight: '700' },
+  pauseBtn:      { padding: 6, borderRadius: 8, backgroundColor: 'rgba(29,66,138,0.12)' },
+  pauseBtnActive:{ backgroundColor: 'rgba(150,150,150,0.12)' },
   switchRow:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4 },
   categoryRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, borderTopWidth: 1, borderColor: C.border },
   rowLabel:      { fontSize: 14, color: C.textPrimary, fontWeight: '600' },

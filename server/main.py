@@ -123,6 +123,7 @@ class FavoritePlayerDB(_Base):
     td_watch        = Column(Boolean, default=False, nullable=False)
     alert_type      = Column(String,  nullable=True, default='silent')
     broadcast_only  = Column(Boolean, default=False, nullable=False)
+    paused          = Column(Boolean, default=False, nullable=False)
     created_at      = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
@@ -139,6 +140,7 @@ class FavoriteTeamDB(_Base):
     alert_type       = Column(String,  nullable=True, default='silent')
     broadcast_only   = Column(Boolean, default=False, nullable=False)
     notify_at_start  = Column(Boolean, default=False, nullable=False)
+    paused           = Column(Boolean, default=False, nullable=False)
     created_at       = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
@@ -219,6 +221,8 @@ def _init_db() -> None:
         "ALTER TABLE favorite_teams ADD COLUMN notify_at_start BOOLEAN DEFAULT FALSE NOT NULL",
         "ALTER TABLE user_preferences ADD COLUMN language VARCHAR NOT NULL DEFAULT 'en'",
         "ALTER TABLE alarms ADD COLUMN game_date VARCHAR",
+        "ALTER TABLE favorites ADD COLUMN paused BOOLEAN DEFAULT FALSE NOT NULL",
+        "ALTER TABLE favorite_teams ADD COLUMN paused BOOLEAN DEFAULT FALSE NOT NULL",
     ]
     for sql in migrations:
         try:
@@ -1294,6 +1298,7 @@ def get_settings(user_token: str = ""):
                     "td_watch":       bool(p.td_watch),
                     "alert_type":     p.alert_type or "silent",
                     "broadcast_only": getattr(p, 'broadcast_only', False),
+                    "paused":         getattr(p, 'paused', False),
                 }
                 for p in players
             }
@@ -1306,6 +1311,7 @@ def get_settings(user_token: str = ""):
                     "alert_type":     t.alert_type or "silent",
                     "broadcast_only":  getattr(t, 'broadcast_only', False),
                     "notify_at_start": getattr(t, 'notify_at_start', False),
+                    "paused":          getattr(t, 'paused', False),
                 }
                 for t in teams
             ]
@@ -1867,16 +1873,19 @@ def active_monitors(user_token: str = ""):
                             "early_pts":   p.early_pts,
                             "td_watch":    bool(p.td_watch),
                             "alert_type":  p.alert_type or "silent",
+                            "paused":      getattr(p, 'paused', False),
                         }
                         for p in player_rows
                     }
                     fav_teams = [
                         {
-                            "team_id":       t.team_id,
-                            "team_name":     t.team_name or "",
-                            "max_diff":      t.score_gap or 5,
-                            "start_quarter": t.start_quarter or 4,
-                            "alert_type":    t.alert_type or "silent",
+                            "team_id":        t.team_id,
+                            "team_name":      t.team_name or "",
+                            "max_diff":       t.score_gap or 5,
+                            "start_quarter":  t.start_quarter or 4,
+                            "alert_type":     t.alert_type or "silent",
+                            "notify_at_start": getattr(t, 'notify_at_start', False),
+                            "paused":          getattr(t, 'paused', False),
                         }
                         for t in team_rows
                     ]
@@ -1978,6 +1987,41 @@ def cancel_db_alarm(alarm_id: int, user_token: str = ""):
     else:
         cancel_player_alarm(target_id)
     return {"deleted": True, "alarm_id": alarm_id}
+
+
+# ── Pause / resume favorite players and teams ─────────────────────────────────
+
+class PauseRequest(BaseModel):
+    user_token: str
+    paused: bool
+
+@app.post("/settings/players/{player_id}/pause")
+def pause_player(player_id: str, req: PauseRequest):
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Database not configured.")
+    with Session(engine) as session:
+        row = session.query(FavoritePlayerDB).filter_by(
+            user_token=req.user_token, target_id=player_id
+        ).first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Favorite player not found.")
+        row.paused = req.paused
+        session.commit()
+    return {"paused": req.paused, "player_id": player_id}
+
+@app.post("/settings/teams/{team_id}/pause")
+def pause_team(team_id: str, req: PauseRequest):
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Database not configured.")
+    with Session(engine) as session:
+        row = session.query(FavoriteTeamDB).filter_by(
+            user_token=req.user_token, team_id=team_id
+        ).first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Favorite team not found.")
+        row.paused = req.paused
+        session.commit()
+    return {"paused": req.paused, "team_id": team_id}
 
 
 # ── Admin: Broadcast push to all users ────────────────────────────────────────

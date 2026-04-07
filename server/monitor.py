@@ -1172,6 +1172,8 @@ def _run_radar_tick_for_user(
                 criteria = radar_cfg
 
             if criteria:
+                if bool(criteria.get("paused", False)):
+                    continue
                 max_d   = int(criteria.get("max_diff", 5))
                 start_q = int(criteria.get("start_quarter", 4))
                 c_alert = criteria.get("alert_type", radar_alert_type)
@@ -1253,6 +1255,8 @@ def _run_radar_tick_for_user(
                     # ── Favorite Player Alerts ───────────────────────────────
                     if player_id in fav_players and not _has_manual_player_alarm(player_id):
                         fav_cfg      = fav_players[player_id]
+                        if bool(fav_cfg.get("paused", False)):
+                            continue
                         # broadcast_only check for players
                         if bool(fav_cfg.get("broadcast_only", False)):
                             home_a = ""
