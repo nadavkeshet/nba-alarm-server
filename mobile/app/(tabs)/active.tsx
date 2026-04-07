@@ -649,8 +649,8 @@ export default function ActiveScreen() {
                     <Text style={[styles.favName, team.paused && { color: C.textMuted }]}>{isHebrew ? teamFullToHe(team.team_name) : team.team_name}</Text>
                     <Text style={styles.rowSub}>{team.notify_at_start ? `Any score · From ${qLabel(team.start_quarter)}` : `≤ ${team.max_diff} pts · From ${qLabel(team.start_quarter)}`}</Text>
                   </View>
-                  <TouchableOpacity onPress={() => togglePauseFav('teams', team.team_id, team.paused ?? false)} style={styles.favPauseBtn}>
-                    <Ionicons name={team.paused ? 'notifications-off' : 'notifications'} size={18} color={team.paused ? C.textMuted : C.accentBlue} />
+                  <TouchableOpacity onPress={() => togglePauseFav('teams', team.team_id, team.paused ?? false)} style={[styles.favPauseBtn, team.paused ? styles.favPauseBtnOff : styles.favPauseBtnOn]}>
+                    <Text style={[styles.favPauseBtnText, { color: team.paused ? C.textMuted : C.liveGreen }]}>{team.paused ? 'OFF' : 'ON'}</Text>
                   </TouchableOpacity>
                 </View>
               ))}
@@ -667,8 +667,8 @@ export default function ActiveScreen() {
                       ].filter(Boolean).join(' · ')}
                     </Text>
                   </View>
-                  <TouchableOpacity onPress={() => togglePauseFav('players', pid, p.paused ?? false)} style={styles.favPauseBtn}>
-                    <Ionicons name={p.paused ? 'notifications-off' : 'notifications'} size={18} color={p.paused ? C.textMuted : C.accentBlue} />
+                  <TouchableOpacity onPress={() => togglePauseFav('players', pid, p.paused ?? false)} style={[styles.favPauseBtn, p.paused ? styles.favPauseBtnOff : styles.favPauseBtnOn]}>
+                    <Text style={[styles.favPauseBtnText, { color: p.paused ? C.textMuted : C.liveGreen }]}>{p.paused ? 'OFF' : 'ON'}</Text>
                   </TouchableOpacity>
                 </View>
               ))}
@@ -876,7 +876,10 @@ const makeStyles = (C: AppColors) => StyleSheet.create({
   },
   favIcon:     { fontSize: 18, marginRight: 12 },
   favName:     { fontSize: 14, fontWeight: '700', color: C.textPrimary },
-  favPauseBtn: { padding: 6, marginLeft: 8 },
+  favPauseBtn:     { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, borderWidth: 1, marginLeft: 8 },
+  favPauseBtnOn:   { backgroundColor: 'rgba(34,197,94,0.12)', borderColor: 'rgba(34,197,94,0.4)' },
+  favPauseBtnOff:  { backgroundColor: 'rgba(150,150,150,0.10)', borderColor: 'rgba(150,150,150,0.3)' },
+  favPauseBtnText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
 
   catItem: {
     flexDirection: 'row', alignItems: 'center',

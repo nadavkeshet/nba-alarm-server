@@ -536,8 +536,8 @@ export default function FavoritesScreen() {
                   <View style={styles.favCardHeader}>
                     <TeamBadge abbreviation={allTeams.find(t => t.id === team.team_id)?.abbreviation ?? ''} size={36} />
                     <Text style={styles.favName}>{isHebrew ? teamFullToHe(team.team_name) : team.team_name}</Text>
-                    <TouchableOpacity onPress={() => togglePauseTeam(team.team_id, team.paused ?? false)} style={[styles.pauseBtn, team.paused && styles.pauseBtnActive]}>
-                      <Ionicons name={team.paused ? 'notifications-off' : 'notifications'} size={14} color={team.paused ? C.textMuted : C.accentBlue} />
+                    <TouchableOpacity onPress={() => togglePauseTeam(team.team_id, team.paused ?? false)} style={[styles.pauseBtn, team.paused ? styles.pauseBtnOff : styles.pauseBtnOn]}>
+                      <Text style={[styles.pauseBtnText, { color: team.paused ? C.textMuted : C.liveGreen }]}>{team.paused ? 'OFF' : 'ON'}</Text>
                     </TouchableOpacity>
                     <TouchableOpacity onPress={() => removeTeam(team.team_id)} style={styles.removeBtn}>
                       <Text style={styles.removeBtnText}>{t('settings.remove')}</Text>
@@ -652,8 +652,8 @@ export default function FavoritesScreen() {
                 <View key={pid} style={styles.favCard}>
                   <View style={styles.favCardHeader}>
                     <Text style={styles.favName}>{p.name}</Text>
-                    <TouchableOpacity onPress={() => togglePausePlayer(pid, p.paused ?? false)} style={[styles.pauseBtn, p.paused && styles.pauseBtnActive]}>
-                      <Ionicons name={p.paused ? 'notifications-off' : 'notifications'} size={14} color={p.paused ? C.textMuted : C.accentBlue} />
+                    <TouchableOpacity onPress={() => togglePausePlayer(pid, p.paused ?? false)} style={[styles.pauseBtn, p.paused ? styles.pauseBtnOff : styles.pauseBtnOn]}>
+                      <Text style={[styles.pauseBtnText, { color: p.paused ? C.textMuted : C.liveGreen }]}>{p.paused ? 'OFF' : 'ON'}</Text>
                     </TouchableOpacity>
                     <TouchableOpacity onPress={() => removePlayer(pid)} style={styles.removeBtn}>
                       <Text style={styles.removeBtnText}>{t('settings.remove')}</Text>
@@ -1285,8 +1285,10 @@ const makeStyles = (C: AppColors) => StyleSheet.create({
   savedBtnText:  { color: C.liveGreen },
   removeBtn:     { paddingHorizontal: 10, paddingVertical: 4, backgroundColor: 'rgba(201,8,42,0.15)', borderRadius: 8 },
   removeBtnText: { color: C.red, fontSize: 12, fontWeight: '700' },
-  pauseBtn:      { padding: 6, borderRadius: 8, backgroundColor: 'rgba(29,66,138,0.12)' },
-  pauseBtnActive:{ backgroundColor: 'rgba(150,150,150,0.12)' },
+  pauseBtn:      { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, borderWidth: 1 },
+  pauseBtnOn:    { backgroundColor: 'rgba(34,197,94,0.12)', borderColor: 'rgba(34,197,94,0.4)' },
+  pauseBtnOff:   { backgroundColor: 'rgba(150,150,150,0.10)', borderColor: 'rgba(150,150,150,0.3)' },
+  pauseBtnText:  { fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
   switchRow:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4 },
   categoryRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, borderTopWidth: 1, borderColor: C.border },
   rowLabel:      { fontSize: 14, color: C.textPrimary, fontWeight: '600' },
