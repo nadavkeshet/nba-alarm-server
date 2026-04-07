@@ -432,8 +432,13 @@ def calculate_watch_score(espn_game_id: str) -> WatchScoreResult | None:
     # Weighted average: 35% clutch, 35% tension, 30% flow
     raw_score = clutch * 0.35 + tension * 0.35 + flow * 0.30
 
+    # Determine OT before dampener — a game that reached OT can't be a blowout
+    max_period = max(p.period for p in scoring_plays)
+    is_overtime = max_period > 4
+
     # Apply blowout dampener — even if flow was good, a 30-pt game is boring
-    blowout_mult = _blowout_multiplier(scoring_plays)
+    # Skip for OT games: if it went to OT it was close, dampener would be wrong
+    blowout_mult = 1.0 if is_overtime else _blowout_multiplier(scoring_plays)
     raw_score *= blowout_mult
 
     # Apply upper-stretch curve: push good games into 8-9 range
@@ -443,14 +448,13 @@ def calculate_watch_score(espn_game_id: str) -> WatchScoreResult | None:
 
     # Bonuses
     buzzer_beater = _detect_buzzer_beater(scoring_plays)
-    max_period = max(p.period for p in scoring_plays)
-    is_overtime = max_period > 4
 
     final_score = raw_score
 
-    # OT bonus: +1.0 (capped at 10)
+    # OT bonus: +1.0, then enforce minimum of 8.0 for any OT game
     if is_overtime:
         final_score += 1.0
+        final_score = max(8.0, final_score)
 
     # Buzzer beater: minimum 9.5
     if buzzer_beater:
