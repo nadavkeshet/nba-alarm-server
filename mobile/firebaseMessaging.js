@@ -23,10 +23,28 @@ const TROPHY_KEY = 'nba_alarm_recent_hits';
 // Called by Firebase when a data-only FCM message arrives and the app is NOT
 // in the foreground.  We display the notification ourselves via Notifee so we
 // have full control (actions, channel, FSI, sound).
+const DEDUP_KEY = 'nba_fcm_last_message_id';
+const DEDUP_TTL = 60_000; // 60 seconds
+
 messaging().setBackgroundMessageHandler(async remoteMessage => {
   const data = remoteMessage.data ?? {};
 
   if (data.alert_type === 'alarm') {
+    // Dedup: skip if we already processed this FCM message recently.
+    // Prevents triple-delivery on devices (e.g. Redmi) with aggressive
+    // battery optimization that delays FCM ACK, causing FCM to retry.
+    try {
+      const msgId = remoteMessage.messageId;
+      if (msgId) {
+        const raw = await AsyncStorage.getItem(DEDUP_KEY);
+        const last = raw ? JSON.parse(raw) : null;
+        if (last?.id === msgId && Date.now() - last.ts < DEDUP_TTL) {
+          return; // already handled
+        }
+        await AsyncStorage.setItem(DEDUP_KEY, JSON.stringify({ id: msgId, ts: Date.now() }));
+      }
+    } catch {}
+
     const savedSound = (await AsyncStorage.getItem('nba_alarm_sound').catch(() => null)) ?? 'classic_alarm';
 
     // Ensure the alarm channel exists — defensive guard for edge cases where
