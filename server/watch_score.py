@@ -454,7 +454,7 @@ def calculate_watch_score(espn_game_id: str) -> WatchScoreResult | None:
     # OT bonus: +1.0, then enforce minimum of 8.0 for any OT game
     if is_overtime:
         final_score += 1.0
-        final_score = max(8.0, final_score)
+        final_score = max(8.5, final_score)
 
     # Buzzer beater: minimum 9.5
     if buzzer_beater:
