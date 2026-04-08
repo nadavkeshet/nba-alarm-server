@@ -22,8 +22,11 @@ log = logging.getLogger("nba_monitor")
 # ── Competition IDs on 365scores ─────────────────────────────────────────────
 
 COMPETITION_IDS = {
-    "nba": 103,
-    "euroleague": 569,
+    "nba":           103,
+    "euroleague":    569,
+    "eurocup":       329,
+    "bcl":          6391,
+    "winner_league":  47,
 }
 
 # ── League configs ───────────────────────────────────────────────────────────
@@ -45,6 +48,30 @@ LEAGUES = {
         "period_minutes": 10,
         "ot_minutes": 5,
     },
+    "eurocup": {
+        "id": 329,
+        "name": "EuroCup",
+        "country": "Europe",
+        "periods": 4,
+        "period_minutes": 10,
+        "ot_minutes": 5,
+    },
+    "bcl": {
+        "id": 6391,
+        "name": "FIBA Champions League",
+        "country": "Europe",
+        "periods": 4,
+        "period_minutes": 10,
+        "ot_minutes": 5,
+    },
+    "winner_league": {
+        "id": 47,
+        "name": "Winner League",
+        "country": "Israel",
+        "periods": 4,
+        "period_minutes": 10,
+        "ot_minutes": 5,
+    },
 }
 
 # ── Abbreviation normalisation ─────────────────────────────────────────────────
@@ -61,10 +88,14 @@ _SYMBOL_NORMALIZE: dict[str, str] = {
     "GSW": "GS",     # Golden State Warriors
 }
 
-# Euroleague: 365scores uses different abbreviations than the rest of the
-# server (which inherited the API-Basketball naming). Map per-team-id to
-# avoid the PAR collision (Partizan vs Paris Basketball).
-_EUROLEAGUE_TEAM_ID_TO_ABBR: dict[int, str] = {
+# International (non-NBA) team-id → canonical abbreviation map.
+# Covers Euroleague, EuroCup, FIBA BCL, and Winner League. The same 365scores
+# team id resolves to the same canonical abbreviation regardless of which
+# competition it appears in (Hapoel TA plays in Euroleague + EuroCup +
+# Winner League under id 654 → always "HTA"). The id-keyed lookup also
+# resolves the PAR collision (Partizan vs Paris Basketball).
+_INTL_TEAM_ID_TO_ABBR: dict[int, str] = {
+    # ── Euroleague ───────────────────────────────────────────────────────
     966:   "EFE",   # Anadolu Efes      (365: EFS)
     16001: "MON",   # AS Monaco         (365: ASM)
     543:   "LYN",   # ASVEL             (365: ASV)
@@ -74,9 +105,7 @@ _EUROLEAGUE_TEAM_ID_TO_ABBR: dict[int, str] = {
     5528:  "CZV",   # Crvena Zvezda
     83343: "DUB",   # Dubai BC
     970:   "FEN",   # Fenerbahce
-    654:   "HTA",   # Hapoel Tel Aviv
     275:   "MLN",   # Olimpia Milano
-    631:   "MTA",   # Maccabi Tel Aviv
     1042:  "OLY",   # Olympiacos
     1041:  "PAN",   # Panathinaikos     (365: PAO)
     55269: "PAR",   # Paris Basketball  (365: "Paris B.")
@@ -85,6 +114,48 @@ _EUROLEAGUE_TEAM_ID_TO_ABBR: dict[int, str] = {
     208:   "VAL",   # Valencia Basket
     288:   "VIR",   # Virtus Bologna
     5506:  "ZAL",   # Zalgiris Kaunas
+
+    # ── EuroCup ──────────────────────────────────────────────────────────
+    17443: "BOU",   # JL Bourg
+    967:   "BES",   # Besiktas
+    49974: "BHK",   # Bahçeşehir Koleji
+    50290: "CLJ",   # Cluj Napoca
+    5520:  "BUD",   # KK Budućnost
+    5510:  "CED",   # KK Cedevita Olimpija
+    217:   "MAN",   # Baxi Manresa
+    6951:  "RVN",   # Reyer Venezia
+    969:   "TUR",   # Turk Telekom
+    380:   "ULM",   # Ratiopharm Ulm
+
+    # ── FIBA BCL ─────────────────────────────────────────────────────────
+    5521:  "NYM",   # ČEZ Nymburk
+    1047:  "AEK",   # AEK Athens
+    27633: "PRO",   # ASP Promitheas Patras
+    372:   "ALB",   # Alba Berlin
+    548:   "CHO",   # Cholet
+    972:   "GLT",   # Galatasaray
+    212:   "GRA",   # Gran Canaria
+    205:   "JOV",   # Joventut de Badalona
+    9899:  "TEN",   # La Laguna Tenerife
+    6384:  "TOF",   # Tofas
+    210:   "UNI",   # Unicaja Málaga
+    17473: "HEI",   # USC Heidelberg
+    8649:  "WUR",   # Wurzburg Baskets
+
+    # ── Winner League (Israel) ───────────────────────────────────────────
+    # MTA (631) and HTA (654) already mapped above (Euroleague block)
+    634:   "JER",   # Hapoel Jerusalem
+    633:   "HOL",   # Hapoel Holon
+    632:   "HER",   # Bnei Herzliya
+    686:   "NES",   # Ironi Ness Ziona
+    635:   "RMG",   # Maccabi Ironi Ramat Gan
+    10884: "GAL",   # Hapoel Galil Elyon
+    641:   "ATA",   # Ironi Kiryat Ata
+    27923: "BSV",   # Hapoel Be'er Sheva/Dimona
+    655:   "NET",   # Elitzur Netanya
+    91167: "EMK",   # Hapoel HaEmek
+    640:   "RSH",   # Maccabi Rishon LeZion
+    27893: "RNA",   # Maccabi Ironi Ra'anana
 }
 
 # Full display names keyed by our canonical abbreviation
@@ -141,6 +212,45 @@ _DISPLAY_NAMES: dict[str, tuple[str, str]] = {
     "VAL":  ("Valencia Basket",           "Valencia"),
     "VIR":  ("Virtus Bologna",            "Virtus"),
     "ZAL":  ("Zalgiris Kaunas",           "Zalgiris"),
+    # ── EuroCup ──
+    "BOU":  ("JL Bourg",                  "Bourg"),
+    "BES":  ("Besiktas",                  "Besiktas"),
+    "BHK":  ("Bahçeşehir Koleji",         "Bahçeşehir"),
+    "CLJ":  ("Cluj Napoca",               "Cluj"),
+    "BUD":  ("KK Budućnost",              "Budućnost"),
+    "CED":  ("Cedevita Olimpija",         "Cedevita"),
+    "MAN":  ("Baxi Manresa",              "Manresa"),
+    "RVN":  ("Reyer Venezia",             "Venezia"),
+    "TUR":  ("Turk Telekom",              "Turk Telekom"),
+    "ULM":  ("Ratiopharm Ulm",            "Ulm"),
+    # ── FIBA BCL ──
+    "NYM":  ("ČEZ Nymburk",               "Nymburk"),
+    "AEK":  ("AEK Athens",                "AEK"),
+    "PRO":  ("Promitheas Patras",         "Promitheas"),
+    "ALB":  ("Alba Berlin",               "Alba"),
+    "CHO":  ("Cholet Basket",             "Cholet"),
+    "GLT":  ("Galatasaray",               "Galatasaray"),
+    "GRA":  ("Gran Canaria",              "Gran Canaria"),
+    "JOV":  ("Joventut Badalona",         "Joventut"),
+    "TEN":  ("La Laguna Tenerife",        "Tenerife"),
+    "TOF":  ("Tofas Bursa",               "Tofas"),
+    "UNI":  ("Unicaja Málaga",            "Unicaja"),
+    "HEI":  ("USC Heidelberg",            "Heidelberg"),
+    "WUR":  ("Wurzburg Baskets",          "Wurzburg"),
+    # ── Winner League (Israel) ──
+    # MTA, HTA already defined above (Euroleague block)
+    "JER":  ("Hapoel Jerusalem",          "Jerusalem"),
+    "HOL":  ("Hapoel Holon",              "Holon"),
+    "HER":  ("Bnei Herzliya",             "Herzliya"),
+    "NES":  ("Ironi Ness Ziona",          "Ness Ziona"),
+    "RMG":  ("Maccabi Ironi Ramat Gan",   "Ramat Gan"),
+    "GAL":  ("Hapoel Galil Elyon",        "Galil Elyon"),
+    "ATA":  ("Ironi Kiryat Ata",          "Kiryat Ata"),
+    "BSV":  ("Hapoel Be'er Sheva/Dimona", "Be'er Sheva"),
+    "NET":  ("Elitzur Netanya",           "Netanya"),
+    "EMK":  ("Hapoel HaEmek",             "HaEmek"),
+    "RSH":  ("Maccabi Rishon LeZion",     "Rishon"),
+    "RNA":  ("Maccabi Ironi Ra'anana",    "Ra'anana"),
 }
 
 # 365scores NBA team IDs (canonical abbr → 365scores ID).
@@ -241,8 +351,9 @@ def _translate_status(game: dict) -> dict:
 def _make_team_obj(comp: dict) -> dict:
     """Build ESPN-format team object from a 365scores competitor dict."""
     tid = comp.get("id", 0)
-    # Euroleague: use team-id mapping (avoids the PAR conflict)
-    abbr = _EUROLEAGUE_TEAM_ID_TO_ABBR.get(tid)
+    # Non-NBA leagues: id-keyed lookup gives us a stable canonical abbr
+    # regardless of which competition the game came from.
+    abbr = _INTL_TEAM_ID_TO_ABBR.get(tid)
     if not abbr:
         raw_sym = comp.get("symbolicName", "???")
         abbr = _SYMBOL_NORMALIZE.get(raw_sym, raw_sym)

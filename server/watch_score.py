@@ -533,9 +533,12 @@ def _score_from_stages(plays: list[ScoringPlay]) -> tuple[float, float, float, f
 
 # ── Main scoring engine ──────────────────────────────────────────────────────
 
+_FIBA_LEAGUES = {"euroleague", "eurocup", "bcl", "winner_league"}
+
+
 def _period_length_for_league(league: str) -> int:
-    """Return regulation period length in seconds (NBA 12min, Euroleague 10min)."""
-    return 600 if league == "euroleague" else 720
+    """Return regulation period length in seconds. NBA = 12min, FIBA = 10min."""
+    return 600 if league in _FIBA_LEAGUES else 720
 
 
 def calculate_watch_score(game_id: str | int, league: str = "nba") -> WatchScoreResult | None:
