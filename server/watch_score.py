@@ -18,8 +18,8 @@ import httpx
 from dataclasses import dataclass, field
 
 from score365.client import Client365
-from score365.scraper import get_game_detail, get_games_by_date
-from score365_adapter import _to_mdy, _make_team_obj, COMPETITION_IDS
+from score365.scraper import get_game_detail
+from score365_adapter import fetch_games, _make_team_obj
 
 log = logging.getLogger("nba_monitor")
 
@@ -479,18 +479,19 @@ def calculate_watch_score_by_teams(
     home_abbr: str, away_abbr: str, date_yyyymmdd: str, league: str = "nba",
 ) -> WatchScoreResult | None:
     """Look up a game by team abbreviations + date, then compute watch score."""
-    comp_id = COMPETITION_IDS.get(league, COMPETITION_IDS["nba"])
-    mdy = _to_mdy(date_yyyymmdd)
     try:
-        with Client365() as client:
-            data = get_games_by_date(client, mdy)
-        for g in data.get("games", []):
-            if g.get("competitionId") != comp_id:
-                continue
-            home = _make_team_obj(g.get("homeCompetitor", {}))
-            away = _make_team_obj(g.get("awayCompetitor", {}))
-            if home["abbreviation"] == home_abbr and away["abbreviation"] == away_abbr:
-                return calculate_watch_score(g["id"])
+        events = fetch_games(date_yyyymmdd, league=league)
+        for event in events:
+            comp = (event.get("competitions") or [{}])[0]
+            home, away = "", ""
+            for c in comp.get("competitors", []):
+                abbr = c.get("team", {}).get("abbreviation", "")
+                if c.get("homeAway") == "home":
+                    home = abbr
+                else:
+                    away = abbr
+            if home == home_abbr and away == away_abbr:
+                return calculate_watch_score(event["id"])
     except Exception as exc:
         log.warning("WatchScore team lookup failed: %s", exc)
     return None
