@@ -117,6 +117,7 @@ class FavoritePlayerDB(_Base):
     target_id     = Column(String,  nullable=False)   # player id
     target_name   = Column(String,  nullable=True)
     team_name     = Column(String,  nullable=True)
+    league        = Column(String,  nullable=True, default='nba')   # nba|euroleague|eurocup|bcl|winner_league
     total_pts     = Column(Integer, nullable=True)    # None = condition disabled
     early_pts     = Column(Integer, nullable=True)
     early_pts_q   = Column(Integer, nullable=True)
@@ -135,6 +136,7 @@ class FavoriteTeamDB(_Base):
     user_token    = Column(String,  nullable=False, index=True)
     team_id       = Column(String,  nullable=False)
     team_name     = Column(String,  nullable=True)
+    league        = Column(String,  nullable=True, default='nba')   # nba|euroleague|eurocup|bcl|winner_league
     score_gap        = Column(Integer, nullable=True)    # max_diff
     start_quarter    = Column(Integer, nullable=True)
     alert_type       = Column(String,  nullable=True, default='silent')
@@ -175,6 +177,9 @@ class UserPreferenceDB(_Base):
     radar_enabled           = Column(Boolean, default=False,   nullable=False)
     radar_gap               = Column(Integer, default=5,       nullable=False)
     radar_start_q           = Column(Integer, default=4,       nullable=False)
+    # Comma-separated list of league keys the radar should scan for this user.
+    # Empty/null means "nba" (backwards compat).
+    radar_leagues           = Column(String,  default="nba",   nullable=False)
     historical_mode_enabled = Column(Boolean, default=False,   nullable=False)
     alert_type              = Column(String,  default="silent", nullable=False)  # radar
     hist_alert_type         = Column(String,  default="silent", nullable=False)  # historical
@@ -223,6 +228,10 @@ def _init_db() -> None:
         "ALTER TABLE alarms ADD COLUMN game_date VARCHAR",
         "ALTER TABLE favorites ADD COLUMN paused BOOLEAN DEFAULT FALSE NOT NULL",
         "ALTER TABLE favorite_teams ADD COLUMN paused BOOLEAN DEFAULT FALSE NOT NULL",
+        # League scoping (NBA, Euroleague, EuroCup, BCL, Winner League)
+        "ALTER TABLE favorite_teams ADD COLUMN league VARCHAR DEFAULT 'nba'",
+        "ALTER TABLE favorites      ADD COLUMN league VARCHAR DEFAULT 'nba'",
+        "ALTER TABLE user_preferences ADD COLUMN radar_leagues VARCHAR NOT NULL DEFAULT 'nba'",
     ]
     for sql in migrations:
         try:
@@ -516,6 +525,7 @@ def _get_all_users_for_radar() -> list[dict]:
             fav_players = {
                 p.target_id: {
                     "name":        p.target_name or "",
+                    "league":       (p.league or "nba"),
                     "total_pts":   p.total_pts,
                     "early_pts_q": p.early_pts_q,
                     "early_pts":   p.early_pts,
@@ -529,6 +539,7 @@ def _get_all_users_for_radar() -> list[dict]:
                 {
                     "team_id":        t.team_id,
                     "team_name":      t.team_name or "",
+                    "league":         (t.league or "nba"),
                     "max_diff":       t.score_gap or 5,
                     "start_quarter":  t.start_quarter or 4,
                     "alert_type":     t.alert_type or "silent",
@@ -542,6 +553,7 @@ def _get_all_users_for_radar() -> list[dict]:
                 "max_diff":      pref.radar_gap           if pref else 5,
                 "start_quarter": pref.radar_start_q       if pref else 4,
                 "alert_type":    pref.alert_type          if pref else "silent",
+                "leagues":       _split_leagues(pref.radar_leagues if pref else None),
             }
             hist_cfg = {
                 "enabled":    pref.historical_mode_enabled if pref else False,
@@ -1309,6 +1321,7 @@ def get_settings(user_token: str = ""):
             fav_players = {
                 p.target_id: {
                     "name":          p.target_name or "",
+                    "league":         (p.league or "nba"),
                     "total_pts":     p.total_pts,
                     "early_pts_q":   p.early_pts_q,
                     "early_pts":     p.early_pts,
@@ -1323,6 +1336,7 @@ def get_settings(user_token: str = ""):
                 {
                     "team_id":        t.team_id,
                     "team_name":      t.team_name or "",
+                    "league":         (t.league or "nba"),
                     "max_diff":       t.score_gap or 5,
                     "start_quarter":  t.start_quarter or 4,
                     "alert_type":     t.alert_type or "silent",
@@ -1333,6 +1347,7 @@ def get_settings(user_token: str = ""):
                 for t in teams
             ]
             radar_cfg = _SETTINGS_DEFAULTS["GlobalGameRadar"].copy()
+            radar_cfg["leagues"] = ["nba"]
             hist_cfg  = {
                 "enabled": False, "alert_type": "silent",
                 "categories": {"scoring_40_half": False, "threes_11": False, "quad_double_threat": False},
@@ -1343,6 +1358,7 @@ def get_settings(user_token: str = ""):
                     "max_diff":      pref.radar_gap,
                     "start_quarter": pref.radar_start_q,
                     "alert_type":    pref.alert_type,
+                    "leagues":       _split_leagues(pref.radar_leagues),
                 }
                 hist_cfg = {
                     "enabled":    pref.historical_mode_enabled,
@@ -1364,16 +1380,37 @@ def get_settings(user_token: str = ""):
         return dict(_SETTINGS_DEFAULTS)
 
 
+_VALID_LEAGUES = {"nba", "euroleague", "eurocup", "bcl", "winner_league"}
+
+
+def _split_leagues(raw: Optional[str]) -> list[str]:
+    """Parse the comma-separated user_preferences.radar_leagues column."""
+    if not raw:
+        return ["nba"]
+    parts = [p.strip() for p in raw.split(",") if p.strip() in _VALID_LEAGUES]
+    return parts or ["nba"]
+
+
+def _join_leagues(leagues: Optional[list[str]]) -> str:
+    """Serialize a leagues list to the comma-separated DB form, with validation."""
+    if not leagues:
+        return "nba"
+    cleaned = [l for l in leagues if l in _VALID_LEAGUES]
+    return ",".join(cleaned) if cleaned else "nba"
+
+
 class GlobalRadarSettings(BaseModel):
     user_token:    str = ""
     enabled:       bool
     max_diff:      int = 5
     start_quarter: int = 4
     alert_type:    str = "silent"
+    leagues:       Optional[list[str]] = None
 
 
 @app.post("/settings/global-radar")
 def update_global_radar(req: GlobalRadarSettings):
+    leagues_str = _join_leagues(req.leagues)
     if engine is not None and req.user_token:
         try:
             with Session(engine) as session:
@@ -1383,11 +1420,13 @@ def update_global_radar(req: GlobalRadarSettings):
                     pref.radar_gap     = req.max_diff
                     pref.radar_start_q = req.start_quarter
                     pref.alert_type    = req.alert_type
+                    pref.radar_leagues = leagues_str
                 else:
                     session.add(UserPreferenceDB(
                         user_token=req.user_token,
                         radar_enabled=req.enabled, radar_gap=req.max_diff,
                         radar_start_q=req.start_quarter, alert_type=req.alert_type,
+                        radar_leagues=leagues_str,
                     ))
                 session.commit()
         except Exception as exc:
@@ -1397,6 +1436,7 @@ def update_global_radar(req: GlobalRadarSettings):
     return {"status": "updated", "GlobalGameRadar": {
         "enabled": req.enabled, "max_diff": req.max_diff,
         "start_quarter": req.start_quarter, "alert_type": req.alert_type,
+        "leagues": _split_leagues(leagues_str),
     }}
 
 
@@ -1404,6 +1444,7 @@ class FavoriteTeam(BaseModel):
     user_token:      str = ""
     team_id:         str
     team_name:       str
+    league:          str = "nba"
     max_diff:        int = 5
     start_quarter:   int = 4
     alert_type:      str = "silent"
@@ -1414,6 +1455,7 @@ class FavoriteTeam(BaseModel):
 
 @app.post("/settings/teams")
 def upsert_team(req: FavoriteTeam):
+    league = req.league if req.league in _VALID_LEAGUES else "nba"
     if engine is not None and req.user_token:
         try:
             with Session(engine) as session:
@@ -1422,6 +1464,7 @@ def upsert_team(req: FavoriteTeam):
                 ).first()
                 if existing:
                     existing.team_name      = req.team_name
+                    existing.league         = league
                     existing.score_gap      = req.max_diff
                     existing.start_quarter  = req.start_quarter
                     existing.alert_type     = req.alert_type
@@ -1430,7 +1473,8 @@ def upsert_team(req: FavoriteTeam):
                 else:
                     session.add(FavoriteTeamDB(
                         user_token=req.user_token, team_id=req.team_id,
-                        team_name=req.team_name, score_gap=req.max_diff,
+                        team_name=req.team_name, league=league,
+                        score_gap=req.max_diff,
                         start_quarter=req.start_quarter, alert_type=req.alert_type,
                         broadcast_only=getattr(req, 'broadcast_only', False),
                         notify_at_start=getattr(req, 'notify_at_start', False),
@@ -1462,6 +1506,7 @@ class FavoritePlayer(BaseModel):
     user_token:     str = ""
     player_id:      str
     name:           str
+    league:         str = "nba"
     total_pts:      Optional[int]  = None
     early_pts_q:    Optional[int]  = None
     early_pts:      Optional[int]  = None
@@ -1472,6 +1517,7 @@ class FavoritePlayer(BaseModel):
 
 @app.post("/settings/players")
 def upsert_player(req: FavoritePlayer):
+    league = req.league if req.league in _VALID_LEAGUES else "nba"
     if engine is not None and req.user_token:
         try:
             with Session(engine) as session:
@@ -1480,6 +1526,7 @@ def upsert_player(req: FavoritePlayer):
                 ).first()
                 if existing:
                     existing.target_name    = req.name
+                    existing.league         = league
                     existing.total_pts      = req.total_pts
                     existing.early_pts_q    = req.early_pts_q
                     existing.early_pts      = req.early_pts
@@ -1489,7 +1536,8 @@ def upsert_player(req: FavoritePlayer):
                 else:
                     session.add(FavoritePlayerDB(
                         user_token=req.user_token, target_id=req.player_id,
-                        target_name=req.name, total_pts=req.total_pts,
+                        target_name=req.name, league=league,
+                        total_pts=req.total_pts,
                         early_pts_q=req.early_pts_q, early_pts=req.early_pts,
                         td_watch=req.td_watch, alert_type=req.alert_type,
                         broadcast_only=req.broadcast_only,

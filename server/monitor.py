@@ -135,6 +135,7 @@ def update_all_rosters() -> None:
             try:
                 players = api_fetch_team_players(int(team_id), league=league)
                 team["players"] = players
+                team["league"] = league   # tag so iOS can group by league
                 new_cache[team_id] = team
                 time.sleep(0.15)
             except Exception as exc:
@@ -1286,33 +1287,71 @@ def _prune_fired_alerts() -> None:
         _FIRED_ALERTS.difference_update(stale)
 
 
+def _leagues_for_user(prefs: dict) -> set[str]:
+    """
+    Compute the set of leagues this user actually cares about right now:
+      - the leagues their radar is configured to scan
+      - any league referenced by a favorite team (so favorite-team alerts work
+        even when the user hasn't enabled radar for that league)
+    """
+    leagues: set[str] = set()
+    radar = prefs.get("GlobalGameRadar", {}) or {}
+    if radar.get("enabled", False):
+        leagues.update(radar.get("leagues") or ["nba"])
+    for t in prefs.get("FavoriteTeams", []) or []:
+        leagues.add(t.get("league") or "nba")
+    return leagues
+
+
 def _run_radar_tick(users: list[dict]) -> bool:
     """
     Full radar scan for all users.
-    Scoreboard is fetched ONCE; game summaries are fetched lazily and
-    cached so multiple users watching the same game share one HTTP request.
-    Returns True on success, False if the fetch failed (used by the
-    caller to track consecutive failures).
+    Scoreboards are fetched ONCE per league across all users; game summaries
+    are fetched lazily and cached so multiple users watching the same game
+    share one HTTP request. Each user only sees events from leagues they
+    explicitly opted into.
+    Returns True on success, False if every fetch failed.
     """
     _prune_fired_alerts()
 
-    try:
-        events = api_fetch_games(_eastern_today())
-    except Exception as exc:
-        log.warning("RADAR: scoreboard fetch failed: %s", exc)
+    needed_leagues: set[str] = set()
+    for user in users:
+        needed_leagues.update(_leagues_for_user(user.get("prefs", {})))
+    if not needed_leagues:
         return False
-    if not events:
+
+    today = _eastern_today()
+    events_by_league: dict[str, list[dict]] = {}
+    for league in needed_leagues:
+        try:
+            events_by_league[league] = api_fetch_games(today, league=league)
+        except Exception as exc:
+            log.warning("RADAR: scoreboard fetch failed for %s: %s", league, exc)
+            events_by_league[league] = []
+
+    if not any(events_by_league.values()):
         return False
 
     summaries: dict = {}   # shared lazy cache: game_id → summary JSON
 
     for user in users:
+        user_leagues = _leagues_for_user(user.get("prefs", {}))
+        if not user_leagues:
+            continue
+        # Build the per-user event list — only games from leagues this user
+        # opted into. Each event is tagged with its league via the adapter
+        # so we don't risk cross-league bleed.
+        user_events: list[dict] = []
+        for league in user_leagues:
+            user_events.extend(events_by_league.get(league, []))
+        if not user_events:
+            continue
         try:
             _run_radar_tick_for_user(
                 push_token    = user["token"],
                 sound_channel = user.get("channel", "classic_alarm"),
                 prefs         = user["prefs"],
-                events        = events,
+                events        = user_events,
                 summaries     = summaries,
                 language      = user.get("language", "en"),
             )
