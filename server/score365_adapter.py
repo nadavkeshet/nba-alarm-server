@@ -260,21 +260,91 @@ def _make_team_obj(comp: dict) -> dict:
 
 # ── Games (scoreboard) ────────────────────────────────────────────────────────
 
+def _normalize_yyyymmdd(date_str: str) -> str:
+    """Accept YYYYMMDD or YYYY-MM-DD, return YYYYMMDD."""
+    return date_str.strip().replace("-", "")
+
+
+def _eastern_today_yyyymmdd() -> str:
+    """Current US Eastern date as YYYYMMDD."""
+    return (datetime.now(timezone.utc) - timedelta(hours=5)).strftime("%Y%m%d")
+
+
+# Combined-window cache: 365scores' /games/allscores/ silently drops NBA, and
+# the competition-filtered endpoints (/current/, /results/, /fixtures/) ignore
+# date params and each return only a rolling ~5-day window. Workaround: hit
+# all three once per league, dedupe, then filter by date in code. Cache the
+# combined result briefly so concurrent monitor threads share one HTTP burst.
+_window_cache: dict[int, tuple[float, list[dict]]] = {}
+_window_lock = threading.Lock()
+_WINDOW_TTL = 30  # seconds
+
+
+def _fetch_competition_window(competition_id: int) -> list[dict]:
+    """
+    Return all games 365scores currently knows about for the given competition.
+    Combines /current/, /results/, /fixtures/ — together this covers roughly
+    last 5 days through next 5 days. Cached for _WINDOW_TTL seconds.
+    """
+    now = time.time()
+    with _window_lock:
+        cached = _window_cache.get(competition_id)
+        if cached and now - cached[0] < _WINDOW_TTL:
+            return cached[1]
+
+    seen: dict[int, dict] = {}
+    with Client365() as client:
+        for endpoint in ("/games/current/", "/games/results/", "/games/fixtures/"):
+            try:
+                data = client.get(endpoint, params={"competitions": str(competition_id)})
+                for g in data.get("games", []):
+                    gid = g.get("id")
+                    if gid is not None and gid not in seen:
+                        seen[gid] = g
+            except Exception as exc:
+                log.debug("365scores: %s failed for %s: %s", endpoint, competition_id, exc)
+
+    games = list(seen.values())
+    with _window_lock:
+        _window_cache[competition_id] = (now, games)
+    return games
+
+
+def _game_eastern_date(game: dict) -> str:
+    """
+    Convert a game's startTime to YYYYMMDD in US Eastern time, matching the
+    server's "game date" convention (a 7pm PT tip on day X is still day X).
+    """
+    raw = game.get("startTime", "")
+    if not raw:
+        return ""
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return ""
+    eastern = dt.astimezone(timezone(timedelta(hours=-5)))
+    return eastern.strftime("%Y%m%d")
+
+
 def fetch_games(date_str: str, league: str = "nba") -> list[dict]:
     """
     Fetch games for a date and league, return in ESPN event format.
     date_str can be YYYYMMDD or YYYY-MM-DD.
+
+    Note: 365scores only exposes a rolling ~10-day window via the
+    competition-filtered endpoints, so dates more than ~5 days from "now"
+    will return an empty list.
     """
     comp_id = COMPETITION_IDS.get(league, COMPETITION_IDS["nba"])
-    mdy = _to_mdy(date_str)
+    target = _normalize_yyyymmdd(date_str)
     try:
-        with Client365() as client:
-            data = get_games_by_date(client, mdy)
-        games = [g for g in data.get("games", []) if g.get("competitionId") == comp_id]
-        return [_transform_game(g, league=league) for g in games]
+        raw_games = _fetch_competition_window(comp_id)
     except Exception as exc:
         log.warning("365scores: fetch_games failed for %s/%s: %s", league, date_str, exc)
         return []
+
+    matching = [g for g in raw_games if _game_eastern_date(g) == target]
+    return [_transform_game(g, league=league) for g in matching]
 
 
 def _transform_game(game: dict, league: str = "nba") -> dict:
