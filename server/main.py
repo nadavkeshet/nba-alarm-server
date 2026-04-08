@@ -1703,13 +1703,12 @@ def epg_all_games(country: str = "il"):
 _watch_score_cache: dict[str, dict] = {}
 
 
-def _get_cached_watch_score(home: str, away: str, date_str: str) -> dict | None:
-    key = f"{date_str}_{home}_{away}"
+def _get_cached_watch_score(home: str, away: str, date_str: str, league: str) -> dict | None:
+    key = f"{league}_{date_str}_{home}_{away}"
     return _watch_score_cache.get(key)
 
 
-def _cache_watch_score(home: str, away: str, date_str: str, result) -> dict:
-    from watch_score import WatchScoreResult
+def _cache_watch_score(home: str, away: str, date_str: str, league: str, result) -> dict:
     entry = {
         "score": result.score,
         "tension": result.tension_score,
@@ -1718,33 +1717,34 @@ def _cache_watch_score(home: str, away: str, date_str: str, result) -> dict:
         "overtime": result.overtime,
         "buzzer_beater": result.buzzer_beater,
     }
-    key = f"{date_str}_{home}_{away}"
+    key = f"{league}_{date_str}_{home}_{away}"
     _watch_score_cache[key] = entry
     return entry
 
 
 @app.get("/watch-score")
-def watch_score(home: str, away: str, date: str = ""):
+def watch_score(home: str, away: str, date: str = "", league: str = "nba"):
     """
     Calculate the smart watch score (1-10) for a finished game.
-    Query params: home (team abbr), away (team abbr), date (YYYYMMDD, default today).
+    Query params: home (team abbr), away (team abbr), date (YYYYMMDD, default today), league.
     """
     from watch_score import calculate_watch_score_by_teams
     from monitor import _eastern_today
     game_date = date if date else _eastern_today()
-    cached = _get_cached_watch_score(home, away, game_date)
+    cached = _get_cached_watch_score(home, away, game_date, league)
     if cached:
         return cached
-    result = calculate_watch_score_by_teams(home_abbr=home, away_abbr=away, date_yyyymmdd=game_date)
+    result = calculate_watch_score_by_teams(
+        home_abbr=home, away_abbr=away, date_yyyymmdd=game_date, league=league)
     if result is None:
         return {"error": "Game not found or play-by-play unavailable", "score": None}
-    return _cache_watch_score(home, away, game_date, result)
+    return _cache_watch_score(home, away, game_date, league, result)
 
 
 @app.get("/watch-scores")
-def watch_scores(date: str = ""):
+def watch_scores(date: str = "", league: str = "nba"):
     """
-    Batch: return watch scores for all finished games on a date.
+    Batch: return watch scores for all finished games on a date for a league.
     Returns: { "scores": { "DEN_SA": { "score": 8.8, ... }, ... } }
     Cached in-memory — subsequent requests are instant.
     """
@@ -1752,8 +1752,7 @@ def watch_scores(date: str = ""):
     from monitor import _eastern_today
     game_date = date if date else _eastern_today()
 
-    # Get all games for this date
-    events = get_games_for_date(game_date)
+    events = get_games_for_date(game_date, league=league)
     results: dict[str, dict] = {}
 
     for event in events:
@@ -1772,15 +1771,15 @@ def watch_scores(date: str = ""):
             continue
 
         key = f"{home_abbr}_{away_abbr}"
-        cached = _get_cached_watch_score(home_abbr, away_abbr, game_date)
+        cached = _get_cached_watch_score(home_abbr, away_abbr, game_date, league)
         if cached:
             results[key] = cached
             continue
 
         result = calculate_watch_score_by_teams(
-            home_abbr=home_abbr, away_abbr=away_abbr, date_yyyymmdd=game_date)
+            home_abbr=home_abbr, away_abbr=away_abbr, date_yyyymmdd=game_date, league=league)
         if result:
-            results[key] = _cache_watch_score(home_abbr, away_abbr, game_date, result)
+            results[key] = _cache_watch_score(home_abbr, away_abbr, game_date, league, result)
 
     return {"scores": results}
 

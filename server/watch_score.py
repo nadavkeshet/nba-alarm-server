@@ -80,25 +80,33 @@ _SCORE_VALUES = {
 }
 
 
-def _fetch_pbp(game_id: int) -> tuple[list[dict], dict] | None:
-    """
-    Fetch the SportRadar play-by-play feed for a 365scores game.
-    Returns (messages, game_detail) or None on failure.
-    """
+def _fetch_game_detail(game_id: int) -> dict | None:
+    """Fetch a 365scores game detail (the parent of /playByPlay/, stages, etc.)."""
     try:
         with Client365() as client:
-            game = get_game_detail(client, int(game_id))
-        pbp_meta = game.get("playByPlay", {})
-        feed_url = pbp_meta.get("feedURL")
-        if not feed_url:
-            return None
+            return get_game_detail(client, int(game_id))
+    except Exception as exc:
+        log.warning("WatchScore: 365scores game-detail fetch failed for %s: %s", game_id, exc)
+        return None
+
+
+def _fetch_pbp_messages(game: dict) -> list[dict] | None:
+    """
+    Try to fetch SportRadar play-by-play messages for a game detail.
+    Returns None if the feed isn't available (most non-NBA leagues, e.g.
+    Euroleague, do not have a SportRadar PBP feed).
+    """
+    pbp_meta = game.get("playByPlay") or {}
+    feed_url = pbp_meta.get("feedURL")
+    if not feed_url:
+        return None
+    try:
         resp = httpx.get(feed_url, timeout=20)
         resp.raise_for_status()
         data = resp.json()
-        messages = data.get("Messages", [])
-        return messages, game
+        return data.get("Messages", [])
     except Exception as exc:
-        log.warning("WatchScore: 365scores PBP fetch failed for %s: %s", game_id, exc)
+        log.warning("WatchScore: PBP feed fetch failed for %s: %s", game.get("id"), exc)
         return None
 
 
@@ -411,20 +419,151 @@ def _blowout_multiplier(plays: list[ScoringPlay]) -> float:
     return 1.0
 
 
+# ── Stages fallback (used when PBP unavailable, e.g. Euroleague) ─────────────
+
+def _stage_period(name: str, idx: int) -> int | None:
+    """Map a 365scores stage name to a period number, or None if not in regulation/OT."""
+    n = (name or "").upper().strip()
+    if n in ("Q1", "1ST"):  return 1
+    if n in ("Q2", "2ND"):  return 2
+    if n in ("Q3", "3RD"):  return 3
+    if n in ("Q4", "4TH"):  return 4
+    if n.startswith("OT"):
+        try:
+            return 4 + int(n[2:] or "1")
+        except ValueError:
+            return 5
+    return None
+
+
+def _synthesize_plays_from_stages(game: dict, period_length_sec: int) -> tuple[list[ScoringPlay], dict]:
+    """
+    Build coarse "scoring plays" from per-quarter stage data.
+    Each quarter contributes a single end-of-period synthetic play whose
+    cumulative score is the running total. This gives the tension/clutch
+    calculators enough signal to rate the game even without per-play data.
+    """
+    home = _make_team_obj(game.get("homeCompetitor", {}))
+    away = _make_team_obj(game.get("awayCompetitor", {}))
+    team_info = {
+        "home_id":   home["id"],
+        "away_id":   away["id"],
+        "home_abbr": home["abbreviation"],
+        "away_abbr": away["abbreviation"],
+    }
+
+    home_running, away_running = 0, 0
+    plays: list[ScoringPlay] = []
+
+    for idx, stage in enumerate(game.get("stages", [])):
+        period = _stage_period(stage.get("name", ""), idx)
+        if period is None:
+            continue
+        h_q = stage.get("homeCompetitorScore")
+        a_q = stage.get("awayCompetitorScore")
+        if h_q is None or a_q is None:
+            continue
+
+        # Stage scores are per-quarter deltas, not running totals.
+        home_running += int(h_q)
+        away_running += int(a_q)
+
+        # Synthetic play at end of period (clock = 0)
+        plen = period_length_sec if period <= 4 else 300
+        plays.append(ScoringPlay(
+            period=period,
+            clock_seconds=0.0,
+            game_seconds=_game_elapsed(period, 0.0, period_length_sec),
+            home_score=home_running,
+            away_score=away_running,
+            diff=home_running - away_running,
+            team_id=home["id"] if int(h_q) >= int(a_q) else away["id"],
+            score_value=int(h_q) + int(a_q),
+            text=f"End of {stage.get('name','?')}",
+        ))
+
+    return plays, team_info
+
+
+def _score_from_stages(plays: list[ScoringPlay]) -> tuple[float, float, float, float, dict]:
+    """
+    Coarse watch score from end-of-quarter synthetic plays.
+    No lead-change density, no clutch lead changes — just tension from per-
+    quarter margins, a tightness bonus for the final, and an OT boost.
+    """
+    if not plays:
+        return 0.0, 0.0, 0.0, 0.0, {}
+
+    diffs = [abs(p.diff) for p in plays]
+    final_margin = abs(plays[-1].diff)
+
+    # Tension: how close was the game on average across quarters
+    avg_diff = sum(diffs) / len(diffs)
+    tension = max(0.0, 10.0 - avg_diff * 0.55)
+
+    # Closeness of late quarters carries more weight
+    late = [p for p in plays if p.period >= 3]
+    late_avg = sum(abs(p.diff) for p in late) / len(late) if late else avg_diff
+    clutch = max(0.0, 10.0 - late_avg * 0.7)
+    if final_margin <= 3:
+        clutch = min(10.0, clutch + 2.0)
+    elif final_margin <= 6:
+        clutch = min(10.0, clutch + 1.0)
+
+    # Flow: balanced quarter scoring (no quarter dominated by one team)
+    quarter_pts = [p.score_value for p in plays if p.period <= 4]
+    if quarter_pts:
+        avg_q_pts = sum(quarter_pts) / len(quarter_pts)
+        max_q_pts = max(quarter_pts)
+        flow = max(0.0, 10.0 - (max_q_pts - avg_q_pts) * 0.3)
+    else:
+        flow = 5.0
+
+    # Final weighted score: 40% tension, 40% clutch, 20% flow
+    raw = tension * 0.40 + clutch * 0.40 + flow * 0.20
+
+    details = {
+        "avg_diff": round(avg_diff, 1),
+        "late_avg_diff": round(late_avg, 1),
+        "final_margin": final_margin,
+        "quarters": len(plays),
+    }
+    return raw, tension, flow, clutch, details
+
+
 # ── Main scoring engine ──────────────────────────────────────────────────────
 
-def calculate_watch_score(game_id: str | int) -> WatchScoreResult | None:
-    """Calculate watch score for a 365scores game ID."""
-    result = _fetch_pbp(int(game_id))
-    if not result:
-        return None
-    messages, game = result
-    if not messages:
+def _period_length_for_league(league: str) -> int:
+    """Return regulation period length in seconds (NBA 12min, Euroleague 10min)."""
+    return 600 if league == "euroleague" else 720
+
+
+def calculate_watch_score(game_id: str | int, league: str = "nba") -> WatchScoreResult | None:
+    """
+    Calculate watch score for a 365scores game ID.
+    Uses per-play SportRadar PBP if available (NBA), otherwise falls back to
+    coarse per-quarter stage data (Euroleague et al.).
+    """
+    game = _fetch_game_detail(int(game_id))
+    if not game:
         return None
 
+    period_length = _period_length_for_league(league)
+    messages = _fetch_pbp_messages(game)
+
+    if messages:
+        return _score_from_pbp(messages, game, period_length)
+    return _score_from_stages_only(game, period_length)
+
+
+def _score_from_pbp(messages: list[dict], game: dict, period_length: int) -> WatchScoreResult | None:
     scoring_plays, team_info = _extract_scoring_plays(messages, game)
     if len(scoring_plays) < 10:
         return None
+
+    # Recompute game_seconds with the league-specific period length
+    for p in scoring_plays:
+        p.game_seconds = _game_elapsed(p.period, p.clock_seconds, period_length)
 
     tension, tension_details = _calc_tension(scoring_plays)
     flow, flow_details = _calc_flow(scoring_plays)
@@ -467,8 +606,51 @@ def calculate_watch_score(game_id: str | int) -> WatchScoreResult | None:
             "final_score_home": scoring_plays[-1].home_score,
             "final_score_away": scoring_plays[-1].away_score,
             "blowout_multiplier": round(blowout_mult, 2),
+            "source": "pbp",
         },
         buzzer_beater=buzzer_beater,
+        overtime=is_overtime,
+    )
+
+
+def _score_from_stages_only(game: dict, period_length: int) -> WatchScoreResult | None:
+    """
+    Stage-based fallback for leagues without per-play feeds (Euroleague).
+    Coarser than the PBP path but still produces a meaningful 1-10 rating
+    from per-quarter score data.
+    """
+    plays, team_info = _synthesize_plays_from_stages(game, period_length)
+    if not plays:
+        return None
+
+    raw, tension, flow, clutch, details = _score_from_stages(plays)
+
+    max_period = max(p.period for p in plays)
+    is_overtime = max_period > 4
+
+    if raw > 0:
+        raw = (raw ** 0.78) * (10 ** 0.22)
+
+    final_score = raw
+    if is_overtime:
+        final_score += 1.0
+        final_score = max(8.5, final_score)
+
+    final_score = max(1.0, min(10.0, round(final_score, 1)))
+
+    return WatchScoreResult(
+        score=final_score,
+        tension_score=round(tension, 1),
+        flow_score=round(flow, 1),
+        clutch_score=round(clutch, 1),
+        details={
+            **details,
+            "teams": team_info,
+            "final_score_home": plays[-1].home_score,
+            "final_score_away": plays[-1].away_score,
+            "source": "stages",
+        },
+        buzzer_beater=False,  # not detectable without per-play data
         overtime=is_overtime,
     )
 
@@ -491,7 +673,7 @@ def calculate_watch_score_by_teams(
                 else:
                     away = abbr
             if home == home_abbr and away == away_abbr:
-                return calculate_watch_score(event["id"])
+                return calculate_watch_score(event["id"], league=league)
     except Exception as exc:
         log.warning("WatchScore team lookup failed: %s", exc)
     return None
