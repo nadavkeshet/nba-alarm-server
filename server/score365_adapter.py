@@ -142,6 +142,28 @@ _INTL_TEAM_ID_TO_ABBR: dict[int, str] = {
     17473: "HEI",   # USC Heidelberg
     8649:  "WUR",   # Wurzburg Baskets
 
+    # ── EuroCup (additional teams discovered from /current+/results+/fixtures) ──
+    11776: "TRE",   # Dolomiti Energia Trento
+    17467: "CHM",   # Bv Chemnitz 99
+    11794: "LON",   # London Lions
+    10590: "LKB",   # Lietkabelis
+    21207: "HAM",   # Hamburg Towers
+    6782:  "NEP",   # Neptūnas
+    1043:  "ARI",   # Aris BSA
+    12439: "SLW",   # Slask Wroclaw
+    1045:  "PNI",   # Panionios
+
+    # ── FIBA BCL (additional teams) ──
+    5515:  "RYT",   # Rytas Vilnius
+    542:   "LMN",   # Le Mans
+    49704: "KAR",   # As Karditsas
+    11781: "TRI",   # Pallacanestro Trieste
+    551:   "CHL",   # Chalon/Saone
+    71620: "SUB",   # KK Spartak Subotica
+    9033:  "LEV",   # Levice
+    978:   "MER",   # Mersin Buyuksehir
+    7828:  "SZO",   # Szolnoki Olajbanyasz
+
     # ── Winner League (Israel) ───────────────────────────────────────────
     # MTA (631) and HTA (654) already mapped above (Euroleague block)
     634:   "JER",   # Hapoel Jerusalem
@@ -237,6 +259,26 @@ _DISPLAY_NAMES: dict[str, tuple[str, str]] = {
     "UNI":  ("Unicaja Málaga",            "Unicaja"),
     "HEI":  ("USC Heidelberg",            "Heidelberg"),
     "WUR":  ("Wurzburg Baskets",          "Wurzburg"),
+    # ── EuroCup additional ──
+    "TRE":  ("Dolomiti Energia Trento",   "Trento"),
+    "CHM":  ("Bv Chemnitz 99",            "Chemnitz"),
+    "LON":  ("London Lions",              "London"),
+    "LKB":  ("Lietkabelis",               "Lietkabelis"),
+    "HAM":  ("Hamburg Towers",            "Hamburg"),
+    "NEP":  ("Neptūnas",                  "Neptūnas"),
+    "ARI":  ("Aris BSA",                  "Aris"),
+    "SLW":  ("Slask Wroclaw",             "Slask"),
+    "PNI":  ("Panionios",                 "Panionios"),
+    # ── BCL additional ──
+    "RYT":  ("Rytas Vilnius",             "Rytas"),
+    "LMN":  ("Le Mans",                   "Le Mans"),
+    "KAR":  ("As Karditsas",              "Karditsas"),
+    "TRI":  ("Pallacanestro Trieste",     "Trieste"),
+    "CHL":  ("Chalon/Saone",              "Chalon"),
+    "SUB":  ("KK Spartak Subotica",       "Subotica"),
+    "LEV":  ("Levice",                    "Levice"),
+    "MER":  ("Mersin Buyuksehir",         "Mersin"),
+    "SZO":  ("Szolnoki Olajbanyasz",      "Szolnok"),
     # ── Winner League (Israel) ──
     # MTA, HTA already defined above (Euroleague block)
     "JER":  ("Hapoel Jerusalem",          "Jerusalem"),
@@ -580,37 +622,29 @@ def fetch_player_boxscore(game_id: str) -> dict | None:
 
 def fetch_all_teams(league: str = "nba") -> list[dict]:
     """
-    Fetch all teams for a league by scanning recent games (past 7 days).
+    Fetch all teams for a league by walking the combined-window endpoints.
     Returns list of dicts: {id, name, abbreviation, logo, players: []}
+    Uses the same /current + /results + /fixtures combination as the games
+    fetcher so leagues on a multi-week break (e.g. Winner League playoffs)
+    still surface their full team list.
     """
     comp_id = COMPETITION_IDS.get(league, COMPETITION_IDS["nba"])
-    seen: dict[str, dict] = {}  # team_id → team dict
+    raw_games = _fetch_competition_window(comp_id)
 
-    today = datetime.now(timezone.utc) - timedelta(hours=5)  # Eastern time
-    for days_back in range(0, 8):
-        date = today - timedelta(days=days_back)
-        date_str = date.strftime("%Y%m%d")
-        try:
-            events = fetch_games(date_str, league=league)
-            for event in events:
-                for comp_entry in event.get("competitions", []):
-                    for competitor in comp_entry.get("competitors", []):
-                        team = competitor.get("team", {})
-                        tid = team.get("id", "")
-                        if tid and tid not in seen:
-                            seen[tid] = {
-                                "id":           tid,
-                                "name":         team.get("displayName", team.get("name", "")),
-                                "abbreviation": team.get("abbreviation", "???"),
-                                "logo":         team.get("logo", ""),
-                                "players":      [],
-                            }
-        except Exception as exc:
-            log.debug("fetch_all_teams: error for %s: %s", date_str, exc)
-
-        if len(seen) >= (30 if league == "nba" else 18):
-            break  # found all expected teams
-
+    seen: dict[str, dict] = {}
+    for raw in raw_games:
+        for side in ("homeCompetitor", "awayCompetitor"):
+            comp = raw.get(side, {}) or {}
+            team_obj = _make_team_obj(comp)
+            tid = team_obj["id"]
+            if tid and tid not in seen:
+                seen[tid] = {
+                    "id":           tid,
+                    "name":         team_obj["displayName"],
+                    "abbreviation": team_obj["abbreviation"],
+                    "logo":         team_obj["logo"],
+                    "players":      [],
+                }
     return list(seen.values())
 
 
