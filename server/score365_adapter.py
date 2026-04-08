@@ -68,25 +68,23 @@ _EUROLEAGUE_TEAM_ID_TO_ABBR: dict[int, str] = {
     966:   "EFE",   # Anadolu Efes      (365: EFS)
     16001: "MON",   # AS Monaco         (365: ASM)
     543:   "LYN",   # ASVEL             (365: ASV)
+    206:   "BAR",   # FC Barcelona
     8648:  "BAY",   # Bayern Munich
     6349:  "BAS",   # Baskonia          (365: BKN)
     5528:  "CZV",   # Crvena Zvezda
-    83343: "DUB",   # Dubai BC          (365: ?)
+    83343: "DUB",   # Dubai BC
     970:   "FEN",   # Fenerbahce
+    654:   "HTA",   # Hapoel Tel Aviv
     275:   "MLN",   # Olimpia Milano
     631:   "MTA",   # Maccabi Tel Aviv
     1042:  "OLY",   # Olympiacos
     1041:  "PAN",   # Panathinaikos     (365: PAO)
-    5509:  "PAT",   # Partizan          (365: PAR)
+    55269: "PAR",   # Paris Basketball  (365: "Paris B.")
+    5509:  "PAT",   # Partizan          (365: PAR — collides w/ Paris)
     204:   "RMA",   # Real Madrid
+    208:   "VAL",   # Valencia Basket
     288:   "VIR",   # Virtus Bologna
-    # The following teams are expected but their 365 IDs are still TBD —
-    # they'll fall back to whatever symbolicName 365 returns.
-    # 0: "BAR",  Barcelona
-    # 0: "HTA",  Hapoel Tel Aviv
-    # 0: "PAR",  Paris Basketball
-    # 0: "VAL",  Valencia
-    # 0: "ZAL",  Zalgiris
+    5506:  "ZAL",   # Zalgiris Kaunas
 }
 
 # Full display names keyed by our canonical abbreviation
