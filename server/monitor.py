@@ -63,7 +63,7 @@ def _tid(token: str) -> str:
 # Mock stats used when test_mode=True (bypasses live API fetch)
 MOCK_STATS = {"PTS": 25, "REB": 9, "AST": 9, "STL": 2, "BLK": 9}
 
-from api_basketball import (
+from score365_adapter import (
     fetch_games as api_fetch_games,
     fetch_player_boxscore as api_fetch_boxscore,
     fetch_all_teams as api_fetch_all_teams,
@@ -117,7 +117,7 @@ _CACHE_LOCK   = threading.Lock()
 
 
 def update_all_rosters() -> None:
-    from api_basketball import LEAGUES
+    from score365_adapter import LEAGUES
     all_leagues = list(LEAGUES.keys())
     log.info("Roster cache: refreshing teams for %d league(s)...", len(all_leagues))
 
@@ -556,7 +556,7 @@ def fetch_game_summary_roster(game_id: str, date: str | None = None) -> dict:
     Step 2 – serve each team from _ROSTER_CACHE.
       Cache miss → live fetch from API-Basketball + populate cache.
     """
-    from api_basketball import LEAGUES
+    from score365_adapter import LEAGUES
     # ── Step 1: collect raw team stubs ─────────────────────────────────────────
     team_stubs: list[dict] = []
 

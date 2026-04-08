@@ -233,55 +233,30 @@ def _init_db() -> None:
             pass  # column already exists – safe to ignore
 
 
-def _migrate_espn_to_api_basketball_ids() -> None:
+def _migrate_team_ids_to_365() -> None:
     """
-    One-time migration: convert ESPN team IDs to API-Basketball team IDs
-    in favorite_teams table, and ESPN player IDs to API-Basketball player IDs
-    in favorites table. Safe to re-run (skips already-migrated rows).
+    Migrate any legacy team IDs (ESPN or API-Basketball) in favorite_teams
+    to 365scores IDs. Safe to re-run; rows already on 365 IDs are skipped.
+
+    Player IDs are not auto-migrated — users re-add players from the in-app
+    roster, which now serves 365scores IDs.
     """
     if engine is None:
         return
-    from api_basketball import ESPN_TO_API_TEAM_ID, search_player_id
+    from score365_adapter import LEGACY_TO_365_TEAM_ID
 
     try:
         with Session(engine) as session:
-            # ── Team ID migration ──
             teams = session.query(FavoriteTeamDB).all()
-            team_migrated = 0
+            migrated = 0
             for t in teams:
-                new_id = ESPN_TO_API_TEAM_ID.get(t.team_id)
+                new_id = LEGACY_TO_365_TEAM_ID.get(t.team_id)
                 if new_id and new_id != t.team_id:
                     t.team_id = new_id
-                    team_migrated += 1
-            if team_migrated:
+                    migrated += 1
+            if migrated:
                 session.commit()
-                log.info("ID MIGRATION: migrated %d team ID(s) from ESPN to API-Basketball.", team_migrated)
-
-            # ── Player ID migration ──
-            players = session.query(FavoritePlayerDB).all()
-            player_migrated = 0
-            for p in players:
-                # Skip if already looks like an API-Basketball ID (they're typically < 100000)
-                # ESPN IDs are typically 7+ digits like 3102477
-                try:
-                    pid_int = int(p.target_id)
-                    if pid_int < 100000:
-                        continue  # likely already migrated
-                except ValueError:
-                    pass
-                if p.target_name:
-                    new_pid = search_player_id(p.target_name)
-                    if new_pid:
-                        log.info("ID MIGRATION: player '%s' ESPN=%s → API=%s",
-                                 p.target_name, p.target_id, new_pid)
-                        p.target_id = new_pid
-                        player_migrated += 1
-                    else:
-                        log.warning("ID MIGRATION: could not find API-Basketball ID for player '%s' (ESPN=%s)",
-                                    p.target_name, p.target_id)
-            if player_migrated:
-                session.commit()
-                log.info("ID MIGRATION: migrated %d player ID(s) from ESPN to API-Basketball.", player_migrated)
+                log.info("ID MIGRATION: %d favorite_team row(s) → 365scores IDs.", migrated)
     except Exception as exc:
         log.error("ID MIGRATION failed: %s", exc)
 
@@ -605,7 +580,7 @@ register_db_get_all_users(_get_all_users_for_radar)
 
 # ── Background Async Poller ────────────────────────────────────────────────────
 
-from api_basketball import fetch_player_boxscore as api_fetch_boxscore
+from score365_adapter import fetch_player_boxscore as api_fetch_boxscore
 
 
 def _get_event_state(event: dict) -> str:
@@ -978,7 +953,7 @@ def _restart_alarm_threads_from_db() -> None:
 async def lifespan(_app: FastAPI):
     # ── Startup ──
     _init_db()
-    _migrate_espn_to_api_basketball_ids()  # one-time ID migration
+    _migrate_team_ids_to_365()  # legacy ESPN/API-Basketball → 365scores
     _load_fired_alerts_from_db()   # hydrate dedup set before radar starts
     _purge_old_alarms()            # delete inactive alarms older than 7 days
     clear_stale_state()
@@ -1650,7 +1625,7 @@ def register_token(req: RegisterTokenRequest):
 @app.get("/leagues")
 def leagues():
     """Return available leagues."""
-    from api_basketball import LEAGUES
+    from score365_adapter import LEAGUES
     return {"leagues": [
         {"id": key, "name": cfg["name"], "country": cfg["country"]}
         for key, cfg in LEAGUES.items()

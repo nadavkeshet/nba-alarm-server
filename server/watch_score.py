@@ -2,11 +2,10 @@
 Clutch Alarm – Smart Match Watch Score
 ========================================
 
-Analyzes NBA game play-by-play data and produces a 1-10 "watch score"
+Analyzes game play-by-play data and produces a 1-10 "watch score"
 rating based on tension, flow/quality, and clutch performance.
 
-Uses ESPN's free play-by-play endpoint (unauthenticated) as API-Basketball
-does not provide PBP data.
+Uses 365scores' SportRadar play-by-play feed (no API key required).
 
 Category weights:
   35% - Clutch Performance (last 5 minutes drama)
@@ -15,13 +14,14 @@ Category weights:
 """
 
 import logging
-import math
-import requests
+import httpx
 from dataclasses import dataclass, field
 
-log = logging.getLogger("nba_monitor")
+from score365.client import Client365
+from score365.scraper import get_game_detail, get_games_by_date
+from score365_adapter import _to_mdy, _make_team_obj, COMPETITION_IDS
 
-ESPN_SUMMARY_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary"
+log = logging.getLogger("nba_monitor")
 
 
 # ── Data structures ──────────────────────────────────────────────────────────
@@ -34,7 +34,7 @@ class ScoringPlay:
     home_score: int
     away_score: int
     diff: int              # home - away
-    team_id: str
+    team_id: str           # "1" home, "2" away (CompetitorNum)
     score_value: int
     text: str
 
@@ -53,6 +53,7 @@ class WatchScoreResult:
 # ── Clock parsing ────────────────────────────────────────────────────────────
 
 def _clock_to_seconds(clock_str: str) -> float:
+    """365scores Timeline is 'MM:SS' remaining in current period."""
     try:
         parts = clock_str.split(":")
         return int(parts[0]) * 60 + float(parts[1])
@@ -60,61 +61,100 @@ def _clock_to_seconds(clock_str: str) -> float:
         return 0.0
 
 
-def _game_elapsed(period: int, clock_seconds: float) -> float:
+def _game_elapsed(period: int, clock_seconds: float, period_length_sec: int = 720) -> float:
+    """Total seconds elapsed from game start. NBA periods = 720s, OT = 300s."""
     if period <= 4:
-        elapsed_before = (period - 1) * 720
-        return elapsed_before + (720 - clock_seconds)
+        elapsed_before = (period - 1) * period_length_sec
+        return elapsed_before + (period_length_sec - clock_seconds)
     else:
-        elapsed_before = 4 * 720 + (period - 5) * 300
+        elapsed_before = 4 * period_length_sec + (period - 5) * 300
         return elapsed_before + (300 - clock_seconds)
 
 
-# ── ESPN data fetch ──────────────────────────────────────────────────────────
+# ── 365scores PBP fetch ──────────────────────────────────────────────────────
 
-def _fetch_espn_summary(espn_game_id: str) -> dict | None:
+_SCORE_VALUES = {
+    "two point made":    2,
+    "three point made":  3,
+    "free throw made":   1,
+}
+
+
+def _fetch_pbp(game_id: int) -> tuple[list[dict], dict] | None:
+    """
+    Fetch the SportRadar play-by-play feed for a 365scores game.
+    Returns (messages, game_detail) or None on failure.
+    """
     try:
-        resp = requests.get(ESPN_SUMMARY_URL, params={"event": espn_game_id}, timeout=15)
+        with Client365() as client:
+            game = get_game_detail(client, int(game_id))
+        pbp_meta = game.get("playByPlay", {})
+        feed_url = pbp_meta.get("feedURL")
+        if not feed_url:
+            return None
+        resp = httpx.get(feed_url, timeout=20)
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        messages = data.get("Messages", [])
+        return messages, game
     except Exception as exc:
-        log.warning("WatchScore: ESPN fetch failed for %s: %s", espn_game_id, exc)
+        log.warning("WatchScore: 365scores PBP fetch failed for %s: %s", game_id, exc)
         return None
 
 
-def _extract_scoring_plays(summary: dict) -> tuple[list[ScoringPlay], dict]:
-    plays = summary.get("plays", [])
-    header = summary.get("header", {})
-    comps = header.get("competitions", [{}])[0].get("competitors", [])
-    home_id, away_id, home_abbr, away_abbr = "", "", "", ""
-    for c in comps:
-        t = c.get("team", {})
-        if c.get("homeAway") == "home":
-            home_id, home_abbr = str(t.get("id", "")), t.get("abbreviation", "")
-        else:
-            away_id, away_abbr = str(t.get("id", "")), t.get("abbreviation", "")
+def _extract_scoring_plays(messages: list[dict], game: dict) -> tuple[list[ScoringPlay], dict]:
+    """Convert 365scores PBP messages into ScoringPlay objects."""
+    home = _make_team_obj(game.get("homeCompetitor", {}))
+    away = _make_team_obj(game.get("awayCompetitor", {}))
+    team_info = {
+        "home_id":   home["id"],
+        "away_id":   away["id"],
+        "home_abbr": home["abbreviation"],
+        "away_abbr": away["abbreviation"],
+    }
 
-    scoring_plays: list[ScoringPlay] = []
-    for p in plays:
-        if not p.get("scoringPlay"):
+    # Sort by message Id ascending → chronological order
+    sorted_msgs = sorted(messages, key=lambda m: m.get("Id", 0))
+
+    plays: list[ScoringPlay] = []
+    for m in sorted_msgs:
+        type_name = (m.get("TypeName") or "").lower()
+        score_value = _SCORE_VALUES.get(type_name)
+        if not score_value:
             continue
-        period = p.get("period", {}).get("number", 0)
-        clock_secs = _clock_to_seconds(p.get("clock", {}).get("displayValue", "0:00"))
-        scoring_plays.append(ScoringPlay(
+
+        try:
+            period = int(m.get("Period", 0))
+        except (ValueError, TypeError):
+            continue
+
+        clock_secs = _clock_to_seconds(m.get("Timeline", "0:00"))
+        score = m.get("Score") or [0, 0]
+        if not isinstance(score, list) or len(score) < 2:
+            continue
+        home_score, away_score = int(score[0]), int(score[1])
+
+        comp_num = m.get("CompetitorNum")
+        if comp_num == 1:
+            team_id = home["id"]
+        elif comp_num == 2:
+            team_id = away["id"]
+        else:
+            team_id = ""
+
+        plays.append(ScoringPlay(
             period=period,
             clock_seconds=clock_secs,
             game_seconds=_game_elapsed(period, clock_secs),
-            home_score=p.get("homeScore", 0),
-            away_score=p.get("awayScore", 0),
-            diff=p.get("homeScore", 0) - p.get("awayScore", 0),
-            team_id=str(p.get("team", {}).get("id", "")),
-            score_value=p.get("scoreValue", 0),
-            text=p.get("text", ""),
+            home_score=home_score,
+            away_score=away_score,
+            diff=home_score - away_score,
+            team_id=team_id,
+            score_value=score_value,
+            text=m.get("Comment", ""),
         ))
 
-    return scoring_plays, {
-        "home_id": home_id, "away_id": away_id,
-        "home_abbr": home_abbr, "away_abbr": away_abbr,
-    }
+    return plays, team_info
 
 
 # ── Category A: Tension & Drama (35%) ────────────────────────────────────────
@@ -142,16 +182,13 @@ def _calc_tension(plays: list[ScoringPlay]) -> tuple[float, dict]:
                 lead_swaps += 1
             prev_leader = -1
 
-    # 15+ lead swaps = 10, scale linearly
     swap_score = min(10, lead_swaps * 0.65 + ties * 0.2)
 
-    # 2. Closeness: how tight was the game through each quarter?
-    # Split into quarters, measure median diff per quarter
+    # 2. Closeness per quarter
     quarter_diffs: dict[int, list[int]] = {}
     for p in plays:
         quarter_diffs.setdefault(p.period, []).append(abs(p.diff))
 
-    # Weighted closeness: later quarters matter more
     quarter_weights = {1: 0.10, 2: 0.15, 3: 0.25, 4: 0.35, 5: 0.15}
     weighted_closeness = 0.0
     total_weight = 0.0
@@ -160,7 +197,6 @@ def _calc_tension(plays: list[ScoringPlay]) -> tuple[float, dict]:
             continue
         sorted_d = sorted(diffs)
         median = sorted_d[len(sorted_d) // 2]
-        # median 0 = 10, median 15+ = 0
         q_score = max(0, 10 - median * 0.65)
         w = quarter_weights.get(q, 0.15)
         weighted_closeness += q_score * w
@@ -181,7 +217,6 @@ def _calc_tension(plays: list[ScoringPlay]) -> tuple[float, dict]:
     comeback_score = 0.0
     max_deficit = max(max_home_deficit, max_away_deficit)
     if max_deficit >= 8:
-        # Successful comeback: trailing team ended up winning or within 3
         home_trailed_badly = max_home_deficit >= 8
         away_trailed_badly = max_away_deficit >= 8
         came_back = (home_trailed_badly and final_diff >= -3) or \
@@ -191,7 +226,6 @@ def _calc_tension(plays: list[ScoringPlay]) -> tuple[float, dict]:
         elif max_deficit >= 15:
             comeback_score = min(6, max_deficit * 0.3)
 
-    # Combined: 30% swaps, 35% closeness, 35% comeback
     tension = swap_score * 0.30 + closeness_score * 0.35 + comeback_score * 0.35
 
     details = {
@@ -210,7 +244,6 @@ def _calc_flow(plays: list[ScoringPlay]) -> tuple[float, dict]:
     if len(plays) < 5:
         return 0.0, {}
 
-    # 1. Trading baskets: quick responses (within 25 sec)
     quick_responses = 0
     total_sequences = 0
     for i in range(1, len(plays)):
@@ -221,10 +254,8 @@ def _calc_flow(plays: list[ScoringPlay]) -> tuple[float, dict]:
                 quick_responses += 1
 
     trading_pct = (quick_responses / total_sequences * 100) if total_sequences > 0 else 0
-    # 50%+ = 10, 15% = 0
     trading_score = min(10, max(0, (trading_pct - 15) / 3.5))
 
-    # 2. Momentum runs
     runs: list[int] = []
     current_run = 0
     current_team = ""
@@ -241,29 +272,24 @@ def _calc_flow(plays: list[ScoringPlay]) -> tuple[float, dict]:
 
     big_runs = [r for r in runs if r >= 8]
     max_run = max(runs) if runs else 0
-    # Big runs add excitement but cap the score
     run_score = min(10, len(big_runs) * 1.5 + (max_run / 20.0) * 4)
 
-    # 3. Scoring pace & flow
     total_pts = plays[-1].home_score + plays[-1].away_score if plays else 0
     game_duration_min = plays[-1].game_seconds / 60 if plays else 48
     pts_per_min = total_pts / game_duration_min if game_duration_min > 0 else 0
 
-    # Good NBA pace: 4.5-5.5 pts/min. Too low = boring, too high = no defense
     pace_score = 0.0
     if pts_per_min >= 4.0:
         pace_score = min(10, (pts_per_min - 3.0) * 4)
     if pts_per_min > 6.0:
-        pace_score = max(5, pace_score - (pts_per_min - 6.0) * 2)  # slight penalty for no defense
+        pace_score = max(5, pace_score - (pts_per_min - 6.0) * 2)
 
-    # Penalty for excessive free throws
     ft_plays = sum(1 for p in plays if "free throw" in p.text.lower())
     ft_ratio = ft_plays / len(plays) if plays else 0
     ft_penalty = 1.0
     if ft_ratio > 0.20:
         ft_penalty = max(0.6, 1.0 - (ft_ratio - 0.20) * 3)
 
-    # Combined: 40% trading, 25% runs, 35% pace
     flow = (trading_score * 0.40 + run_score * 0.25 + pace_score * 0.35) * ft_penalty
 
     details = {
@@ -285,21 +311,16 @@ def _calc_clutch(plays: list[ScoringPlay]) -> tuple[float, dict]:
     if len(plays) < 5:
         return 0.0, {}
 
-    max_period = max(p.period for p in plays)
-
-    # Clutch = last 5 min of Q4 + all OT
     clutch_plays = [p for p in plays
                     if (p.period == 4 and p.clock_seconds <= 300) or p.period > 4]
 
     if not clutch_plays:
         return 0.0, {}
 
-    # 1. Proximity: how close was the score during clutch time?
     clutch_diffs = [abs(p.diff) for p in clutch_plays]
     avg_clutch_diff = sum(clutch_diffs) / len(clutch_diffs)
     max_clutch_diff = max(clutch_diffs)
 
-    # A game that's 20+ pts apart in clutch time has zero clutch value
     if avg_clutch_diff > 15:
         return 0.0, {
             "clutch_plays": len(clutch_plays), "avg_clutch_diff": round(avg_clutch_diff, 1),
@@ -308,15 +329,12 @@ def _calc_clutch(plays: list[ScoringPlay]) -> tuple[float, dict]:
             "note": "blowout in clutch time",
         }
 
-    # avg 0-1 = 10, avg 5 = 5, avg 10 = 0
     proximity_score = max(0, 10 - avg_clutch_diff * 1.0)
     if max_clutch_diff <= 5:
         proximity_score = min(10, proximity_score + 1.5)
 
-    # 2. Clutch density: scoring plays in clutch time (only meaningful if close)
     density_score = min(10, len(clutch_plays) * 0.6)
 
-    # 3. Lead changes in clutch
     clutch_lead_changes = 0
     prev_sign = 0
     for p in clutch_plays:
@@ -326,10 +344,8 @@ def _calc_clutch(plays: list[ScoringPlay]) -> tuple[float, dict]:
         if sign != 0:
             prev_sign = sign
 
-    # 4+ clutch lead changes = incredible
     lead_change_score = min(10, clutch_lead_changes * 2.5)
 
-    # 4. Final margin tightness bonus
     final_margin = abs(plays[-1].diff)
     margin_bonus = 0.0
     if final_margin <= 3:
@@ -339,11 +355,6 @@ def _calc_clutch(plays: list[ScoringPlay]) -> tuple[float, dict]:
     elif final_margin <= 8:
         margin_bonus = 0.5
 
-    # Combined: 35% proximity, 20% density, 30% lead changes, 15% margin
-    clutch = (proximity_score * 0.35 + density_score * 0.20 +
-              lead_change_score * 0.30 + margin_bonus * 0.15 / 0.15)
-
-    # Scale margin_bonus properly
     clutch = proximity_score * 0.35 + density_score * 0.20 + \
              lead_change_score * 0.30 + min(10, margin_bonus * 3.3) * 0.15
 
@@ -368,38 +379,27 @@ def _detect_buzzer_beater(plays: list[ScoringPlay]) -> bool:
     max_period = max(p.period for p in plays)
     last_play = plays[-1]
     if last_play.clock_seconds <= 3.0 and last_play.period == max_period:
-        if len(plays) >= 2:
-            prev_diff = plays[-2].diff
-            curr_diff = last_play.diff
-            if (prev_diff <= 0 and curr_diff > 0) or (prev_diff >= 0 and curr_diff < 0):
-                return True
+        prev_diff = plays[-2].diff
+        curr_diff = last_play.diff
+        if (prev_diff <= 0 and curr_diff > 0) or (prev_diff >= 0 and curr_diff < 0):
+            return True
     return False
 
 
 # ── Blowout dampener ─────────────────────────────────────────────────────────
 
 def _blowout_multiplier(plays: list[ScoringPlay]) -> float:
-    """
-    Returns a multiplier 0.0-1.0 that dampens the score for blowouts.
-    A game where one team led by 20+ for most of the second half is not
-    exciting regardless of individual flow or early drama.
-    """
     if len(plays) < 10:
         return 1.0
 
-    # Check second half plays (Q3+Q4)
     second_half = [p for p in plays if p.period >= 3]
     if not second_half:
         return 1.0
 
     diffs = [abs(p.diff) for p in second_half]
-    avg_2h_diff = sum(diffs) / len(diffs)
     sorted_d = sorted(diffs)
     median_2h_diff = sorted_d[len(sorted_d) // 2]
 
-    # If median second half diff is 20+ → total blowout → scale to 40%
-    # If 15+ → scale to 60%
-    # If 10+ → scale to 80%
     if median_2h_diff >= 20:
         return 0.40
     elif median_2h_diff >= 15:
@@ -413,15 +413,16 @@ def _blowout_multiplier(plays: list[ScoringPlay]) -> float:
 
 # ── Main scoring engine ──────────────────────────────────────────────────────
 
-def calculate_watch_score(espn_game_id: str) -> WatchScoreResult | None:
-    summary = _fetch_espn_summary(espn_game_id)
-    if not summary:
+def calculate_watch_score(game_id: str | int) -> WatchScoreResult | None:
+    """Calculate watch score for a 365scores game ID."""
+    result = _fetch_pbp(int(game_id))
+    if not result:
+        return None
+    messages, game = result
+    if not messages:
         return None
 
-    if not summary.get("plays"):
-        return None
-
-    scoring_plays, team_info = _extract_scoring_plays(summary)
+    scoring_plays, team_info = _extract_scoring_plays(messages, game)
     if len(scoring_plays) < 10:
         return None
 
@@ -429,38 +430,27 @@ def calculate_watch_score(espn_game_id: str) -> WatchScoreResult | None:
     flow, flow_details = _calc_flow(scoring_plays)
     clutch, clutch_details = _calc_clutch(scoring_plays)
 
-    # Weighted average: 35% clutch, 35% tension, 30% flow
     raw_score = clutch * 0.35 + tension * 0.35 + flow * 0.30
 
-    # Determine OT before dampener — a game that reached OT can't be a blowout
     max_period = max(p.period for p in scoring_plays)
     is_overtime = max_period > 4
 
-    # Apply blowout dampener — even if flow was good, a 30-pt game is boring
-    # Skip for OT games: if it went to OT it was close, dampener would be wrong
     blowout_mult = 1.0 if is_overtime else _blowout_multiplier(scoring_plays)
     raw_score *= blowout_mult
 
-    # Apply upper-stretch curve: push good games into 8-9 range
-    # while keeping blowouts low. Formula: x^0.78 * 10^0.22
     if raw_score > 0:
         raw_score = (raw_score ** 0.78) * (10 ** 0.22)
 
-    # Bonuses
     buzzer_beater = _detect_buzzer_beater(scoring_plays)
 
     final_score = raw_score
-
-    # OT bonus: +1.0, then enforce minimum of 8.0 for any OT game
     if is_overtime:
         final_score += 1.0
         final_score = max(8.5, final_score)
 
-    # Buzzer beater: minimum 9.5
     if buzzer_beater:
         final_score = max(final_score, 9.5)
 
-    # Floor: even worst games get 1.0
     final_score = max(1.0, min(10.0, round(final_score, 1)))
 
     return WatchScoreResult(
@@ -486,23 +476,21 @@ def calculate_watch_score(espn_game_id: str) -> WatchScoreResult | None:
 # ── Convenience: score by team abbreviations ─────────────────────────────────
 
 def calculate_watch_score_by_teams(
-    home_abbr: str, away_abbr: str, date_yyyymmdd: str,
+    home_abbr: str, away_abbr: str, date_yyyymmdd: str, league: str = "nba",
 ) -> WatchScoreResult | None:
+    """Look up a game by team abbreviations + date, then compute watch score."""
+    comp_id = COMPETITION_IDS.get(league, COMPETITION_IDS["nba"])
+    mdy = _to_mdy(date_yyyymmdd)
     try:
-        url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
-        resp = requests.get(url, params={"dates": date_yyyymmdd}, timeout=10)
-        resp.raise_for_status()
-        for event in resp.json().get("events", []):
-            comp = (event.get("competitions") or [{}])[0]
-            event_home, event_away = "", ""
-            for c in comp.get("competitors", []):
-                abbr = c.get("team", {}).get("abbreviation", "")
-                if c.get("homeAway") == "home":
-                    event_home = abbr
-                else:
-                    event_away = abbr
-            if event_home == home_abbr and event_away == away_abbr:
-                return calculate_watch_score(str(event["id"]))
+        with Client365() as client:
+            data = get_games_by_date(client, mdy)
+        for g in data.get("games", []):
+            if g.get("competitionId") != comp_id:
+                continue
+            home = _make_team_obj(g.get("homeCompetitor", {}))
+            away = _make_team_obj(g.get("awayCompetitor", {}))
+            if home["abbreviation"] == home_abbr and away["abbreviation"] == away_abbr:
+                return calculate_watch_score(g["id"])
     except Exception as exc:
         log.warning("WatchScore team lookup failed: %s", exc)
     return None
