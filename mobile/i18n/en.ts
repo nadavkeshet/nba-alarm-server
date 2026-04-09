@@ -164,7 +164,7 @@ export const en = {
   'settings.addTeamBtn':      'Add {0} to Favorites',
   'settings.addPlayerBtn':    'Add {0} to Favorites',
   'settings.cancel':          'Cancel',
-  'settings.rateUs':          'Rate Clutch Alarm ⭐',
+  'settings.rateUs':          'Rate Clutch Alarm',
   'settings.appGuide':        'App Guide',
   'settings.notReady':        'Not ready',
   'settings.notReadyMsg':     'Your device token is still loading. Please try again in a moment.',

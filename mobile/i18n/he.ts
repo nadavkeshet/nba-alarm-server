@@ -164,7 +164,7 @@ export const he = {
   'settings.addTeamBtn':      'הוסף את {0} למועדפים',
   'settings.addPlayerBtn':    'הוסף את {0} למועדפים',
   'settings.cancel':          'ביטול',
-  'settings.rateUs':          'דרגו את Clutch Alarm ⭐',
+  'settings.rateUs':          'דרגו את Clutch Alarm',
   'settings.appGuide':        'מדריך לאפליקציה',
   'settings.notReady':        'לא מוכן',
   'settings.notReadyMsg':     'הטוקן שלך עדיין נטען. נסה שוב בעוד רגע.',
