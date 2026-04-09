@@ -2055,6 +2055,7 @@ def active_monitors(user_token: str = ""):
                             "start_quarter":   r.start_quarter if r.start_quarter is not None else 4,
                             "home_team_id":    r.home_team_id or "",
                             "away_team_id":    r.away_team_id or "",
+                            "league":          (getattr(r, 'league', None) or "nba"),
                             "notify_at_start": getattr(r, 'notify_at_start', False),
                             "game_date":       getattr(r, 'game_date', None) or "",
                         }
