@@ -2219,6 +2219,21 @@ def pause_team(team_id: str, req: PauseRequest):
         session.commit()
     return {"paused": req.paused, "team_id": team_id}
 
+@app.post("/settings/favorites/pause-all")
+def pause_all_favorites(req: PauseRequest):
+    """Pause or resume ALL favorite teams and players for a user at once."""
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Database not configured.")
+    with Session(engine) as session:
+        teams = session.query(FavoriteTeamDB).filter_by(user_token=req.user_token).all()
+        for t in teams:
+            t.paused = req.paused
+        players = session.query(FavoritePlayerDB).filter_by(user_token=req.user_token).all()
+        for p in players:
+            p.paused = req.paused
+        session.commit()
+    return {"paused": req.paused, "teams": len(teams), "players": len(players)}
+
 
 # ── Admin: Broadcast push to all users ────────────────────────────────────────
 

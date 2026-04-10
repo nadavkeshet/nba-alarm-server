@@ -901,22 +901,23 @@ def start_player_monitoring_job(
         triggered  = False
         notif_body = ""
 
+        _lang = _get_user_language(push_token)
         if condition == "pts_goal" and pts >= pts_threshold:
             triggered  = True
-            notif_body = f"[TEST] {player_name} has scored {pts} points in {game_name}!"
+            notif_body = f"[TEST] {t_body_scoring(player_name, pts, game_name, _lang)}"
         elif condition == "pts_early" and pts >= pts_threshold:
             triggered  = True
-            notif_body = f"[TEST] {player_name} already has {pts} pts in {_period_label(quarter)} — on fire early!"
+            notif_body = f"[TEST] {t_body_early_pts(player_name, pts, quarter, game_name, _lang)}"
         elif condition == "triple_double" and _check_triple_double(pts, reb, ast, stl, blk):
             hot        = [f"{c} {v}" for c, v in zip(["PTS","REB","AST","STL","BLK"], [pts,reb,ast,stl,blk]) if v >= 9]
             triggered  = True
-            notif_body = f"[TEST] {player_name}: {' / '.join(hot)} in {game_name}!"
+            notif_body = f"[TEST] {t_body_triple_double(player_name, ' / '.join(hot), game_name, _lang)}"
 
         if triggered:
             log.info("PLAYER ALARM fire   | [TEST] %s", notif_body)
             _send_push_notification(
                 push_token=push_token,
-                title="[TEST] Player Alert!",
+                title=f"[TEST] {t_title('player_alert', _lang)}",
                 body=notif_body,
                 sound_channel=sound_channel,
                 alert_type=alert_type,
@@ -985,18 +986,23 @@ def start_player_monitoring_job(
 
             triggered  = False
             notif_body = ""
+            _lang = _get_user_language(push_token)
+            title_key = "player_alert"
 
             if condition == "pts_goal" and pts >= pts_threshold:
                 triggered  = True
-                notif_body = f"{player_name} has scored {pts} points in {game_name}!"
+                title_key  = "scoring_alert"
+                notif_body = t_body_scoring(player_name, pts, game_name, _lang)
             elif condition == "pts_early" and pts >= pts_threshold:
                 triggered  = True
-                notif_body = f"{player_name} already has {pts} pts in {_period_label(quarter)} — on fire early!"
+                title_key  = "early_points"
+                notif_body = t_body_early_pts(player_name, pts, quarter, game_name, _lang)
             elif condition == "triple_double" and _check_triple_double(pts, reb, ast, stl, blk) \
                     and not (quarter >= 4 and _clock_minutes_remaining(event) <= 3):
                 hot        = [f"{n} {v}" for n, v in zip(["PTS","REB","AST","STL","BLK"], [pts,reb,ast,stl,blk]) if v >= 9]
                 triggered  = True
-                notif_body = f"{player_name}: {' / '.join(hot)} in {game_name}!"
+                title_key  = "triple_double"
+                notif_body = t_body_triple_double(player_name, ' / '.join(hot), game_name, _lang)
 
             if triggered:
                 # Claim the same dedup key the radar uses for this condition.
@@ -1016,7 +1022,7 @@ def start_player_monitoring_job(
                     log.info("PLAYER ALARM fire   | %s", notif_body)
                     _send_push_notification(
                         push_token=push_token,
-                        title="Player Alert!",
+                        title=t_title(title_key, _lang),
                         body=notif_body,
                         sound_channel=sound_channel,
                         alert_type=alert_type,
