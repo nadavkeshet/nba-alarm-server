@@ -1853,13 +1853,15 @@ def epg_for_game(game_id: str = "", country: str = "il"):
 @app.get("/epg/all")
 def epg_all_games(country: str = "il"):
     """
-    Get all NBA TV broadcasts for today's games, keyed by game_id.
+    Get all basketball TV broadcasts for today's games (all leagues), keyed by game_id.
     Returns: { "broadcasts": { "401810906": [...], "401810907": [...] } }
     """
     if country.lower() not in _ALLOWED_EPG_COUNTRIES:
         return {"broadcasts": {}}
-    today_games = get_today_games()
-    return {"broadcasts": get_all_broadcasts(country=country, games=today_games)}
+    all_games = []
+    for lid in ("nba", "euroleague", "eurocup", "bcl", "winner_league"):
+        all_games.extend(get_games_for_date(None, league=lid))
+    return {"broadcasts": get_all_broadcasts(country=country, games=all_games)}
 
 
 # ── Watch Score (in-memory cache, keyed by "DATE_HOME_AWAY") ─────────────────

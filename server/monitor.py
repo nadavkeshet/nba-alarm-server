@@ -1139,6 +1139,7 @@ def _run_radar_tick_for_user(
                             game_id=game_id, game_name=game_name,
                             home_abbr=home_abbr, away_abbr=away_abbr,
                             game_date_utc=event.get("date", ""),
+                            league=event.get("league", "nba"),
                         )
                         if not broadcasts:
                             continue  # no broadcast → skip alert
@@ -1207,7 +1208,8 @@ def _run_radar_tick_for_user(
                                 if comp_c.get("homeAway") == "home": home_a = a
                                 else: away_a = a
                             if not get_broadcasts_for_game(game_id=game_id, game_name=game_name,
-                                    home_abbr=home_a, away_abbr=away_a, game_date_utc=event.get("date", "")):
+                                    home_abbr=home_a, away_abbr=away_a, game_date_utc=event.get("date", ""),
+                                    league=event.get("league", "nba")):
                                 continue  # no broadcast → skip all player alerts for this game
                         p_alert      = fav_cfg.get("alert_type", "silent")
                         total_pts_thr = fav_cfg.get("total_pts")
