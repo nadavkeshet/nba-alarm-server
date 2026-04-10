@@ -1121,12 +1121,13 @@ def _run_radar_tick_for_user(
                 start_q = int(criteria.get("start_quarter", 4))
                 c_alert = criteria.get("alert_type", radar_alert_type)
                 broadcast_only = bool(criteria.get("broadcast_only", False))
+                skip_euro_evening = bool(criteria.get("skip_euroleague_evening", False))
                 notify_start = bool(criteria.get("notify_at_start", False))
                 last5_ok = start_q == 5 and (quarter > 4 or (quarter == 4 and _clock_minutes_remaining(event) <= 5.0))
                 quarter_ok_r = last5_ok if start_q == 5 else quarter >= start_q
                 if quarter_ok_r and (notify_start or diff <= max_d):
                     # If broadcast_only, skip if no TV broadcast found
-                    if broadcast_only:
+                    if broadcast_only or skip_euro_evening:
                         home_abbr = ""
                         away_abbr = ""
                         for comp_c in competitors:
@@ -1141,8 +1142,13 @@ def _run_radar_tick_for_user(
                             game_date_utc=event.get("date", ""),
                             league=event.get("league", "nba"),
                         )
-                        if not broadcasts:
+                        if broadcast_only and not broadcasts:
                             continue  # no broadcast → skip alert
+                        # skip_euro_evening: skip if only ערב היורוליג (no dedicated broadcast)
+                        if skip_euro_evening and broadcasts and all(
+                            b.get("is_euroleague_evening") for b in broadcasts
+                        ):
+                            continue
                     if notify_start and diff > max_d:
                         label = t_title("period_starting", language)
                         body_text = t_body_period_start(game_name, quarter, diff, language)
@@ -1199,18 +1205,25 @@ def _run_radar_tick_for_user(
                         fav_cfg      = fav_players[player_id]
                         if bool(fav_cfg.get("paused", False)):
                             continue
-                        # broadcast_only check for players
-                        if bool(fav_cfg.get("broadcast_only", False)):
+                        # broadcast_only / skip_euroleague_evening check for players
+                        p_broadcast_only = bool(fav_cfg.get("broadcast_only", False))
+                        p_skip_euro = bool(fav_cfg.get("skip_euroleague_evening", False))
+                        if p_broadcast_only or p_skip_euro:
                             home_a = ""
                             away_a = ""
                             for comp_c in event.get("competitions", [{}])[0].get("competitors", []):
                                 a = comp_c.get("team", {}).get("abbreviation", "")
                                 if comp_c.get("homeAway") == "home": home_a = a
                                 else: away_a = a
-                            if not get_broadcasts_for_game(game_id=game_id, game_name=game_name,
+                            p_broadcasts = get_broadcasts_for_game(game_id=game_id, game_name=game_name,
                                     home_abbr=home_a, away_abbr=away_a, game_date_utc=event.get("date", ""),
-                                    league=event.get("league", "nba")):
+                                    league=event.get("league", "nba"))
+                            if p_broadcast_only and not p_broadcasts:
                                 continue  # no broadcast → skip all player alerts for this game
+                            if p_skip_euro and p_broadcasts and all(
+                                b.get("is_euroleague_evening") for b in p_broadcasts
+                            ):
+                                continue
                         p_alert      = fav_cfg.get("alert_type", "silent")
                         total_pts_thr = fav_cfg.get("total_pts")
                         early_pts_q  = fav_cfg.get("early_pts_q")

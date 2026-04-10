@@ -378,6 +378,7 @@ def get_broadcasts_for_game(game_id: str, game_name: str, home_abbr: str, away_a
                 "channel_icon": prog.get("channel_icon", ""),
                 "is_free": prog.get("is_free", False),
                 "is_live": True,
+                "is_euroleague_evening": True,
                 "title": title,
                 "start_utc": prog.get("start_utc", ""),
             })
@@ -413,6 +414,11 @@ def get_broadcasts_for_game(game_id: str, game_name: str, home_abbr: str, away_a
     # If any match is a live broadcast, drop non-live ones (replays, condensed games)
     if any(m["is_live"] for m in matches):
         matches = [m for m in matches if m["is_live"]]
+
+    # If there's a real team-specific broadcast, drop ערב היורוליג
+    has_real = any(not m.get("is_euroleague_evening") for m in matches)
+    if has_real:
+        matches = [m for m in matches if not m.get("is_euroleague_evening")]
 
     # Sort: free first, then by start time
     matches.sort(key=lambda x: (not x["is_free"], x.get("start_utc", "")))

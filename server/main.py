@@ -126,6 +126,7 @@ class FavoritePlayerDB(_Base):
     td_watch        = Column(Boolean, default=False, nullable=False)
     alert_type      = Column(String,  nullable=True, default='silent')
     broadcast_only  = Column(Boolean, default=False, nullable=False)
+    skip_euroleague_evening = Column(Boolean, default=False, nullable=False)
     paused          = Column(Boolean, default=False, nullable=False)
     created_at      = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
@@ -143,6 +144,7 @@ class FavoriteTeamDB(_Base):
     start_quarter    = Column(Integer, nullable=True)
     alert_type       = Column(String,  nullable=True, default='silent')
     broadcast_only   = Column(Boolean, default=False, nullable=False)
+    skip_euroleague_evening = Column(Boolean, default=False, nullable=False)
     notify_at_start  = Column(Boolean, default=False, nullable=False)
     paused           = Column(Boolean, default=False, nullable=False)
     created_at       = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
@@ -235,6 +237,8 @@ def _init_db() -> None:
         "ALTER TABLE favorites      ADD COLUMN league VARCHAR DEFAULT 'nba'",
         "ALTER TABLE user_preferences ADD COLUMN radar_leagues VARCHAR NOT NULL DEFAULT 'nba'",
         "ALTER TABLE alarms         ADD COLUMN league VARCHAR DEFAULT 'nba'",
+        "ALTER TABLE favorites      ADD COLUMN skip_euroleague_evening BOOLEAN DEFAULT FALSE NOT NULL",
+        "ALTER TABLE favorite_teams ADD COLUMN skip_euroleague_evening BOOLEAN DEFAULT FALSE NOT NULL",
     ]
     for sql in migrations:
         try:
@@ -1445,6 +1449,7 @@ def get_settings(user_token: str = ""):
                     "alert_type":     p.alert_type or "silent",
                     "broadcast_only": getattr(p, 'broadcast_only', False),
                     "paused":         getattr(p, 'paused', False),
+                    "skip_euroleague_evening": getattr(p, 'skip_euroleague_evening', False),
                 }
                 for p in players
             }
@@ -1459,6 +1464,7 @@ def get_settings(user_token: str = ""):
                     "broadcast_only":  getattr(t, 'broadcast_only', False),
                     "notify_at_start": getattr(t, 'notify_at_start', False),
                     "paused":          getattr(t, 'paused', False),
+                    "skip_euroleague_evening": getattr(t, 'skip_euroleague_evening', False),
                 }
                 for t in teams
             ]
@@ -1567,6 +1573,7 @@ class FavoriteTeam(BaseModel):
     broadcast_only:  bool = False
     free_only:       bool = False
     notify_at_start: bool = False
+    skip_euroleague_evening: bool = False
 
 
 @app.post("/settings/teams")
@@ -1586,6 +1593,7 @@ def upsert_team(req: FavoriteTeam):
                     existing.alert_type     = req.alert_type
                     existing.broadcast_only  = getattr(req, 'broadcast_only', False)
                     existing.notify_at_start = getattr(req, 'notify_at_start', False)
+                    existing.skip_euroleague_evening = getattr(req, 'skip_euroleague_evening', False)
                 else:
                     session.add(FavoriteTeamDB(
                         user_token=req.user_token, team_id=req.team_id,
@@ -1594,6 +1602,7 @@ def upsert_team(req: FavoriteTeam):
                         start_quarter=req.start_quarter, alert_type=req.alert_type,
                         broadcast_only=getattr(req, 'broadcast_only', False),
                         notify_at_start=getattr(req, 'notify_at_start', False),
+                        skip_euroleague_evening=getattr(req, 'skip_euroleague_evening', False),
                     ))
                 session.commit()
         except Exception as exc:
@@ -1629,6 +1638,7 @@ class FavoritePlayer(BaseModel):
     td_watch:       bool           = False
     alert_type:     str            = "silent"
     broadcast_only: bool           = False
+    skip_euroleague_evening: bool  = False
 
 
 @app.post("/settings/players")
@@ -1649,6 +1659,7 @@ def upsert_player(req: FavoritePlayer):
                     existing.td_watch       = req.td_watch
                     existing.alert_type     = req.alert_type
                     existing.broadcast_only = req.broadcast_only
+                    existing.skip_euroleague_evening = req.skip_euroleague_evening
                 else:
                     session.add(FavoritePlayerDB(
                         user_token=req.user_token, target_id=req.player_id,
@@ -1657,6 +1668,7 @@ def upsert_player(req: FavoritePlayer):
                         early_pts_q=req.early_pts_q, early_pts=req.early_pts,
                         td_watch=req.td_watch, alert_type=req.alert_type,
                         broadcast_only=req.broadcast_only,
+                        skip_euroleague_evening=req.skip_euroleague_evening,
                     ))
                 session.commit()
         except Exception as exc:
