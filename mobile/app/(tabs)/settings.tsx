@@ -37,7 +37,7 @@ const SOUND_KEY = 'nba_alarm_sound';
 // ─── SettingsScreen ───────────────────────────────────────────────────────────
 
 export default function SettingsScreen() {
-  const { colors: C, mode: themeMode, toggleTheme } = useTheme();
+  const { colors: C, mode: themeMode, toggleTheme, noSpoiler, toggleNoSpoiler } = useTheme();
   const { t, lang, toggleLanguage } = useLanguage();
   const styles = useMemo(() => makeStyles(C), [C]);
 
@@ -165,6 +165,40 @@ export default function SettingsScreen() {
               thumbColor={lang === 'he' ? C.textPrimary : '#fff'}
             />
           </View>
+          <View style={[styles.switchRow, { marginTop: 4 }]}>
+            <Ionicons
+              name="eye-off-outline"
+              size={18}
+              color={C.accentBlue}
+              style={{ marginRight: 8 }}
+            />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.switchLabel}>{t('settings.noSpoiler')}</Text>
+              <Text style={{ fontSize: 11, color: C.textMuted, marginTop: 1 }}>{t('settings.noSpoilerSub')}</Text>
+            </View>
+            <Switch
+              value={noSpoiler}
+              onValueChange={toggleNoSpoiler}
+              trackColor={{ false: C.border, true: C.accentBlue }}
+              thumbColor={noSpoiler ? C.textPrimary : '#fff'}
+            />
+          </View>
+        </View>
+
+        {/* ── Watch Score Legend ────────────────────────────────────── */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>{t('settings.watchScore')}</Text>
+          <Text style={styles.sectionDesc}>{t('settings.watchScoreSub')}</Text>
+          {([
+            { color: '#22c55e', key: 'settings.watchScoreGreen' },
+            { color: C.orange,  key: 'settings.watchScoreOrange' },
+            { color: C.textMuted, key: 'settings.watchScoreGray' },
+          ] as const).map(({ color, key }) => (
+            <View key={key} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+              <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: color }} />
+              <Text style={{ fontSize: 13, color: C.textPrimary, fontWeight: '600' }}>{t(key)}</Text>
+            </View>
+          ))}
         </View>
 
         {/* ── Alarm Sound ───────────────────────────────────────────── */}
@@ -208,6 +242,15 @@ export default function SettingsScreen() {
             </Text>
           </TouchableOpacity>
         </View>
+
+        {/* ── Rate Us ───────────────────────────────────────────────── */}
+        <TouchableOpacity
+          style={styles.rateBtn}
+          onPress={() => Linking.openURL('market://details?id=com.nadav.nbaalarmapp')}
+        >
+          <Ionicons name="star" size={16} color={C.gold} />
+          <Text style={styles.rateBtnText}>{t('settings.rateUs')}</Text>
+        </TouchableOpacity>
 
         {/* ── Privacy Policy ────────────────────────────────────────── */}
         <TouchableOpacity
@@ -324,6 +367,16 @@ function makeStyles(C: AppColors) {
     savedBtnText:  { color: C.liveGreen },
 
     // Footer
+    rateBtn: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+      gap: 8, marginHorizontal: 16, marginTop: 16,
+      paddingVertical: 14, borderRadius: 14,
+      backgroundColor: 'rgba(255,200,0,0.10)',
+      borderWidth: 1, borderColor: 'rgba(255,200,0,0.3)',
+    },
+    rateBtnText: {
+      color: C.gold, fontWeight: '800', fontSize: 14, letterSpacing: 0.5,
+    },
     privacyBtn: {
       alignItems: 'center', marginHorizontal: 16, marginTop: 8, marginBottom: 8,
       paddingVertical: 10,
