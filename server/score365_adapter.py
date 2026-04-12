@@ -571,6 +571,18 @@ def fetch_player_boxscore(game_id: str) -> dict | None:
     home_id = str(game.get("homeCompetitor", {}).get("id", ""))
     away_id = str(game.get("awayCompetitor", {}).get("id", ""))
 
+    # Build lineup_member_id → athlete_id mapping.
+    # game.members[].id  = lineup-specific member ID (used in lineups.members[].id)
+    # game.members[].athleteId = canonical squad athlete ID (matches /squads/ endpoint)
+    # The mobile app stores squad athlete IDs (from /game-summary roster), so we must
+    # index the boxscore by athlete IDs for player alarm lookups to work.
+    _member_to_athlete: dict[str, str] = {}
+    for m in game.get("members", []):
+        mid = str(m.get("id", ""))
+        aid = str(m.get("athleteId", mid))  # fall back to mid if no athleteId
+        if mid:
+            _member_to_athlete[mid] = aid
+
     stat_names = ["MIN", "FG", "3PT", "FT", "REB", "AST", "STL", "BLK", "TO", "PF", "PTS", "3PM"]
     players_sections = []
 
@@ -599,8 +611,12 @@ def fetch_player_boxscore(game_id: str) -> dict | None:
                 three_made,
             ]
 
+            # Use athlete_id (squad ID) so it matches player IDs from /squads/ roster
+            lineup_id = str(p["id"])
+            athlete_id = _member_to_athlete.get(lineup_id, lineup_id)
+
             athletes.append({
-                "athlete": {"id": str(p["id"]), "displayName": p["name"]},
+                "athlete": {"id": athlete_id, "displayName": p["name"]},
                 "stats": stat_vals,
                 "starter": p.get("status", "").lower() == "starting",
             })
@@ -663,6 +679,10 @@ def fetch_team_players(team_id: int | str, league: str = "nba") -> list[dict]:
         result = []
         for a in athletes:
             pos = a.get("position", {})
+            pos_id = pos.get("id", 0) if isinstance(pos, dict) else 0
+            # pos_id 5 = Management/Coaching staff — exclude from player roster
+            if pos_id == 5:
+                continue
             pos_abbr = pos.get("shortName", "") if isinstance(pos, dict) else ""
             jersey = a.get("jerseyNum")
             result.append({
