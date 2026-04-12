@@ -17,7 +17,6 @@ import json
 import time
 import logging
 import threading
-import requests
 from datetime import datetime, timedelta, timezone
 from epg import get_broadcasts_for_game
 from i18n import (t_title, t_body_game, t_body_period_start, t_body_scoring,
@@ -54,73 +53,54 @@ logging.basicConfig(
 )
 log = logging.getLogger("nba_monitor")
 
-POLL_INTERVAL = 60  # seconds between active-monitoring checks
+POLL_INTERVAL = 10  # seconds between active-monitoring checks
 
 
 def _tid(token: str) -> str:
     """Short user identifier — last 8 chars of push token."""
     return f"[...{token[-8:]}]" if len(token) >= 8 else "[no-token]"
 
-# Mock stats used when test_mode=True (bypasses live ESPN fetch)
+# Mock stats used when test_mode=True (bypasses live API fetch)
 MOCK_STATS = {"PTS": 25, "REB": 9, "AST": 9, "STL": 2, "BLK": 9}
 
-ESPN_NBA_URL          = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
+from score365_adapter import (
+    fetch_games as api_fetch_games,
+    fetch_player_boxscore as api_fetch_boxscore,
+    fetch_all_teams as api_fetch_all_teams,
+    fetch_team_players as api_fetch_team_players,
+    validate_game_event,
+)
 
-# ── ESPN schema canary ────────────────────────────────────────────────────────
+# ── Schema canary ────────────────────────────────────────────────────────────
 
 ADMIN_FCM_TOKEN = os.environ.get("ADMIN_FCM_TOKEN", "fMnOc5gAT9K0zZixXZ7arm:APA91bFQ0gWM1CnlsprB__6YIFp7xSNOi_LhgdNhbnAIixAn-mClMXM5Aj0F7p0FVDKRT8i9qeKLJCvp_gR3LIgxZ69tu9VVLn2ryEdly2WRRFy7T7z-sls")
 _CANARY_LAST_ALERT: float = 0.0
 _CANARY_COOLDOWN   = 6 * 3600  # one alert per 6 hours max
-_VALID_STATES      = {"pre", "in", "post"}
 
-def _validate_espn_event(event: dict) -> list[str]:
-    """Return list of missing/unexpected fields for a single ESPN game object."""
-    issues = []
-    if not event.get("id"):
-        issues.append("missing id")
-    comp = (event.get("competitions") or [{}])[0]
-    competitors = comp.get("competitors", [])
-    if len(competitors) < 2:
-        issues.append("competitors < 2")
-    else:
-        for c in competitors:
-            if not c.get("team", {}).get("abbreviation"):
-                issues.append("missing team abbreviation")
-            if c.get("score") is None:
-                issues.append("missing score")
-    state = event.get("status", {}).get("type", {}).get("state")
-    if state not in _VALID_STATES:
-        issues.append(f"unexpected state: {state!r}")
-    return issues
-
-def _check_espn_schema(events: list[dict]) -> None:
-    """Validate a batch of ESPN events. Alert admin if structure looks broken."""
+def _check_game_schema(events: list[dict]) -> None:
+    """Validate a batch of game events. Alert admin if adapter output looks broken."""
     global _CANARY_LAST_ALERT
     if not events:
         return
-    failed = sum(1 for e in events if _validate_espn_event(e))
+    failed = sum(1 for e in events if validate_game_event(e))
     if failed < len(events) / 2:
-        return  # less than half broken — probably a single bad game, ignore
+        return
     now = time.time()
     if now - _CANARY_LAST_ALERT < _CANARY_COOLDOWN:
-        return  # already alerted recently
+        return
     _CANARY_LAST_ALERT = now
-    msg = f"{failed}/{len(events)} games failed schema validation — ESPN may have changed their API."
-    log.error("ESPN SCHEMA CANARY: %s", msg)
+    msg = f"{failed}/{len(events)} games failed schema validation — API-Basketball adapter may be broken."
+    log.error("SCHEMA CANARY: %s", msg)
     if ADMIN_FCM_TOKEN and _firebase_ready:
         try:
             fb_messaging.send(fb_messaging.Message(
-                data={"title": "⚠️ ESPN Schema Alert", "body": msg,
+                data={"title": "Schema Alert", "body": msg,
                       "alert_type": "silent", "channel_id": "silent", "sound": ""},
                 android=fb_messaging.AndroidConfig(priority="high"),
                 token=ADMIN_FCM_TOKEN,
             ))
-            log.info("ESPN canary alert sent to admin.")
         except Exception as exc:
-            log.warning("ESPN canary alert FCM failed: %s", exc)
-ESPN_SUMMARY_URL      = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary"
-ESPN_TEAMS_URL        = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams"
-ESPN_ATHLETE_STATS_URL = "https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes"
+            log.warning("Schema canary FCM failed: %s", exc)
 
 # ---------------------------------------------------------------------------
 # In-memory push token  (survives disk wipes on Render's ephemeral filesystem)
@@ -137,60 +117,29 @@ _CACHE_LOCK   = threading.Lock()
 
 
 def update_all_rosters() -> None:
-    log.info("Roster cache: refreshing all 30 teams...")
-
-    # שלב 1: קבלת רשימת כל הקבוצות
-    try:
-        resp = requests.get(ESPN_TEAMS_URL, params={"limit": 32}, timeout=15)
-        resp.raise_for_status()
-        # מבנה ה-JSON של ESPN לרשימת קבוצות
-        sports = resp.json().get("sports", [])
-        leagues = sports[0].get("leagues", []) if sports else []
-        team_entries = leagues[0].get("teams", []) if leagues else []
-    except Exception as exc:
-        log.warning("Roster cache: failed to fetch team list: %s", exc)
-        return
+    from score365_adapter import LEAGUES
+    all_leagues = list(LEAGUES.keys())
+    log.info("Roster cache: refreshing teams for %d league(s)...", len(all_leagues))
 
     new_cache: dict[str, dict] = {}
 
-    for entry in team_entries:
-        team = entry.get("team", {})
-        team_id = str(team.get("id", ""))
-        team_abbr = team.get("abbreviation", "")
-
-        if not team_id: continue
-
-        try:
-            # שלב 2: פנייה ישירה לדף הסגל (Roster) שבו ראינו את השחקנים
-            # הכתובת הנכונה היא: .../teams/{id}/roster
-            r = requests.get(f"{ESPN_TEAMS_URL}/{team_id}/roster", timeout=10)
-            r.raise_for_status()
-            data = r.json()
-
-            # שליפת המערך athletes שראינו ב-JSON שלך
-            athletes_list = data.get("athletes", [])
-
-            players = []
-            for a in athletes_list:
-                players.append({
-                    "id": str(a.get("id", "")),
-                    "name": a.get("displayName", "?"),
-                    "jersey": a.get("jersey", ""),
-                    "position": a.get("position", {}).get("abbreviation", ""),
-                })
-
-            new_cache[team_id] = {
-                "id": team_id,
-                "name": team.get("displayName", ""),
-                "abbreviation": team_abbr,
-                "logo": team.get("logos", [{}])[0].get("href") if team.get("logos") else None,
-                "players": players,
-            }
-
-            time.sleep(0.15)
-
-        except Exception as exc:
-            log.warning("Roster cache failed for team %s: %s", team_id, exc)
+    for league in all_leagues:
+        teams = api_fetch_all_teams(league=league)
+        if not teams:
+            log.warning("Roster cache: no teams for %s", league)
+            continue
+        for team in teams:
+            team_id = team.get("id", "")
+            if not team_id:
+                continue
+            try:
+                players = api_fetch_team_players(int(team_id), league=league)
+                team["players"] = players
+                team["league"] = league   # tag so iOS can group by league
+                new_cache[team_id] = team
+                time.sleep(0.15)
+            except Exception as exc:
+                log.warning("Roster cache failed for team %s: %s", team_id, exc)
 
     with _CACHE_LOCK:
         _ROSTER_CACHE.clear()
@@ -507,10 +456,9 @@ def clear_stale_state() -> None:
 
 def _fetch_nba_game(game_id: str) -> dict | None:
     """
-    Return the raw ESPN event dict for game_id from the shared 60-second cache.
-    All monitoring threads (game + player) share one ESPN request per minute
+    Return the raw event dict for game_id from the shared 60-second cache.
+    All monitoring threads (game + player) share one API request per minute
     instead of each making their own — prevents rate-limiting at scale.
-    Falls back to a direct fetch only if the cache is empty (e.g. first call).
     """
     for event in get_today_games():
         if str(event.get("id")) == str(game_id):
@@ -527,7 +475,7 @@ def _period_label(quarter: int) -> str:
 
 def _clock_minutes_remaining(event: dict) -> float:
     """
-    Returns minutes remaining in the current period from ESPN's displayClock.
+    Returns minutes remaining in the current period from displayClock.
     Returns 99.0 if the value cannot be parsed (safe default = assume time remains).
     """
     try:
@@ -583,14 +531,13 @@ def _parse_nba_start_time(event: dict) -> datetime | None:
 
 def _fetch_player_stats(game_id: str, player_id: str) -> dict | None:
     """
-    Return a stat dict with keys PTS, REB, AST, STL, BLK, 3PM (and others)
-    for the given player from the ESPN live box score, or None if unavailable.
+    Return a stat dict with keys PTS, REB, AST, 3PM (and others)
+    for the given player from the API-Basketball box score, or None if unavailable.
     """
     try:
-        resp = requests.get(ESPN_SUMMARY_URL, params={"event": game_id}, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-
+        data = api_fetch_boxscore(game_id)
+        if not data:
+            return None
         for section in data.get("boxscore", {}).get("players", []):
             for stats_group in section.get("statistics", []):
                 names = stats_group.get("names", [])
@@ -602,38 +549,41 @@ def _fetch_player_stats(game_id: str, player_id: str) -> dict | None:
     return None
 
 
-def fetch_game_summary_roster(game_id: str) -> dict:
+def fetch_game_summary_roster(game_id: str, date: str | None = None) -> dict:
     """
     Return cached rosters for both teams in game_id.
 
-    Step 1 – identify the two teams:
-      a) from the ESPN scoreboard (fast, works for today's live games)
-      b) fallback: ESPN summary header (works for any valid game_id / date)
-
+    Step 1 – identify the two teams from scoreboard (tries all leagues + dates).
     Step 2 – serve each team from _ROSTER_CACHE.
-      Cache miss (e.g., cache still warming up) → live fetch + populate cache.
+      Cache miss → live fetch from API-Basketball + populate cache.
     """
+    from score365_adapter import LEAGUES
     # ── Step 1: collect raw team stubs ─────────────────────────────────────────
     team_stubs: list[dict] = []
 
+    # Try today's NBA cache first
     event = _fetch_nba_game(game_id)
     if event is not None:
         for comp in event.get("competitions", [{}])[0].get("competitors", []):
             team_stubs.append(comp.get("team", {}))
 
-    # Fallback: summary header works for any game_id regardless of date
+    # If not found, search all leagues for the given date (or today)
     if not team_stubs:
-        log.info("Game %s not in scoreboard – trying summary header.", game_id)
-        try:
-            resp = requests.get(ESPN_SUMMARY_URL, params={"event": game_id}, timeout=10)
-            resp.raise_for_status()
-            data = resp.json()
-            for comp in (data.get("header", {})
-                             .get("competitions", [{}])[0]
-                             .get("competitors", [])):
-                team_stubs.append(comp.get("team", {}))
-        except Exception as exc:
-            log.warning("Summary header fallback failed for game %s: %s", game_id, exc)
+        search_date = date or _eastern_today()
+        for league in LEAGUES:
+            if league == "nba" and not date:
+                continue  # already checked via cache
+            try:
+                games = api_fetch_games(search_date, league=league)
+                for g in games:
+                    if str(g.get("id")) == str(game_id):
+                        for comp in g.get("competitions", [{}])[0].get("competitors", []):
+                            team_stubs.append(comp.get("team", {}))
+                        break
+            except Exception:
+                pass
+            if team_stubs:
+                break
 
     if not team_stubs:
         log.warning("Game summary: could not identify teams for game %s.", game_id)
@@ -654,28 +604,15 @@ def fetch_game_summary_roster(game_id: str) -> dict:
             teams_out.append(cached)
             continue
 
-        # Cache miss — live fetch and populate cache for next time
+        # Cache miss — live fetch from API-Basketball
         log.warning("Roster cache miss for team %s – fetching live.", team_id)
         try:
-            r = requests.get(f"{ESPN_TEAMS_URL}/{team_id}/roster", timeout=10)
-            r.raise_for_status()
-            athletes = r.json().get("athletes", [])
-            players = [
-                {
-                    "id":       str(a.get("id", "")),
-                    "name":     a.get("displayName", "?"),
-                    "jersey":   a.get("jersey", ""),
-                    "position": a.get("position", {}).get("abbreviation", ""),
-                }
-                for a in athletes
-            ]
-            logos    = team.get("logos", [])
-            logo_url = logos[0].get("href") if logos else team.get("logo")
-            entry    = {
+            players = api_fetch_team_players(int(team_id))
+            entry = {
                 "id":           team_id,
                 "name":         team.get("displayName", team.get("name", "?")),
                 "abbreviation": team.get("abbreviation", "?"),
-                "logo":         logo_url,
+                "logo":         team.get("logo", ""),
                 "players":      players,
             }
             with _CACHE_LOCK:
@@ -878,7 +815,7 @@ def start_monitoring_job(
         while True:
             event = _fetch_nba_game(game_id)
             if event is None:
-                log.warning("ESPN fetch failed for %s – retrying in %ds.", game_name, POLL_INTERVAL)
+                log.warning("API fetch failed for %s – retrying in %ds.", game_name, POLL_INTERVAL)
                 stop_event.wait(timeout=POLL_INTERVAL)
                 if stop_event.is_set():
                     log.info("GAME WATCH  cancel | %s", game_name)
@@ -928,9 +865,9 @@ def start_monitoring_job(
 # Player monitoring job  (Manual – Priority 1)
 # ---------------------------------------------------------------------------
 
-def _check_triple_double(pts: int, reb: int, ast: int, stl: int, blk: int) -> bool:
-    """Return True if any 3 of the 5 stat categories are >= 9."""
-    return sum(1 for v in [pts, reb, ast, stl, blk] if v >= 9) >= 3
+def _check_triple_double(pts: int, reb: int, ast: int, stl: int = 0, blk: int = 0) -> bool:
+    """Return True if all 3 of PTS/REB/AST are >= 9 (near triple-double)."""
+    return pts >= 9 and reb >= 9 and ast >= 9
 
 
 def start_player_monitoring_job(
@@ -964,22 +901,23 @@ def start_player_monitoring_job(
         triggered  = False
         notif_body = ""
 
+        _lang = _get_user_language(push_token)
         if condition == "pts_goal" and pts >= pts_threshold:
             triggered  = True
-            notif_body = f"[TEST] {player_name} has scored {pts} points in {game_name}!"
+            notif_body = f"[TEST] {t_body_scoring(player_name, pts, game_name, _lang)}"
         elif condition == "pts_early" and pts >= pts_threshold:
             triggered  = True
-            notif_body = f"[TEST] {player_name} already has {pts} pts in {_period_label(quarter)} — on fire early!"
+            notif_body = f"[TEST] {t_body_early_pts(player_name, pts, quarter, game_name, _lang)}"
         elif condition == "triple_double" and _check_triple_double(pts, reb, ast, stl, blk):
             hot        = [f"{c} {v}" for c, v in zip(["PTS","REB","AST","STL","BLK"], [pts,reb,ast,stl,blk]) if v >= 9]
             triggered  = True
-            notif_body = f"[TEST] {player_name}: {' / '.join(hot)} in {game_name}!"
+            notif_body = f"[TEST] {t_body_triple_double(player_name, ' / '.join(hot), game_name, _lang)}"
 
         if triggered:
             log.info("PLAYER ALARM fire   | [TEST] %s", notif_body)
             _send_push_notification(
                 push_token=push_token,
-                title="[TEST] Player Alert!",
+                title=f"[TEST] {t_title('player_alert', _lang)}",
                 body=notif_body,
                 sound_channel=sound_channel,
                 alert_type=alert_type,
@@ -1007,7 +945,7 @@ def start_player_monitoring_job(
         while True:
             event = _fetch_nba_game(game_id)
             if event is None:
-                log.warning("ESPN fetch failed for %s – retrying in %ds.", game_name, POLL_INTERVAL)
+                log.warning("API fetch failed for %s – retrying in %ds.", game_name, POLL_INTERVAL)
                 stop_event.wait(timeout=POLL_INTERVAL)
                 if stop_event.is_set():
                     log.info("PLAYER WATCH cancel | %s | %s", player_name, condition)
@@ -1048,18 +986,23 @@ def start_player_monitoring_job(
 
             triggered  = False
             notif_body = ""
+            _lang = _get_user_language(push_token)
+            title_key = "player_alert"
 
             if condition == "pts_goal" and pts >= pts_threshold:
                 triggered  = True
-                notif_body = f"{player_name} has scored {pts} points in {game_name}!"
+                title_key  = "scoring_alert"
+                notif_body = t_body_scoring(player_name, pts, game_name, _lang)
             elif condition == "pts_early" and pts >= pts_threshold:
                 triggered  = True
-                notif_body = f"{player_name} already has {pts} pts in {_period_label(quarter)} — on fire early!"
+                title_key  = "early_points"
+                notif_body = t_body_early_pts(player_name, pts, quarter, game_name, _lang)
             elif condition == "triple_double" and _check_triple_double(pts, reb, ast, stl, blk) \
                     and not (quarter >= 4 and _clock_minutes_remaining(event) <= 3):
                 hot        = [f"{n} {v}" for n, v in zip(["PTS","REB","AST","STL","BLK"], [pts,reb,ast,stl,blk]) if v >= 9]
                 triggered  = True
-                notif_body = f"{player_name}: {' / '.join(hot)} in {game_name}!"
+                title_key  = "triple_double"
+                notif_body = t_body_triple_double(player_name, ' / '.join(hot), game_name, _lang)
 
             if triggered:
                 # Claim the same dedup key the radar uses for this condition.
@@ -1079,7 +1022,7 @@ def start_player_monitoring_job(
                     log.info("PLAYER ALARM fire   | %s", notif_body)
                     _send_push_notification(
                         push_token=push_token,
-                        title="Player Alert!",
+                        title=t_title(title_key, _lang),
                         body=notif_body,
                         sound_channel=sound_channel,
                         alert_type=alert_type,
@@ -1136,7 +1079,7 @@ def _run_radar_tick_for_user(
     language: str = "en",
 ) -> None:
     """
-    Check one user's preferences against pre-fetched ESPN data.
+    Check one user's preferences against pre-fetched game data.
     `summaries` is populated lazily and shared so each game is fetched only once
     even when multiple users watch the same game.
     """
@@ -1178,12 +1121,13 @@ def _run_radar_tick_for_user(
                 start_q = int(criteria.get("start_quarter", 4))
                 c_alert = criteria.get("alert_type", radar_alert_type)
                 broadcast_only = bool(criteria.get("broadcast_only", False))
+                skip_euro_evening = bool(criteria.get("skip_euroleague_evening", False))
                 notify_start = bool(criteria.get("notify_at_start", False))
                 last5_ok = start_q == 5 and (quarter > 4 or (quarter == 4 and _clock_minutes_remaining(event) <= 5.0))
                 quarter_ok_r = last5_ok if start_q == 5 else quarter >= start_q
                 if quarter_ok_r and (notify_start or diff <= max_d):
                     # If broadcast_only, skip if no TV broadcast found
-                    if broadcast_only:
+                    if broadcast_only or skip_euro_evening:
                         home_abbr = ""
                         away_abbr = ""
                         for comp_c in competitors:
@@ -1196,9 +1140,15 @@ def _run_radar_tick_for_user(
                             game_id=game_id, game_name=game_name,
                             home_abbr=home_abbr, away_abbr=away_abbr,
                             game_date_utc=event.get("date", ""),
+                            league=event.get("league", "nba"),
                         )
-                        if not broadcasts:
+                        if broadcast_only and not broadcasts:
                             continue  # no broadcast → skip alert
+                        # skip_euro_evening: skip if only ערב היורוליג (no dedicated broadcast)
+                        if skip_euro_evening and broadcasts and all(
+                            b.get("is_euroleague_evening") for b in broadcasts
+                        ):
+                            continue
                     if notify_start and diff > max_d:
                         label = t_title("period_starting", language)
                         body_text = t_body_period_start(game_name, quarter, diff, language)
@@ -1222,14 +1172,12 @@ def _run_radar_tick_for_user(
         if not needs_boxscore:
             continue
 
-        # Fetch summary lazily; result is cached in `summaries` for other users
+        # Fetch boxscore lazily; result is cached in `summaries` for other users
         if game_id not in summaries:
             try:
-                s_resp = requests.get(ESPN_SUMMARY_URL, params={"event": game_id}, timeout=10)
-                s_resp.raise_for_status()
-                summaries[game_id] = s_resp.json()
+                summaries[game_id] = api_fetch_boxscore(game_id)
             except Exception as exc:
-                log.warning("RADAR: summary fetch failed for %s: %s", game_id, exc)
+                log.warning("RADAR: boxscore fetch failed for %s: %s", game_id, exc)
                 summaries[game_id] = None
 
         summary = summaries.get(game_id)
@@ -1257,17 +1205,25 @@ def _run_radar_tick_for_user(
                         fav_cfg      = fav_players[player_id]
                         if bool(fav_cfg.get("paused", False)):
                             continue
-                        # broadcast_only check for players
-                        if bool(fav_cfg.get("broadcast_only", False)):
+                        # broadcast_only / skip_euroleague_evening check for players
+                        p_broadcast_only = bool(fav_cfg.get("broadcast_only", False))
+                        p_skip_euro = bool(fav_cfg.get("skip_euroleague_evening", False))
+                        if p_broadcast_only or p_skip_euro:
                             home_a = ""
                             away_a = ""
                             for comp_c in event.get("competitions", [{}])[0].get("competitors", []):
                                 a = comp_c.get("team", {}).get("abbreviation", "")
                                 if comp_c.get("homeAway") == "home": home_a = a
                                 else: away_a = a
-                            if not get_broadcasts_for_game(game_id=game_id, game_name=game_name,
-                                    home_abbr=home_a, away_abbr=away_a, game_date_utc=event.get("date", "")):
+                            p_broadcasts = get_broadcasts_for_game(game_id=game_id, game_name=game_name,
+                                    home_abbr=home_a, away_abbr=away_a, game_date_utc=event.get("date", ""),
+                                    league=event.get("league", "nba"))
+                            if p_broadcast_only and not p_broadcasts:
                                 continue  # no broadcast → skip all player alerts for this game
+                            if p_skip_euro and p_broadcasts and all(
+                                b.get("is_euroleague_evening") for b in p_broadcasts
+                            ):
+                                continue
                         p_alert      = fav_cfg.get("alert_type", "silent")
                         total_pts_thr = fav_cfg.get("total_pts")
                         early_pts_q  = fav_cfg.get("early_pts_q")
@@ -1352,33 +1308,71 @@ def _prune_fired_alerts() -> None:
         _FIRED_ALERTS.difference_update(stale)
 
 
+def _leagues_for_user(prefs: dict) -> set[str]:
+    """
+    Compute the set of leagues this user actually cares about right now:
+      - the leagues their radar is configured to scan
+      - any league referenced by a favorite team (so favorite-team alerts work
+        even when the user hasn't enabled radar for that league)
+    """
+    leagues: set[str] = set()
+    radar = prefs.get("GlobalGameRadar", {}) or {}
+    if radar.get("enabled", False):
+        leagues.update(radar.get("leagues") or ["nba"])
+    for t in prefs.get("FavoriteTeams", []) or []:
+        leagues.add(t.get("league") or "nba")
+    return leagues
+
+
 def _run_radar_tick(users: list[dict]) -> bool:
     """
     Full radar scan for all users.
-    ESPN scoreboard is fetched ONCE; game summaries are fetched lazily and
-    cached so multiple users watching the same game share one HTTP request.
-    Returns True on success, False if the ESPN fetch failed (used by the
-    caller to track consecutive failures).
+    Scoreboards are fetched ONCE per league across all users; game summaries
+    are fetched lazily and cached so multiple users watching the same game
+    share one HTTP request. Each user only sees events from leagues they
+    explicitly opted into.
+    Returns True on success, False if every fetch failed.
     """
     _prune_fired_alerts()
 
-    try:
-        resp = requests.get(ESPN_NBA_URL, timeout=10)
-        resp.raise_for_status()
-        events = resp.json().get("events", [])
-    except Exception as exc:
-        log.warning("RADAR: scoreboard fetch failed: %s", exc)
+    needed_leagues: set[str] = set()
+    for user in users:
+        needed_leagues.update(_leagues_for_user(user.get("prefs", {})))
+    if not needed_leagues:
+        return False
+
+    today = _eastern_today()
+    events_by_league: dict[str, list[dict]] = {}
+    for league in needed_leagues:
+        try:
+            events_by_league[league] = api_fetch_games(today, league=league)
+        except Exception as exc:
+            log.warning("RADAR: scoreboard fetch failed for %s: %s", league, exc)
+            events_by_league[league] = []
+
+    if not any(events_by_league.values()):
         return False
 
     summaries: dict = {}   # shared lazy cache: game_id → summary JSON
 
     for user in users:
+        user_leagues = _leagues_for_user(user.get("prefs", {}))
+        if not user_leagues:
+            continue
+        # Build the per-user event list — only games from leagues this user
+        # opted into. Each event is tagged with its league via the adapter
+        # so we don't risk cross-league bleed.
+        user_events: list[dict] = []
+        for league in user_leagues:
+            user_events.extend(events_by_league.get(league, []))
+        if not user_events:
+            continue
         try:
             _run_radar_tick_for_user(
                 push_token    = user["token"],
                 sound_channel = user.get("channel", "classic_alarm"),
                 prefs         = user["prefs"],
-                events        = events,
+                events        = user_events,
                 summaries     = summaries,
                 language      = user.get("language", "en"),
             )
@@ -1417,7 +1411,7 @@ def start_radar_job() -> None:
         _radar_running = True
 
     log.info("RADAR: started.")
-    espn_failures = 0
+    api_failures = 0
     try:
         while True:
             users = _DB_GET_ALL_USERS_FN() if _DB_GET_ALL_USERS_FN else []
@@ -1426,14 +1420,14 @@ def start_radar_job() -> None:
                 return
             success = _run_radar_tick(users)
             if success:
-                espn_failures = 0
+                api_failures = 0
             else:
-                espn_failures += 1
-                if espn_failures >= 3:
+                api_failures += 1
+                if api_failures >= 3:
                     log.error(
-                        "RADAR_ESPN_DOWN: ESPN API has failed %d consecutive ticks – "
+                        "RADAR_API_DOWN: API-Basketball has failed %d consecutive ticks – "
                         "alerts may be missed until it recovers.",
-                        espn_failures,
+                        api_failures,
                     )
             time.sleep(POLL_INTERVAL)
     except Exception as exc:
@@ -1450,7 +1444,7 @@ def start_radar_job() -> None:
 
 _games_cache: list[dict] = []
 _games_cache_time: float = 0.0
-_GAMES_CACHE_TTL: int = 60  # seconds
+_GAMES_CACHE_TTL: int = 10  # seconds
 
 def _eastern_today() -> str:
     """Current US Eastern date as YYYYMMDD string."""
@@ -1458,18 +1452,16 @@ def _eastern_today() -> str:
 
 
 def get_today_games() -> list[dict]:
-    """Return today's NBA games from ESPN (US Eastern date), cached for 60 s."""
+    """Return today's NBA games (US Eastern date), cached for 60 s."""
     global _games_cache, _games_cache_time
     now = time.time()
     if _games_cache and now - _games_cache_time < _GAMES_CACHE_TTL:
         return _games_cache
     try:
         eastern_date = _eastern_today()
-        resp = requests.get(f"{ESPN_NBA_URL}?dates={eastern_date}", timeout=10)
-        resp.raise_for_status()
-        events = resp.json().get("events", [])
+        events = api_fetch_games(eastern_date)
         log.info("NBA: %d games fetched for %s", len(events), eastern_date)
-        _check_espn_schema(events)
+        _check_game_schema(events)
         _games_cache = events
         _games_cache_time = now
         return events
@@ -1478,19 +1470,17 @@ def get_today_games() -> list[dict]:
         return _games_cache  # return stale cache on error rather than empty list
 
 
-def get_games_for_date(date: str | None) -> list[dict]:
-    """Return NBA games for the given YYYYMMDD date string (or today if None)."""
+def get_games_for_date(date: str | None, league: str = "nba") -> list[dict]:
+    """Return games for the given YYYYMMDD date string (or today if None)."""
     eastern_date = date if date else _eastern_today()
-    # If requesting today, use the cached path
-    if eastern_date == _eastern_today():
+    # If requesting today's NBA, use the cached path
+    if eastern_date == _eastern_today() and league == "nba":
         return get_today_games()
     try:
-        resp = requests.get(f"{ESPN_NBA_URL}?dates={eastern_date}", timeout=10)
-        resp.raise_for_status()
-        events = resp.json().get("events", [])
-        log.info("NBA: %d games fetched for %s (non-today)", len(events), eastern_date)
+        events = api_fetch_games(eastern_date, league=league)
+        log.info("%s: %d games fetched for %s", league.upper(), len(events), eastern_date)
         return events
     except Exception as exc:
-        log.warning("NBA games fetch failed for %s: %s", eastern_date, exc)
+        log.warning("%s games fetch failed for %s: %s", league.upper(), eastern_date, exc)
         return []
 

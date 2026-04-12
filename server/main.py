@@ -45,6 +45,7 @@ from monitor import (
     # Data
     get_today_games,
     get_games_for_date,
+    _eastern_today,
     # Startup
     clear_stale_state,
     # DB deactivation registration
@@ -101,6 +102,7 @@ class Alarm(_Base):
     game_name      = Column(String,  nullable=True)
     home_team_id   = Column(String,  nullable=True)
     away_team_id   = Column(String,  nullable=True)
+    league         = Column(String,  nullable=True, default="nba")  # nba|euroleague|eurocup|bcl|winner_league
     alert_type       = Column(String,  nullable=True, default="alarm")
     notify_at_start  = Column(Boolean, default=False, nullable=False)
     game_date        = Column(String,  nullable=True)   # "YYYYMMDD" — None means today
@@ -114,15 +116,17 @@ class FavoritePlayerDB(_Base):
 
     id            = Column(Integer, primary_key=True, index=True)
     user_token    = Column(String,  nullable=False, index=True)
-    target_id     = Column(String,  nullable=False)   # ESPN player id
+    target_id     = Column(String,  nullable=False)   # player id
     target_name   = Column(String,  nullable=True)
     team_name     = Column(String,  nullable=True)
+    league        = Column(String,  nullable=True, default='nba')   # nba|euroleague|eurocup|bcl|winner_league
     total_pts     = Column(Integer, nullable=True)    # None = condition disabled
     early_pts     = Column(Integer, nullable=True)
     early_pts_q   = Column(Integer, nullable=True)
     td_watch        = Column(Boolean, default=False, nullable=False)
     alert_type      = Column(String,  nullable=True, default='silent')
     broadcast_only  = Column(Boolean, default=False, nullable=False)
+    skip_euroleague_evening = Column(Boolean, default=False, nullable=False)
     paused          = Column(Boolean, default=False, nullable=False)
     created_at      = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
@@ -135,10 +139,12 @@ class FavoriteTeamDB(_Base):
     user_token    = Column(String,  nullable=False, index=True)
     team_id       = Column(String,  nullable=False)
     team_name     = Column(String,  nullable=True)
+    league        = Column(String,  nullable=True, default='nba')   # nba|euroleague|eurocup|bcl|winner_league
     score_gap        = Column(Integer, nullable=True)    # max_diff
     start_quarter    = Column(Integer, nullable=True)
     alert_type       = Column(String,  nullable=True, default='silent')
     broadcast_only   = Column(Boolean, default=False, nullable=False)
+    skip_euroleague_evening = Column(Boolean, default=False, nullable=False)
     notify_at_start  = Column(Boolean, default=False, nullable=False)
     paused           = Column(Boolean, default=False, nullable=False)
     created_at       = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
@@ -175,6 +181,9 @@ class UserPreferenceDB(_Base):
     radar_enabled           = Column(Boolean, default=False,   nullable=False)
     radar_gap               = Column(Integer, default=5,       nullable=False)
     radar_start_q           = Column(Integer, default=4,       nullable=False)
+    # Comma-separated list of league keys the radar should scan for this user.
+    # Empty/null means "nba" (backwards compat).
+    radar_leagues           = Column(String,  default="nba",   nullable=False)
     historical_mode_enabled = Column(Boolean, default=False,   nullable=False)
     alert_type              = Column(String,  default="silent", nullable=False)  # radar
     hist_alert_type         = Column(String,  default="silent", nullable=False)  # historical
@@ -223,6 +232,13 @@ def _init_db() -> None:
         "ALTER TABLE alarms ADD COLUMN game_date VARCHAR",
         "ALTER TABLE favorites ADD COLUMN paused BOOLEAN DEFAULT FALSE NOT NULL",
         "ALTER TABLE favorite_teams ADD COLUMN paused BOOLEAN DEFAULT FALSE NOT NULL",
+        # League scoping (NBA, Euroleague, EuroCup, BCL, Winner League)
+        "ALTER TABLE favorite_teams ADD COLUMN league VARCHAR DEFAULT 'nba'",
+        "ALTER TABLE favorites      ADD COLUMN league VARCHAR DEFAULT 'nba'",
+        "ALTER TABLE user_preferences ADD COLUMN radar_leagues VARCHAR NOT NULL DEFAULT 'nba'",
+        "ALTER TABLE alarms         ADD COLUMN league VARCHAR DEFAULT 'nba'",
+        "ALTER TABLE favorites      ADD COLUMN skip_euroleague_evening BOOLEAN DEFAULT FALSE NOT NULL",
+        "ALTER TABLE favorite_teams ADD COLUMN skip_euroleague_evening BOOLEAN DEFAULT FALSE NOT NULL",
     ]
     for sql in migrations:
         try:
@@ -231,6 +247,34 @@ def _init_db() -> None:
                 conn.commit()
         except Exception:
             pass  # column already exists – safe to ignore
+
+
+def _migrate_team_ids_to_365() -> None:
+    """
+    Migrate any legacy team IDs (ESPN or API-Basketball) in favorite_teams
+    to 365scores IDs. Safe to re-run; rows already on 365 IDs are skipped.
+
+    Player IDs are not auto-migrated — users re-add players from the in-app
+    roster, which now serves 365scores IDs.
+    """
+    if engine is None:
+        return
+    from score365_adapter import LEGACY_TO_365_TEAM_ID
+
+    try:
+        with Session(engine) as session:
+            teams = session.query(FavoriteTeamDB).all()
+            migrated = 0
+            for t in teams:
+                new_id = LEGACY_TO_365_TEAM_ID.get(t.team_id)
+                if new_id and new_id != t.team_id:
+                    t.team_id = new_id
+                    migrated += 1
+            if migrated:
+                session.commit()
+                log.info("ID MIGRATION: %d favorite_team row(s) → 365scores IDs.", migrated)
+    except Exception as exc:
+        log.error("ID MIGRATION failed: %s", exc)
 
 
 # ── DB Alarm Deactivation (called by monitoring threads in monitor.py) ─────────
@@ -255,6 +299,77 @@ def _deactivate_db_alarm(target_id: str) -> None:
 
 # Register the callback so monitor.py threads can deactivate DB records after firing
 register_db_deactivate(_deactivate_db_alarm)
+
+
+# ── League helpers ─────────────────────────────────────────────────────────────
+# Used by both the alarm endpoints (which need to know which league to fetch
+# games from when monitoring) and the favorites endpoints (which need to scope
+# the user's preferences). Defined early so both can call into them.
+
+_VALID_LEAGUES = {"nba", "euroleague", "eurocup", "bcl", "winner_league"}
+
+
+def _league_for_team_id(team_id: str | int | None) -> str | None:
+    """
+    Best-effort league lookup for a 365scores team id. Tries the in-memory
+    roster cache first (always populated for active leagues), then falls back
+    to the static team-id maps in score365_adapter. Returns None if the team
+    is unknown so callers can decide a sensible default.
+    """
+    if team_id is None or team_id == "":
+        return None
+    try:
+        tid_int = int(team_id)
+    except (TypeError, ValueError):
+        return None
+
+    # Roster cache is the freshest source — it tags every team with its league
+    # in update_all_rosters().
+    try:
+        from monitor import _ROSTER_CACHE  # local import to avoid cycles
+        cached = _ROSTER_CACHE.get(str(tid_int))
+        if cached and cached.get("league"):
+            return cached["league"]
+    except Exception:
+        pass
+
+    # Static fallback for NBA — well-known id range, no HTTP needed.
+    from score365_adapter import _365_TEAM_IDS as _NBA_IDS
+    if tid_int in _NBA_IDS.values():
+        return "nba"
+
+    # Last resort: walk each non-NBA league once. fetch_all_teams uses the
+    # 30s _fetch_competition_window cache so this only spends real network
+    # the first time it's called per cold start.
+    try:
+        from score365_adapter import LEAGUES, fetch_all_teams
+        for league in LEAGUES:
+            if league == "nba":
+                continue
+            for team in fetch_all_teams(league=league):
+                if str(team.get("id", "")) == str(tid_int):
+                    return league
+    except Exception as exc:
+        log.debug("_league_for_team_id walk failed for %s: %s", tid_int, exc)
+    return None
+
+
+def _league_for_alarm(home_team_id: str | None,
+                      away_team_id: str | None,
+                      provided: str | None) -> str:
+    """
+    Resolve the league for a new alarm. Priority:
+      1. Explicit ?league= from the client (validated)
+      2. Roster cache lookup on home_team_id, then away_team_id
+      3. Default to 'nba'
+    """
+    if provided and provided in _VALID_LEAGUES:
+        return provided
+    for tid in (home_team_id, away_team_id):
+        guess = _league_for_team_id(tid)
+        if guess in _VALID_LEAGUES:
+            return guess
+    return "nba"
 
 
 def _invalidate_push_token(push_token: str) -> None:
@@ -488,6 +603,7 @@ def _get_all_users_for_radar() -> list[dict]:
             fav_players = {
                 p.target_id: {
                     "name":        p.target_name or "",
+                    "league":       (p.league or "nba"),
                     "total_pts":   p.total_pts,
                     "early_pts_q": p.early_pts_q,
                     "early_pts":   p.early_pts,
@@ -501,6 +617,7 @@ def _get_all_users_for_radar() -> list[dict]:
                 {
                     "team_id":        t.team_id,
                     "team_name":      t.team_name or "",
+                    "league":         (t.league or "nba"),
                     "max_diff":       t.score_gap or 5,
                     "start_quarter":  t.start_quarter or 4,
                     "alert_type":     t.alert_type or "silent",
@@ -514,6 +631,7 @@ def _get_all_users_for_radar() -> list[dict]:
                 "max_diff":      pref.radar_gap           if pref else 5,
                 "start_quarter": pref.radar_start_q       if pref else 4,
                 "alert_type":    pref.alert_type          if pref else "silent",
+                "leagues":       _split_leagues(pref.radar_leagues if pref else None),
             }
             hist_cfg = {
                 "enabled":    pref.historical_mode_enabled if pref else False,
@@ -552,20 +670,11 @@ register_db_get_all_users(_get_all_users_for_radar)
 
 # ── Background Async Poller ────────────────────────────────────────────────────
 
-ESPN_SCOREBOARD = (
-    "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
-)
-
-
-def _fetch_scoreboard() -> dict:
-    """Blocking ESPN fetch – called from a thread executor."""
-    resp = requests.get(ESPN_SCOREBOARD, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
+from score365_adapter import fetch_player_boxscore as api_fetch_boxscore
 
 
 def _get_event_state(event: dict) -> str:
-    """Return ESPN status state: 'pre' | 'in' | 'post'."""
+    """Return game status state: 'pre' | 'in' | 'post'."""
     try:
         return event.get("status", {}).get("type", {}).get("state", "pre")
     except Exception:
@@ -608,7 +717,7 @@ def _extract_player_pts(event: dict, target_id: str) -> int | None:
 def _extract_player_stats(event: dict, target_id: str) -> dict[str, int]:
     """
     Return a dict of stat totals (PTS, REB, AST, STL, BLK) for target_id
-    using the ESPN leaders block. Returns empty dict if player not found.
+    using the scoreboard leaders block. Returns empty dict if player not found.
     """
     stats: dict[str, int] = {}
     try:
@@ -625,20 +734,17 @@ def _extract_player_stats(event: dict, target_id: str) -> dict[str, int]:
     return stats
 
 
-ESPN_SUMMARY_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary"
-
-_summary_cache: dict[str, dict] = {}   # game_id → summary JSON (shared across poller ticks)
+_summary_cache: dict[str, dict] = {}   # game_id → boxscore JSON (shared across poller ticks)
 
 
 def _fetch_game_summary(game_id: str) -> dict | None:
-    """Fetch (and cache) the ESPN game summary boxscore for a specific game."""
+    """Fetch (and cache) the boxscore for a specific game via API-Basketball."""
     if game_id in _summary_cache:
         return _summary_cache[game_id]
     try:
-        resp = requests.get(ESPN_SUMMARY_URL, params={"event": game_id}, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        _summary_cache[game_id] = data
+        data = api_fetch_boxscore(game_id)
+        if data:
+            _summary_cache[game_id] = data
         return data
     except Exception as exc:
         log.warning("_fetch_game_summary failed for %s: %s", game_id, exc)
@@ -646,7 +752,7 @@ def _fetch_game_summary(game_id: str) -> dict | None:
 
 
 def _player_pts_from_summary(summary: dict, player_id: str) -> int | None:
-    """Extract current points for a player from the ESPN boxscore summary."""
+    """Extract current points for a player from the boxscore summary."""
     try:
         for section in summary.get("boxscore", {}).get("players", []):
             for stats_group in section.get("statistics", []):
@@ -661,7 +767,7 @@ def _player_pts_from_summary(summary: dict, player_id: str) -> int | None:
 
 
 def _player_stats_from_summary(summary: dict, player_id: str) -> dict[str, int]:
-    """Extract PTS/REB/AST/STL/BLK for a player from the ESPN boxscore summary."""
+    """Extract PTS/REB/AST/STL/BLK for a player from the boxscore summary."""
     try:
         for section in summary.get("boxscore", {}).get("players", []):
             for stats_group in section.get("statistics", []):
@@ -776,19 +882,18 @@ def _check_and_fire(alarm: Alarm, events: list[dict], summary: dict | None = Non
 
 async def _alarm_poller() -> None:
     """
-    Every 60 s:
-      1. Read the shared ESPN scoreboard cache (populated by monitor.py threads).
-      2. Load all is_active alarms from DB.
-      3. Check each alarm; fire + deactivate on match.
+    Every 10 s:
+      1. Load all is_active alarms from DB.
+      2. Group by (game_date, league) and fetch the right scoreboard once per group.
+      3. Run _check_and_fire against each alarm with its proper event list.
+      4. Auto-expire alarms whose game_date is more than 1 day in the past
+         (the game is over and we still couldn't satisfy the condition).
     """
     while True:
-        await asyncio.sleep(60)
+        await asyncio.sleep(10)
         if engine is None:
             continue
         try:
-            from monitor import get_today_games as _get_games
-            events: list[dict] = await asyncio.to_thread(_get_games)
-
             with Session(engine) as session:
                 alarms = (
                     session.query(Alarm)
@@ -796,8 +901,51 @@ async def _alarm_poller() -> None:
                            .all()
                 )
 
-            # Pre-fetch boxscore summaries for all player alarms (grouped by game)
-            # Clear the per-process cache first so each tick gets fresh stats
+            today_str = _eastern_today()
+            yesterday_str = (datetime.now(timezone.utc) - timedelta(hours=5, days=1)).strftime("%Y%m%d")
+
+            # ── Group alarms by (date, league) so each scoreboard is fetched once ──
+            groups: dict[tuple[str, str], list[Alarm]] = {}
+            stale: list[Alarm] = []
+            for alarm in alarms:
+                # Skip alarms scheduled for a future date — wait for their day
+                if alarm.game_date and alarm.game_date > today_str:
+                    continue
+                # Auto-expire alarms whose game day is in the past — the game is
+                # over and we either missed the window or the condition was
+                # never met. Without this, the user's "active alarms" list grows
+                # forever after they set an alarm on a finished game.
+                if alarm.game_date and alarm.game_date < yesterday_str:
+                    stale.append(alarm)
+                    continue
+
+                date_key = alarm.game_date or today_str
+                league_key = (alarm.league or "nba")
+                groups.setdefault((date_key, league_key), []).append(alarm)
+
+            # Drop the stale ones first so we never check them
+            if stale:
+                with Session(engine) as session:
+                    for a in stale:
+                        row = session.get(Alarm, a.id)
+                        if row:
+                            row.is_active = False
+                    session.commit()
+                for a in stale:
+                    log.info("ALARM EXPIRED   | alarm_id=%d | %s | game_date=%s past | ...%s",
+                             a.id, a.target_name or a.target_id, a.game_date, a.user_token[-8:])
+
+            # ── Fetch scoreboards once per (date, league) ──
+            events_by_group: dict[tuple[str, str], list[dict]] = {}
+            for key in groups:
+                date_str, league = key
+                try:
+                    events_by_group[key] = await asyncio.to_thread(get_games_for_date, date_str, league)
+                except Exception as exc:
+                    log.warning("Poller: %s/%s scoreboard fetch failed: %s", league, date_str, exc)
+                    events_by_group[key] = []
+
+            # Pre-fetch boxscore summaries for all player alarms (still ESPN-based)
             _summary_cache.clear()
             player_game_ids = {
                 alarm.game_id for alarm in alarms
@@ -807,68 +955,65 @@ async def _alarm_poller() -> None:
             for gid in player_game_ids:
                 summaries[gid] = await asyncio.to_thread(_fetch_game_summary, gid)
 
-            from monitor import _eastern_today as _et
-            today_str = _et()
+            for (date_str, league), group_alarms in groups.items():
+                events = events_by_group.get((date_str, league), [])
+                for alarm in group_alarms:
+                    try:
+                        summary = summaries.get(alarm.game_id) if alarm.game_id else None
+                        alarm_lang = _get_user_language_from_db(alarm.user_token)
+                        result = _check_and_fire(alarm, events, summary, language=alarm_lang)
+                        if isinstance(result, dict):
+                            # Build dedup key using the same format as the radar
+                            # so poller and radar share one dedup set and never
+                            # both fire.
+                            gid = alarm.game_id or alarm.target_id
+                            pid = alarm.target_id
+                            if alarm.condition_type == "score_diff":
+                                dedup_key = f"{gid}_game_q{alarm.start_quarter or 4}_id{alarm.id}"
+                            elif alarm.condition_type == "points" and (alarm.start_quarter or 0) > 0:
+                                dedup_key = f"{gid}_{pid}_early_pts_q{alarm.start_quarter}"
+                            elif alarm.condition_type == "points":
+                                dedup_key = f"{gid}_{pid}_total_pts"
+                            else:  # triple_double
+                                dedup_key = f"{gid}_{pid}_triple_double"
 
-            for alarm in alarms:
-                try:
-                    # Skip alarms scheduled for a future date — wait until their day
-                    if alarm.game_date and alarm.game_date > today_str:
-                        continue
-                    summary = summaries.get(alarm.game_id) if alarm.game_id else None
-                    alarm_lang = _get_user_language_from_db(alarm.user_token)
-                    result = _check_and_fire(alarm, events, summary, language=alarm_lang)
-                    if isinstance(result, dict):
-                        # Build dedup key using same format as the radar so
-                        # poller and radar share one dedup set and never both fire.
-                        gid = alarm.game_id or alarm.target_id
-                        pid = alarm.target_id
-                        if alarm.condition_type == "score_diff":
-                            dedup_key = f"{gid}_game_q{alarm.start_quarter or 4}_id{alarm.id}"
-                        elif alarm.condition_type == "points" and (alarm.start_quarter or 0) > 0:
-                            dedup_key = f"{gid}_{pid}_early_pts_q{alarm.start_quarter}"
-                        elif alarm.condition_type == "points":
-                            dedup_key = f"{gid}_{pid}_total_pts"
-                        else:  # triple_double
-                            dedup_key = f"{gid}_{pid}_triple_double"
+                            if not _fire_once(dedup_key, alarm.user_token):
+                                # Already fired by radar or a previous poller tick — skip
+                                with Session(engine) as session:
+                                    db_row = session.get(Alarm, alarm.id)
+                                    if db_row:
+                                        db_row.is_active = False
+                                        session.commit()
+                                continue
 
-                        if not _fire_once(dedup_key, alarm.user_token):
-                            # Already fired by radar or a previous poller tick — skip
+                            log.info(
+                                "POLLER ALARM fire   | alarm_id=%d | %s | %s",
+                                alarm.id,
+                                alarm.target_name or alarm.target_id,
+                                alarm.user_token[-8:],
+                            )
+                            _send_push_notification(
+                                push_token=alarm.user_token,
+                                title=result["title"],
+                                body=result["body"],
+                                sound_channel="classic_alarm",
+                                alert_type=alarm.alert_type or "alarm",
+                            )
                             with Session(engine) as session:
                                 db_row = session.get(Alarm, alarm.id)
                                 if db_row:
                                     db_row.is_active = False
                                     session.commit()
-                            continue
-
-                        log.info(
-                            "POLLER ALARM fire   | alarm_id=%d | %s | %s",
-                            alarm.id,
-                            alarm.target_name or alarm.target_id,
-                            alarm.user_token[-8:],
-                        )
-                        _send_push_notification(
-                            push_token=alarm.user_token,
-                            title=result["title"],
-                            body=result["body"],
-                            sound_channel="classic_alarm",
-                            alert_type=alarm.alert_type or "alarm",
-                        )
-                        with Session(engine) as session:
-                            db_row = session.get(Alarm, alarm.id)
-                            if db_row:
-                                db_row.is_active = False
-                                session.commit()
-                    elif result is None:
-                        log.info("ALARM EXPIRED   | alarm_id=%d | %s | condition never met | ...%s",
-                                 alarm.id, alarm.target_name or alarm.target_id, alarm.user_token[-8:])
-                        with Session(engine) as session:
-                            db_row = session.get(Alarm, alarm.id)
-                            if db_row:
-                                db_row.is_active = False
-                                session.commit()
-                except Exception as alarm_err:
-                    log.error("Poller error alarm %d: %s", alarm.id, alarm_err)
+                        elif result is None:
+                            log.info("ALARM EXPIRED   | alarm_id=%d | %s | condition never met | ...%s",
+                                     alarm.id, alarm.target_name or alarm.target_id, alarm.user_token[-8:])
+                            with Session(engine) as session:
+                                db_row = session.get(Alarm, alarm.id)
+                                if db_row:
+                                    db_row.is_active = False
+                                    session.commit()
+                    except Exception as alarm_err:
+                        log.error("Poller error alarm %d: %s", alarm.id, alarm_err)
 
             # NOTE: Favorite players and teams are monitored exclusively by the
             # background radar (monitor.py _run_radar_tick) which has its own
@@ -884,11 +1029,10 @@ async def _alarm_poller() -> None:
 
 def _restart_alarm_threads_from_db() -> None:
     """
-    On startup: expire stale alarms whose game_id is no longer in today's
-    ESPN schedule (game is over or postponed). Alarms whose game_id IS in
-    today's schedule are left active — the poller will handle them normally.
-    This handles the case where the server crashed mid-game and the poller
-    never got a chance to mark those alarms as expired.
+    On startup: expire alarms whose game_date is more than a day in the past
+    (their game is over and was never matched). Newer alarms are left active —
+    the poller will pick them up on its next tick and either fire or expire
+    them per (date, league) without any NBA-only assumptions.
     """
     if engine is None:
         return
@@ -902,47 +1046,34 @@ def _restart_alarm_threads_from_db() -> None:
             if not active_alarms:
                 return
 
-            # Fetch today's game IDs from ESPN (already cached if pre-warm ran first)
-            try:
-                today_games = get_today_games()
-                today_game_ids = {str(g["id"]) for g in today_games}
-            except Exception:
-                today_game_ids = None  # ESPN unavailable — skip cleanup, be safe
-
-            from monitor import _eastern_today as _et
-            today_str = _et()
-
+            yesterday_str = (datetime.now(timezone.utc) - timedelta(hours=5, days=1)).strftime("%Y%m%d")
             expired = 0
-            if today_game_ids is not None:
-                for row in active_alarms:
-                    # Never expire alarms scheduled for a future date
-                    if row.game_date and row.game_date > today_str:
-                        continue
-                    game_id = str(row.game_id or row.target_id or "")
-                    if game_id and game_id not in today_game_ids:
-                        row.is_active = False
-                        expired += 1
-                if expired:
-                    session.commit()
-                    log.info("STARTUP: expired %d stale alarm(s) not in today's schedule.", expired)
+            for row in active_alarms:
+                if row.game_date and row.game_date < yesterday_str:
+                    row.is_active = False
+                    expired += 1
+            if expired:
+                session.commit()
+                log.info("STARTUP: expired %d stale alarm(s) (game_date older than yesterday).", expired)
 
             count = session.query(Alarm).filter(Alarm.is_active.is_(True)).count()
         if count:
             log.info("STARTUP: %d active DB alarm(s) will be handled by the poller.", count)
     except Exception as exc:
-        log.error("STARTUP: failed to count active alarms – %s", exc)
+        log.error("STARTUP: failed to expire stale alarms – %s", exc)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # ── Startup ──
     _init_db()
+    _migrate_team_ids_to_365()  # legacy ESPN/API-Basketball → 365scores
     _load_fired_alerts_from_db()   # hydrate dedup set before radar starts
     _purge_old_alarms()            # delete inactive alarms older than 7 days
     clear_stale_state()
     _restart_alarm_threads_from_db()
     threading.Thread(target=update_all_rosters, daemon=True).start()
-    # Pre-warm ESPN cache so /games is ready immediately after startup
+    # Pre-warm games cache so /games is ready immediately after startup
     threading.Thread(target=get_today_games, daemon=True).start()
     # Radar reads all users directly from DB — always start it
     threading.Thread(target=start_radar_job, daemon=True).start()
@@ -1073,6 +1204,7 @@ class AlarmRequest(BaseModel):
     alert_type: str         = "alarm"
     home_team_id: str       = ""
     away_team_id: str       = ""
+    league: Optional[str]   = None    # explicit from iOS; falls back to lookup
     notify_at_start: bool   = False
     game_date: Optional[str] = None   # "YYYYMMDD" for future-day alarms
 
@@ -1083,6 +1215,14 @@ async def start_alarm(req: AlarmRequest):
     if not req.push_token or not req.push_token.strip():
         raise HTTPException(status_code=400, detail="push_token is required.")
     save_push_token(req.push_token, req.sound_channel)
+
+    # Resolve the league for this alarm. The poller needs it so it can fetch
+    # games from the right competition — get_today_games() is NBA-only.
+    league = _league_for_alarm(req.home_team_id or None, req.away_team_id or None, req.league)
+    # Default game_date to "today" (Eastern). Without this, the poller can
+    # never expire stale alarms whose game has already finished on a prior day.
+    game_date = req.game_date or _eastern_today()
+
     if engine is not None:
         try:
             with Session(engine) as session:
@@ -1104,9 +1244,10 @@ async def start_alarm(req: AlarmRequest):
                     game_name        = req.game_name,
                     home_team_id     = req.home_team_id or None,
                     away_team_id     = req.away_team_id or None,
+                    league           = league,
                     alert_type       = req.alert_type,
                     notify_at_start  = req.notify_at_start,
-                    game_date        = req.game_date or None,
+                    game_date        = game_date,
                 ))
                 session.commit()
         except Exception as exc:
@@ -1135,6 +1276,9 @@ class PlayerAlarmRequest(BaseModel):
     pts_threshold: int    = 20
     quarter_deadline: int = 3
     alert_type: str       = "alarm"
+    home_team_id: str     = ""
+    away_team_id: str     = ""
+    league: Optional[str] = None
     game_date: Optional[str] = None   # "YYYYMMDD" for future-day alarms
 
 
@@ -1144,6 +1288,10 @@ async def start_player_alarm(req: PlayerAlarmRequest):
     if not req.push_token or not req.push_token.strip():
         raise HTTPException(status_code=400, detail="push_token is required.")
     save_push_token(req.push_token, req.sound_channel)
+
+    league = _league_for_alarm(req.home_team_id or None, req.away_team_id or None, req.league)
+    game_date = req.game_date or _eastern_today()
+
     if engine is not None:
         try:
             if req.condition == "triple_double":
@@ -1178,8 +1326,9 @@ async def start_player_alarm(req: PlayerAlarmRequest):
                     start_quarter  = start_q,
                     game_id        = req.game_id,
                     game_name      = req.game_name,
+                    league         = league,
                     alert_type     = req.alert_type,
-                    game_date      = req.game_date or None,
+                    game_date      = game_date,
                 ))
                 session.commit()
         except Exception as exc:
@@ -1292,6 +1441,7 @@ def get_settings(user_token: str = ""):
             fav_players = {
                 p.target_id: {
                     "name":          p.target_name or "",
+                    "league":         (p.league or "nba"),
                     "total_pts":     p.total_pts,
                     "early_pts_q":   p.early_pts_q,
                     "early_pts":     p.early_pts,
@@ -1299,6 +1449,7 @@ def get_settings(user_token: str = ""):
                     "alert_type":     p.alert_type or "silent",
                     "broadcast_only": getattr(p, 'broadcast_only', False),
                     "paused":         getattr(p, 'paused', False),
+                    "skip_euroleague_evening": getattr(p, 'skip_euroleague_evening', False),
                 }
                 for p in players
             }
@@ -1306,16 +1457,19 @@ def get_settings(user_token: str = ""):
                 {
                     "team_id":        t.team_id,
                     "team_name":      t.team_name or "",
+                    "league":         (t.league or "nba"),
                     "max_diff":       t.score_gap or 5,
                     "start_quarter":  t.start_quarter or 4,
                     "alert_type":     t.alert_type or "silent",
                     "broadcast_only":  getattr(t, 'broadcast_only', False),
                     "notify_at_start": getattr(t, 'notify_at_start', False),
                     "paused":          getattr(t, 'paused', False),
+                    "skip_euroleague_evening": getattr(t, 'skip_euroleague_evening', False),
                 }
                 for t in teams
             ]
             radar_cfg = _SETTINGS_DEFAULTS["GlobalGameRadar"].copy()
+            radar_cfg["leagues"] = ["nba"]
             hist_cfg  = {
                 "enabled": False, "alert_type": "silent",
                 "categories": {"scoring_40_half": False, "threes_11": False, "quad_double_threat": False},
@@ -1326,6 +1480,7 @@ def get_settings(user_token: str = ""):
                     "max_diff":      pref.radar_gap,
                     "start_quarter": pref.radar_start_q,
                     "alert_type":    pref.alert_type,
+                    "leagues":       _split_leagues(pref.radar_leagues),
                 }
                 hist_cfg = {
                     "enabled":    pref.historical_mode_enabled,
@@ -1347,16 +1502,37 @@ def get_settings(user_token: str = ""):
         return dict(_SETTINGS_DEFAULTS)
 
 
+_VALID_LEAGUES = {"nba", "euroleague", "eurocup", "bcl", "winner_league"}
+
+
+def _split_leagues(raw: Optional[str]) -> list[str]:
+    """Parse the comma-separated user_preferences.radar_leagues column."""
+    if not raw:
+        return ["nba"]
+    parts = [p.strip() for p in raw.split(",") if p.strip() in _VALID_LEAGUES]
+    return parts or ["nba"]
+
+
+def _join_leagues(leagues: Optional[list[str]]) -> str:
+    """Serialize a leagues list to the comma-separated DB form, with validation."""
+    if not leagues:
+        return "nba"
+    cleaned = [l for l in leagues if l in _VALID_LEAGUES]
+    return ",".join(cleaned) if cleaned else "nba"
+
+
 class GlobalRadarSettings(BaseModel):
     user_token:    str = ""
     enabled:       bool
     max_diff:      int = 5
     start_quarter: int = 4
     alert_type:    str = "silent"
+    leagues:       Optional[list[str]] = None
 
 
 @app.post("/settings/global-radar")
 def update_global_radar(req: GlobalRadarSettings):
+    leagues_str = _join_leagues(req.leagues)
     if engine is not None and req.user_token:
         try:
             with Session(engine) as session:
@@ -1366,11 +1542,13 @@ def update_global_radar(req: GlobalRadarSettings):
                     pref.radar_gap     = req.max_diff
                     pref.radar_start_q = req.start_quarter
                     pref.alert_type    = req.alert_type
+                    pref.radar_leagues = leagues_str
                 else:
                     session.add(UserPreferenceDB(
                         user_token=req.user_token,
                         radar_enabled=req.enabled, radar_gap=req.max_diff,
                         radar_start_q=req.start_quarter, alert_type=req.alert_type,
+                        radar_leagues=leagues_str,
                     ))
                 session.commit()
         except Exception as exc:
@@ -1380,6 +1558,7 @@ def update_global_radar(req: GlobalRadarSettings):
     return {"status": "updated", "GlobalGameRadar": {
         "enabled": req.enabled, "max_diff": req.max_diff,
         "start_quarter": req.start_quarter, "alert_type": req.alert_type,
+        "leagues": _split_leagues(leagues_str),
     }}
 
 
@@ -1387,16 +1566,19 @@ class FavoriteTeam(BaseModel):
     user_token:      str = ""
     team_id:         str
     team_name:       str
+    league:          str = "nba"
     max_diff:        int = 5
     start_quarter:   int = 4
     alert_type:      str = "silent"
     broadcast_only:  bool = False
     free_only:       bool = False
     notify_at_start: bool = False
+    skip_euroleague_evening: bool = False
 
 
 @app.post("/settings/teams")
 def upsert_team(req: FavoriteTeam):
+    league = req.league if req.league in _VALID_LEAGUES else "nba"
     if engine is not None and req.user_token:
         try:
             with Session(engine) as session:
@@ -1405,18 +1587,22 @@ def upsert_team(req: FavoriteTeam):
                 ).first()
                 if existing:
                     existing.team_name      = req.team_name
+                    existing.league         = league
                     existing.score_gap      = req.max_diff
                     existing.start_quarter  = req.start_quarter
                     existing.alert_type     = req.alert_type
                     existing.broadcast_only  = getattr(req, 'broadcast_only', False)
                     existing.notify_at_start = getattr(req, 'notify_at_start', False)
+                    existing.skip_euroleague_evening = getattr(req, 'skip_euroleague_evening', False)
                 else:
                     session.add(FavoriteTeamDB(
                         user_token=req.user_token, team_id=req.team_id,
-                        team_name=req.team_name, score_gap=req.max_diff,
+                        team_name=req.team_name, league=league,
+                        score_gap=req.max_diff,
                         start_quarter=req.start_quarter, alert_type=req.alert_type,
                         broadcast_only=getattr(req, 'broadcast_only', False),
                         notify_at_start=getattr(req, 'notify_at_start', False),
+                        skip_euroleague_evening=getattr(req, 'skip_euroleague_evening', False),
                     ))
                 session.commit()
         except Exception as exc:
@@ -1445,16 +1631,19 @@ class FavoritePlayer(BaseModel):
     user_token:     str = ""
     player_id:      str
     name:           str
+    league:         str = "nba"
     total_pts:      Optional[int]  = None
     early_pts_q:    Optional[int]  = None
     early_pts:      Optional[int]  = None
     td_watch:       bool           = False
     alert_type:     str            = "silent"
     broadcast_only: bool           = False
+    skip_euroleague_evening: bool  = False
 
 
 @app.post("/settings/players")
 def upsert_player(req: FavoritePlayer):
+    league = req.league if req.league in _VALID_LEAGUES else "nba"
     if engine is not None and req.user_token:
         try:
             with Session(engine) as session:
@@ -1463,19 +1652,23 @@ def upsert_player(req: FavoritePlayer):
                 ).first()
                 if existing:
                     existing.target_name    = req.name
+                    existing.league         = league
                     existing.total_pts      = req.total_pts
                     existing.early_pts_q    = req.early_pts_q
                     existing.early_pts      = req.early_pts
                     existing.td_watch       = req.td_watch
                     existing.alert_type     = req.alert_type
                     existing.broadcast_only = req.broadcast_only
+                    existing.skip_euroleague_evening = req.skip_euroleague_evening
                 else:
                     session.add(FavoritePlayerDB(
                         user_token=req.user_token, target_id=req.player_id,
-                        target_name=req.name, total_pts=req.total_pts,
+                        target_name=req.name, league=league,
+                        total_pts=req.total_pts,
                         early_pts_q=req.early_pts_q, early_pts=req.early_pts,
                         td_watch=req.td_watch, alert_type=req.alert_type,
                         broadcast_only=req.broadcast_only,
+                        skip_euroleague_evening=req.skip_euroleague_evening,
                     ))
                 session.commit()
         except Exception as exc:
@@ -1605,10 +1798,20 @@ def register_token(req: RegisterTokenRequest):
 
 # ── Data Endpoints ─────────────────────────────────────────────────────────────
 
+@app.get("/leagues")
+def leagues():
+    """Return available leagues."""
+    from score365_adapter import LEAGUES
+    return {"leagues": [
+        {"id": key, "name": cfg["name"], "country": cfg["country"]}
+        for key, cfg in LEAGUES.items()
+    ]}
+
+
 @app.get("/games")
-def games(date: Optional[str] = None):
-    """Return games for a given date (YYYYMMDD). Defaults to today (US Eastern)."""
-    return {"games": get_games_for_date(date)}
+def games(date: Optional[str] = None, league: str = "nba"):
+    """Return games for a given date (YYYYMMDD) and league. Defaults to today NBA."""
+    return {"games": get_games_for_date(date, league=league)}
 
 
 # ── EPG (TV Broadcast Guide) ─────────────────────────────────────────────────
@@ -1633,7 +1836,7 @@ def epg_for_game(game_id: str = "", country: str = "il"):
     if event is None:
         return {"broadcasts": [], "error": "game not found"}
 
-    # Extract team abbreviations from ESPN event
+    # Extract team abbreviations from game event
     comp = (event.get("competitions") or [{}])[0]
     competitors = comp.get("competitors", [])
     home_abbr = ""
@@ -1662,13 +1865,15 @@ def epg_for_game(game_id: str = "", country: str = "il"):
 @app.get("/epg/all")
 def epg_all_games(country: str = "il"):
     """
-    Get all NBA TV broadcasts for today's games, keyed by ESPN game_id.
+    Get all basketball TV broadcasts for today's games (all leagues), keyed by game_id.
     Returns: { "broadcasts": { "401810906": [...], "401810907": [...] } }
     """
     if country.lower() not in _ALLOWED_EPG_COUNTRIES:
         return {"broadcasts": {}}
-    today_games = get_today_games()
-    return {"broadcasts": get_all_broadcasts(country=country, games=today_games)}
+    all_games = []
+    for lid in ("nba", "euroleague", "eurocup", "bcl", "winner_league"):
+        all_games.extend(get_games_for_date(None, league=lid))
+    return {"broadcasts": get_all_broadcasts(country=country, games=all_games)}
 
 
 # ── Watch Score (in-memory cache, keyed by "DATE_HOME_AWAY") ─────────────────
@@ -1676,12 +1881,12 @@ def epg_all_games(country: str = "il"):
 _watch_score_cache: dict[str, dict] = {}
 
 
-def _get_cached_watch_score(home: str, away: str, date_str: str) -> dict | None:
-    key = f"{date_str}_{home}_{away}"
+def _get_cached_watch_score(home: str, away: str, date_str: str, league: str) -> dict | None:
+    key = f"{league}_{date_str}_{home}_{away}"
     return _watch_score_cache.get(key)
 
 
-def _cache_watch_score(home: str, away: str, date_str: str, result) -> dict:
+def _cache_watch_score(home: str, away: str, date_str: str, league: str, result) -> dict:
     entry = {
         "score": result.score,
         "tension": result.tension_score,
@@ -1690,40 +1895,42 @@ def _cache_watch_score(home: str, away: str, date_str: str, result) -> dict:
         "overtime": result.overtime,
         "buzzer_beater": result.buzzer_beater,
     }
-    key = f"{date_str}_{home}_{away}"
+    key = f"{league}_{date_str}_{home}_{away}"
     _watch_score_cache[key] = entry
     return entry
 
 
 @app.get("/watch-score")
-def watch_score(home: str, away: str, date: str = ""):
+def watch_score(home: str, away: str, date: str = "", league: str = "nba"):
     """
     Calculate the smart watch score (1-10) for a finished game.
-    Query params: home (team abbr), away (team abbr), date (YYYYMMDD, default today).
+    Query params: home (team abbr), away (team abbr), date (YYYYMMDD, default today), league.
     """
     from watch_score import calculate_watch_score_by_teams
     from monitor import _eastern_today
     game_date = date if date else _eastern_today()
-    cached = _get_cached_watch_score(home, away, game_date)
+    cached = _get_cached_watch_score(home, away, game_date, league)
     if cached:
         return cached
-    result = calculate_watch_score_by_teams(home_abbr=home, away_abbr=away, date_yyyymmdd=game_date)
+    result = calculate_watch_score_by_teams(
+        home_abbr=home, away_abbr=away, date_yyyymmdd=game_date, league=league)
     if result is None:
         return {"error": "Game not found or play-by-play unavailable", "score": None}
-    return _cache_watch_score(home, away, game_date, result)
+    return _cache_watch_score(home, away, game_date, league, result)
 
 
 @app.get("/watch-scores")
-def watch_scores(date: str = ""):
+def watch_scores(date: str = "", league: str = "nba"):
     """
-    Batch: return watch scores for all finished games on a date.
+    Batch: return watch scores for all finished games on a date for a league.
     Returns: { "scores": { "DEN_SA": { "score": 8.8, ... }, ... } }
+    Cached in-memory — subsequent requests are instant.
     """
     from watch_score import calculate_watch_score_by_teams
     from monitor import _eastern_today
     game_date = date if date else _eastern_today()
 
-    events = get_games_for_date(game_date)
+    events = get_games_for_date(game_date, league=league)
     results: dict[str, dict] = {}
 
     for event in events:
@@ -1742,15 +1949,15 @@ def watch_scores(date: str = ""):
             continue
 
         key = f"{home_abbr}_{away_abbr}"
-        cached = _get_cached_watch_score(home_abbr, away_abbr, game_date)
+        cached = _get_cached_watch_score(home_abbr, away_abbr, game_date, league)
         if cached:
             results[key] = cached
             continue
 
         result = calculate_watch_score_by_teams(
-            home_abbr=home_abbr, away_abbr=away_abbr, date_yyyymmdd=game_date)
+            home_abbr=home_abbr, away_abbr=away_abbr, date_yyyymmdd=game_date, league=league)
         if result:
-            results[key] = _cache_watch_score(home_abbr, away_abbr, game_date, result)
+            results[key] = _cache_watch_score(home_abbr, away_abbr, game_date, league, result)
 
     return {"scores": results}
 
@@ -1784,8 +1991,8 @@ def roster(game_id: str):
 
 
 @app.get("/game-summary")
-def game_summary(gameId: str):
-    return fetch_game_summary_roster(gameId)
+def game_summary(gameId: str, date: Optional[str] = None):
+    return fetch_game_summary_roster(gameId, date=date)
 
 
 @app.get("/all-teams-and-players")
@@ -1797,6 +2004,8 @@ def all_teams_and_players():
 def refresh_rosters():
     threading.Thread(target=update_all_rosters, daemon=True).start()
     return {"status": "roster_refresh_started"}
+
+
 
 
 @app.get("/active-monitors")
@@ -1860,6 +2069,7 @@ def active_monitors(user_token: str = ""):
                             "start_quarter":   r.start_quarter if r.start_quarter is not None else 4,
                             "home_team_id":    r.home_team_id or "",
                             "away_team_id":    r.away_team_id or "",
+                            "league":          (getattr(r, 'league', None) or "nba"),
                             "notify_at_start": getattr(r, 'notify_at_start', False),
                             "game_date":       getattr(r, 'game_date', None) or "",
                         }
@@ -2022,6 +2232,21 @@ def pause_team(team_id: str, req: PauseRequest):
         row.paused = req.paused
         session.commit()
     return {"paused": req.paused, "team_id": team_id}
+
+@app.post("/settings/favorites/pause-all")
+def pause_all_favorites(req: PauseRequest):
+    """Pause or resume ALL favorite teams and players for a user at once."""
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Database not configured.")
+    with Session(engine) as session:
+        teams = session.query(FavoriteTeamDB).filter_by(user_token=req.user_token).all()
+        for t in teams:
+            t.paused = req.paused
+        players = session.query(FavoritePlayerDB).filter_by(user_token=req.user_token).all()
+        for p in players:
+            p.paused = req.paused
+        session.commit()
+    return {"paused": req.paused, "teams": len(teams), "players": len(players)}
 
 
 # ── Admin: Broadcast push to all users ────────────────────────────────────────

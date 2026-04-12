@@ -95,13 +95,50 @@ TEAM_NAME_MAP = {
     "magos": "ORL", "soles": "PHX", "reyes": "SAC",
 }
 
+# ── Euroleague / EuroCup / BCL / Winner League team name mappings ────────────
+
+EURO_TEAM_NAME_MAP = {
+    # Euroleague — English + Hebrew
+    "olympiacos": "OLY", "olympiakos": "OLY", "אולימפיאקוס": "OLY",
+    "anadolu efes": "EFE", "efes": "EFE", "אנאדולו אפס": "EFE",
+    "bayern": "BAY", "bayern munich": "BAY", "באיירן": "BAY",
+    "baskonia": "BAS", "באסקוניה": "BAS",
+    "barcelona": "BAR", "barça": "BAR", "ברצלונה": "BAR",
+    "dubai": "DUB", "דובאי": "DUB",
+    "crvena zvezda": "CZV", "zvezda": "CZV", "red star": "CZV", "הכוכב האדום": "CZV",
+    "hapoel tel aviv": "HTA", "הפועל תל אביב": "HTA", 'הפועל ת"א': "HTA",
+    "asvel": "LYN", "villeurbanne": "LYN", "וילרבאן": "LYN",
+    "virtus": "VIR", "virtus bologna": "VIR", "וירטוס": "VIR",
+    "valencia": "VAL", "valencia basket": "VAL", "ולנסיה": "VAL",
+    "zalgiris": "ZAL", "ז'לגיריס": "ZAL",
+    "monaco": "MON", "as monaco": "MON", "מונאקו": "MON",
+    "milano": "MLN", "olimpia milano": "MLN", "מילאנו": "MLN",
+    "maccabi tel aviv": "MTA", "maccabi": "MTA", "מכבי תל אביב": "MTA", 'מכבי ת"א': "MTA",
+    "panathinaikos": "PAN", "פנאתינייקוס": "PAN",
+    "fenerbahce": "FEN", "פנרבחצ'ה": "FEN",
+    "paris basketball": "PAR", "paris": "PAR", "פריז": "PAR",
+    "partizan": "PAT", "פרטיזן": "PAT",
+    "real madrid": "RMA", "ריאל מדריד": "RMA",
+    # Winner League (Israel)
+    "hapoel jerusalem": "JER", "הפועל ירושלים": "JER",
+    "hapoel holon": "HOL", "הפועל חולון": "HOL",
+    "bnei herzliya": "HER", "בני הרצליה": "HER",
+    "ness ziona": "NES", "נס ציונה": "NES",
+    "ramat gan": "RMG", "מכבי רמת גן": "RMG",
+    "galil elyon": "GAL", "גליל עליון": "GAL",
+}
+
+# Keyword that means "all Euroleague games tonight" in Israeli EPG
+_EUROLEAGUE_EVENING_KEYWORDS = ["ערב היורוליג", "ערב יורוליג"]
+
 
 def _match_teams(text: str) -> list[str]:
-    """Extract NBA team abbreviations from a programme title/description."""
+    """Extract team abbreviations (NBA + Euro) from a programme title/description."""
     text_lower = text.lower()
     found = []
-    # Sort by length (longest first) to match "golden state" before "state"
-    for name, abbr in sorted(TEAM_NAME_MAP.items(), key=lambda x: -len(x[0])):
+    # Check both NBA and Euro maps; sort by length (longest first)
+    combined = list(TEAM_NAME_MAP.items()) + list(EURO_TEAM_NAME_MAP.items())
+    for name, abbr in sorted(combined, key=lambda x: -len(x[0])):
         if name in text_lower and abbr not in found:
             found.append(abbr)
         if len(found) >= 2:
@@ -109,19 +146,30 @@ def _match_teams(text: str) -> list[str]:
     return found
 
 
-def _is_nba_programme(title: str, desc: str) -> bool:
-    """Check if a programme is an NBA game (not just NBA-related show)."""
+def _is_euroleague_evening(title: str, desc: str) -> bool:
+    """Check if this is a 'ערב היורוליג' broadcast covering all Euroleague games."""
+    combined = title + " " + desc
+    return any(kw in combined for kw in _EUROLEAGUE_EVENING_KEYWORDS)
+
+
+def _is_basketball_programme(title: str, desc: str) -> bool:
+    """Check if a programme is an NBA or Euroleague basketball game."""
     combined = title + " " + desc
     combined_lower = combined.lower()
     # Reject any non-basketball sport immediately
-    non_nba = ["hockey", "הוקי", "nhl", "כדורגל", "soccer", "football", "nfl",
-               "baseball", "mlb", "tennis", "rugby", "cricket", "golf"]
-    if any(s in combined_lower for s in non_nba):
+    non_bball = ["hockey", "הוקי", "nhl", "כדורגל", "soccer", "football", "nfl",
+                 "baseball", "mlb", "tennis", "rugby", "cricket", "golf"]
+    if any(s in combined_lower for s in non_bball):
         return False
-    # Must mention NBA or basketball (Hebrew: כדורסל). "ליגת" alone is too broad.
-    if "nba" not in combined_lower and "כדורסל" not in combined_lower and "ליגת nba" not in combined_lower:
+    # "ערב היורוליג" is always relevant
+    if _is_euroleague_evening(title, desc):
+        return True
+    # Must mention NBA, Euroleague, basketball, or a known league keyword
+    bball_keywords = ["nba", "כדורסל", "euroleague", "יורוליג", "eurocup", "יורוקאפ",
+                      "bcl", "winner league", "ליגת ווינר", "ליגת העל"]
+    if not any(kw in combined_lower for kw in bball_keywords):
         return False
-    # Must have at least one team name
+    # Must have at least one team name (NBA or Euro)
     if not _match_teams(combined):
         return False
     # Exclude non-game content (replays, highlights, magazine shows)
@@ -224,7 +272,7 @@ def _fetch_epg(country: str) -> dict:
         title = (title_el.text or "") if title_el is not None else ""
         desc = (desc_el.text or "") if desc_el is not None else ""
 
-        if not _is_nba_programme(title, desc):
+        if not _is_basketball_programme(title, desc):
             continue
 
         teams = _match_teams(title + " " + desc)
@@ -259,7 +307,7 @@ def _fetch_epg(country: str) -> dict:
             "teams": teams,
         })
 
-    log.info("EPG: %s — %d channels, %d NBA programmes", country, len(channels), len(programmes))
+    log.info("EPG: %s — %d channels, %d basketball programmes", country, len(channels), len(programmes))
     return {"channels": channels, "programmes": programmes}
 
 
@@ -291,22 +339,51 @@ def _parse_game_date(game_date_utc: str) -> datetime | None:
 
 
 def get_broadcasts_for_game(game_id: str, game_name: str, home_abbr: str, away_abbr: str,
-                            game_date_utc: str, country: str = "il") -> list[dict]:
+                            game_date_utc: str, country: str = "il",
+                            league: str = "nba") -> list[dict]:
     """
-    Find TV broadcasts for a specific NBA game.
+    Find TV broadcasts for a specific basketball game.
     Matches by team names AND time window (broadcast must start within
-    1 hour before to 3 hours after game start).
+    30 min of game start). For Euroleague, also matches "ערב היורוליג" programmes.
     """
     epg = get_epg(country)
     programmes = epg.get("programmes", [])
 
     target_teams = {home_abbr.upper(), away_abbr.upper()}
     game_dt = _parse_game_date(game_date_utc)
+    is_euro = league in ("euroleague", "eurocup")
 
     matches = []
     seen_channels = set()
 
     for prog in programmes:
+        title = prog.get("title", "")
+        desc = ""  # desc not stored in parsed programme, but title suffices
+
+        # "ערב היורוליג" covers all Euroleague/EuroCup games that evening
+        if is_euro and _is_euroleague_evening(title, desc):
+            # Time filter: same day (within 6 hours of game time)
+            prog_dt = prog.get("start_dt")
+            if game_dt and prog_dt:
+                diff = abs((prog_dt - game_dt).total_seconds())
+                if diff > 21600:  # 6 hours
+                    continue
+            channel_name = prog.get("channel_name", "")
+            if channel_name in seen_channels:
+                continue
+            seen_channels.add(channel_name)
+            matches.append({
+                "channel_name": "ערב היורוליג",
+                "channel_name_he": "ערב היורוליג",
+                "channel_icon": prog.get("channel_icon", ""),
+                "is_free": prog.get("is_free", False),
+                "is_live": True,
+                "is_euroleague_evening": True,
+                "title": title,
+                "start_utc": prog.get("start_utc", ""),
+            })
+            continue
+
         prog_teams = set(prog.get("teams", []))
         # At least one team must match
         if not prog_teams.intersection(target_teams):
@@ -337,6 +414,11 @@ def get_broadcasts_for_game(game_id: str, game_name: str, home_abbr: str, away_a
     # If any match is a live broadcast, drop non-live ones (replays, condensed games)
     if any(m["is_live"] for m in matches):
         matches = [m for m in matches if m["is_live"]]
+
+    # If there's a real team-specific broadcast, drop ערב היורוליג
+    has_real = any(not m.get("is_euroleague_evening") for m in matches)
+    if has_real:
+        matches = [m for m in matches if not m.get("is_euroleague_evening")]
 
     # Sort: free first, then by start time
     matches.sort(key=lambda x: (not x["is_free"], x.get("start_utc", "")))
@@ -398,7 +480,7 @@ def get_all_broadcasts(country: str = "il", games: list[dict] | None = None) -> 
 
 
 def _match_broadcasts_to_games(games: list[dict], country: str) -> dict[str, list[dict]]:
-    """Match EPG programmes to actual ESPN games by teams + time window."""
+    """Match EPG programmes to actual games (NBA + Euro) by teams + time window."""
     result: dict[str, list[dict]] = {}
 
     for game in games:
@@ -416,6 +498,7 @@ def _match_broadcasts_to_games(games: list[dict], country: str) -> dict[str, lis
                 away_abbr = abbr
 
         game_date = game.get("date", "")
+        league = game.get("league", "nba")
         broadcasts = get_broadcasts_for_game(
             game_id=game_id,
             game_name=game.get("shortName", ""),
@@ -423,6 +506,7 @@ def _match_broadcasts_to_games(games: list[dict], country: str) -> dict[str, lis
             away_abbr=away_abbr,
             game_date_utc=game_date,
             country=country,
+            league=league,
         )
         if broadcasts:
             result[game_id] = broadcasts
