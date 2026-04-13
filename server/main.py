@@ -966,8 +966,14 @@ async def _alarm_poller() -> None:
 
                         # If the game is from a past date, or is no longer in the
                         # scoreboard feed for today — it has ended, expire it.
+                        # NULL game_date uses today_str (via date_key fallback above),
+                        # so past-date NULL alarms are already grouped under today_str.
+                        # Additionally expire NULL-date alarms that are no longer in feed.
                         alarm_game_id = str(alarm.game_id or alarm.target_id)
-                        game_is_gone = (date_str < today_str) or (events and alarm_game_id not in live_game_ids)
+                        past_date = alarm.game_date and date_str < today_str
+                        null_date_gone = (not alarm.game_date) and events and alarm_game_id not in live_game_ids
+                        today_gone = alarm.game_date and date_str == today_str and events and alarm_game_id not in live_game_ids
+                        game_is_gone = past_date or null_date_gone or today_gone
                         if game_is_gone:
                             log.info("ALARM EXPIRED   | alarm_id=%d | %s | game ended | ...%s",
                                      alarm.id, alarm.target_name or alarm.target_id, alarm.user_token[-8:])
