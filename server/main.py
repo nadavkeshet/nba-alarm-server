@@ -1991,8 +1991,8 @@ def roster(game_id: str):
 
 
 @app.get("/game-summary")
-def game_summary(gameId: str, date: Optional[str] = None):
-    return fetch_game_summary_roster(gameId, date=date)
+def game_summary(gameId: str, date: Optional[str] = None, league: Optional[str] = None):
+    return fetch_game_summary_roster(gameId, date=date, league=league)
 
 
 @app.get("/all-teams-and-players")
@@ -2104,6 +2104,7 @@ def active_monitors(user_token: str = ""):
                             "enabled":       pref.radar_enabled,
                             "max_diff":      pref.radar_gap,
                             "start_quarter": pref.radar_start_q,
+                            "leagues":       _split_leagues(pref.radar_leagues),
                         }
                         hist_cfg = {
                             "enabled":    pref.historical_mode_enabled,

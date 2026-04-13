@@ -549,7 +549,7 @@ def _fetch_player_stats(game_id: str, player_id: str) -> dict | None:
     return None
 
 
-def fetch_game_summary_roster(game_id: str, date: str | None = None) -> dict:
+def fetch_game_summary_roster(game_id: str, date: str | None = None, league: str | None = None) -> dict:
     """
     Return cached rosters for both teams in game_id.
 
@@ -561,20 +561,22 @@ def fetch_game_summary_roster(game_id: str, date: str | None = None) -> dict:
     # ── Step 1: collect raw team stubs ─────────────────────────────────────────
     team_stubs: list[dict] = []
 
-    # Try today's NBA cache first
-    event = _fetch_nba_game(game_id)
-    if event is not None:
-        for comp in event.get("competitions", [{}])[0].get("competitors", []):
-            team_stubs.append(comp.get("team", {}))
+    # Try today's NBA cache first (fast path for live NBA games)
+    if not league or league == "nba":
+        event = _fetch_nba_game(game_id)
+        if event is not None:
+            for comp in event.get("competitions", [{}])[0].get("competitors", []):
+                team_stubs.append(comp.get("team", {}))
 
-    # If not found, search all leagues for the given date (or today)
+    # If not found, search the relevant league(s) for the given date
     if not team_stubs:
         search_date = date or _eastern_today()
-        for league in LEAGUES:
-            if league == "nba" and not date:
-                continue  # already checked via cache
+        leagues_to_search = [league] if league and league in LEAGUES else list(LEAGUES.keys())
+        for lg in leagues_to_search:
+            if lg == "nba" and not date and not league:
+                continue  # already checked via NBA cache above
             try:
-                games = api_fetch_games(search_date, league=league)
+                games = api_fetch_games(search_date, league=lg)
                 for g in games:
                     if str(g.get("id")) == str(game_id):
                         for comp in g.get("competitions", [{}])[0].get("competitors", []):
