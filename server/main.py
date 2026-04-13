@@ -957,10 +957,26 @@ async def _alarm_poller() -> None:
 
             for (date_str, league), group_alarms in groups.items():
                 events = events_by_group.get((date_str, league), [])
+                # Build a set of game IDs that are still in the scoreboard feed
+                live_game_ids = {str(e.get("id")) for e in events}
                 for alarm in group_alarms:
                     try:
                         summary = summaries.get(alarm.game_id) if alarm.game_id else None
                         alarm_lang = _get_user_language_from_db(alarm.user_token)
+
+                        # If the game is no longer in the scoreboard feed and it was
+                        # scheduled for today or earlier, it has ended — expire it.
+                        alarm_game_id = str(alarm.game_id or alarm.target_id)
+                        if events and alarm_game_id not in live_game_ids and date_str <= today_str:
+                            log.info("ALARM EXPIRED   | alarm_id=%d | %s | game not in feed | ...%s",
+                                     alarm.id, alarm.target_name or alarm.target_id, alarm.user_token[-8:])
+                            with Session(engine) as session:
+                                db_row = session.get(Alarm, alarm.id)
+                                if db_row:
+                                    db_row.is_active = False
+                                    session.commit()
+                            continue
+
                         result = _check_and_fire(alarm, events, summary, language=alarm_lang)
                         if isinstance(result, dict):
                             # Build dedup key using the same format as the radar
