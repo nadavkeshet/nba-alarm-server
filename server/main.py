@@ -964,11 +964,12 @@ async def _alarm_poller() -> None:
                         summary = summaries.get(alarm.game_id) if alarm.game_id else None
                         alarm_lang = _get_user_language_from_db(alarm.user_token)
 
-                        # If the game is no longer in the scoreboard feed and it was
-                        # scheduled for today or earlier, it has ended — expire it.
+                        # If the game is from a past date, or is no longer in the
+                        # scoreboard feed for today — it has ended, expire it.
                         alarm_game_id = str(alarm.game_id or alarm.target_id)
-                        if events and alarm_game_id not in live_game_ids and date_str <= today_str:
-                            log.info("ALARM EXPIRED   | alarm_id=%d | %s | game not in feed | ...%s",
+                        game_is_gone = (date_str < today_str) or (events and alarm_game_id not in live_game_ids)
+                        if game_is_gone:
+                            log.info("ALARM EXPIRED   | alarm_id=%d | %s | game ended | ...%s",
                                      alarm.id, alarm.target_name or alarm.target_id, alarm.user_token[-8:])
                             with Session(engine) as session:
                                 db_row = session.get(Alarm, alarm.id)
