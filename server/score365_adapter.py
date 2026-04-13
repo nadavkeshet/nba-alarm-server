@@ -477,6 +477,42 @@ def _game_eastern_date(game: dict) -> str:
     return eastern.strftime("%Y%m%d")
 
 
+def next_game_start(leagues: list[str] | None = None) -> datetime | None:
+    """
+    Return the UTC datetime of the earliest upcoming (not yet started) game
+    across the given leagues. Returns None if no future games are found in
+    the 365scores rolling window.
+    """
+    if leagues is None:
+        leagues = list(COMPETITION_IDS.keys())
+    now_utc = datetime.now(timezone.utc)
+    earliest: datetime | None = None
+    for league in leagues:
+        comp_id = COMPETITION_IDS.get(league)
+        if comp_id is None:
+            continue
+        try:
+            raw_games = _fetch_competition_window(comp_id)
+        except Exception:
+            continue
+        for g in raw_games:
+            raw = g.get("startTime", "")
+            if not raw:
+                continue
+            try:
+                dt = datetime.fromisoformat(raw)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+            # statusGroup: 2=pre, 3=live, 4=post — only consider pre-game
+            if g.get("statusGroup") != 2:
+                continue
+            if dt > now_utc and (earliest is None or dt < earliest):
+                earliest = dt
+    return earliest
+
+
 def fetch_games(date_str: str, league: str = "nba") -> list[dict]:
     """
     Fetch games for a date and league, return in ESPN event format.

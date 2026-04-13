@@ -670,7 +670,7 @@ register_db_get_all_users(_get_all_users_for_radar)
 
 # ── Background Async Poller ────────────────────────────────────────────────────
 
-from score365_adapter import fetch_player_boxscore as api_fetch_boxscore
+from score365_adapter import fetch_player_boxscore as api_fetch_boxscore, next_game_start
 
 
 def _get_event_state(event: dict) -> str:
@@ -1057,12 +1057,21 @@ async def _alarm_poller() -> None:
             log.error("Poller: cycle error – %s", exc)
 
         # Dynamic sleep: back off when there is nothing live to watch.
-        if not alarms:
-            await asyncio.sleep(300)   # no active alarms → 5 min
-        elif not any(events_by_group.values()):
-            await asyncio.sleep(120)   # alarms exist but no live games → 2 min
-        else:
+        # When no live games are detected, sleep until 2 min before the next
+        # scheduled game (across all leagues the active alarms care about).
+        # Fall back to 5-min polling if no upcoming game is found in the feed.
+        if any(events_by_group.values()):
             await asyncio.sleep(60)    # live games → 1 min
+        else:
+            alarm_leagues = list({alarm.league or "nba" for alarm in alarms}) if alarms else None
+            nxt = await asyncio.to_thread(next_game_start, alarm_leagues)
+            if nxt is not None:
+                secs = (nxt - datetime.now(timezone.utc)).total_seconds() - 120
+                secs = max(60.0, min(secs, 3600.0))  # clamp: 1 min – 1 hour
+                log.info("Poller: next game at %s — sleeping %.0f s", nxt.isoformat(), secs)
+                await asyncio.sleep(secs)
+            else:
+                await asyncio.sleep(300)  # no upcoming games in feed → 5 min
 
 
 # ── App Lifespan ───────────────────────────────────────────────────────────────

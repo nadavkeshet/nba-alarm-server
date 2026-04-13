@@ -66,6 +66,7 @@ MOCK_STATS = {"PTS": 25, "REB": 9, "AST": 9, "STL": 2, "BLK": 9}
 from score365_adapter import (
     fetch_games as api_fetch_games,
     fetch_player_boxscore as api_fetch_boxscore,
+    next_game_start,
     fetch_all_teams as api_fetch_all_teams,
     fetch_team_players as api_fetch_team_players,
     validate_game_event,
@@ -1427,7 +1428,7 @@ def start_radar_job() -> None:
                 return
             # _run_radar_tick returns:
             #   True  → processed live games successfully
-            #   None  → fetched OK but no games today
+            #   None  → fetched OK but no games right now
             #   False → all API fetches failed
             result = _run_radar_tick(users)
             if result is True:
@@ -1435,7 +1436,18 @@ def start_radar_job() -> None:
                 time.sleep(60)     # live games → poll every 1 min
             elif result is None:
                 api_failures = 0   # no games is not an API failure
-                time.sleep(300)    # no games today → check every 5 min
+                # Sleep until 2 min before the next scheduled game (any league)
+                needed_leagues = []
+                for u in users:
+                    needed_leagues.extend(_leagues_for_user(u.get("prefs", {})))
+                nxt = next_game_start(list(set(needed_leagues)) or None)
+                if nxt is not None:
+                    secs = (nxt - datetime.now(timezone.utc)).total_seconds() - 120
+                    secs = max(60.0, min(secs, 3600.0))  # clamp: 1 min – 1 hour
+                    log.info("RADAR: next game at %s — sleeping %.0f s", nxt.isoformat(), secs)
+                    time.sleep(secs)
+                else:
+                    time.sleep(300)    # no upcoming games in feed → 5 min
             else:
                 api_failures += 1
                 if api_failures >= 3:
