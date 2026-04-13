@@ -1314,8 +1314,8 @@ def _leagues_for_user(prefs: dict) -> set[str]:
     """
     Compute the set of leagues this user actually cares about right now:
       - the leagues their radar is configured to scan
-      - any league referenced by a favorite team (so favorite-team alerts work
-        even when the user hasn't enabled radar for that league)
+      - any league referenced by a favorite team
+      - any league referenced by a favorite player
     """
     leagues: set[str] = set()
     radar = prefs.get("GlobalGameRadar", {}) or {}
@@ -1323,6 +1323,8 @@ def _leagues_for_user(prefs: dict) -> set[str]:
         leagues.update(radar.get("leagues") or ["nba"])
     for t in prefs.get("FavoriteTeams", []) or []:
         leagues.add(t.get("league") or "nba")
+    for p in (prefs.get("FavoritePlayers", {}) or {}).values():
+        leagues.add(p.get("league") or "nba")
     return leagues
 
 
