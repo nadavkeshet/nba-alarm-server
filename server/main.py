@@ -882,17 +882,23 @@ def _check_and_fire(alarm: Alarm, events: list[dict], summary: dict | None = Non
 
 async def _alarm_poller() -> None:
     """
-    Every 10 s:
+    Dynamic poll interval:
+      • No active alarms            → sleep 5 min  (nothing to watch)
+      • Alarms exist, no live games → sleep 2 min  (games might start soon)
+      • Live games present          → sleep 60 s   (active monitoring)
+
+    Per cycle:
       1. Load all is_active alarms from DB.
       2. Group by (game_date, league) and fetch the right scoreboard once per group.
       3. Run _check_and_fire against each alarm with its proper event list.
-      4. Auto-expire alarms whose game_date is more than 1 day in the past
-         (the game is over and we still couldn't satisfy the condition).
+      4. Auto-expire alarms whose game_date is more than 1 day in the past.
     """
     while True:
-        await asyncio.sleep(10)
         if engine is None:
+            await asyncio.sleep(60)
             continue
+        alarms: list = []
+        events_by_group: dict[tuple[str, str], list[dict]] = {}
         try:
             with Session(engine) as session:
                 alarms = (
@@ -940,7 +946,6 @@ async def _alarm_poller() -> None:
                              a.id, a.target_name or a.target_id, a.game_date, a.user_token[-8:])
 
             # ── Fetch scoreboards once per (date, league) ──
-            events_by_group: dict[tuple[str, str], list[dict]] = {}
             for key in groups:
                 date_str, league = key
                 try:
@@ -1050,6 +1055,14 @@ async def _alarm_poller() -> None:
 
         except Exception as exc:
             log.error("Poller: cycle error – %s", exc)
+
+        # Dynamic sleep: back off when there is nothing live to watch.
+        if not alarms:
+            await asyncio.sleep(300)   # no active alarms → 5 min
+        elif not any(events_by_group.values()):
+            await asyncio.sleep(120)   # alarms exist but no live games → 2 min
+        else:
+            await asyncio.sleep(60)    # live games → 1 min
 
 
 # ── App Lifespan ───────────────────────────────────────────────────────────────

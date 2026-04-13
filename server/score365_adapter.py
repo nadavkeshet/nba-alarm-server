@@ -428,7 +428,7 @@ def _eastern_today_yyyymmdd() -> str:
 # combined result briefly so concurrent monitor threads share one HTTP burst.
 _window_cache: dict[int, tuple[float, list[dict]]] = {}
 _window_lock = threading.Lock()
-_WINDOW_TTL = 30  # seconds
+_WINDOW_TTL = 55  # seconds — matches 60s poll interval
 
 
 def _fetch_competition_window(competition_id: int) -> list[dict]:
@@ -537,7 +537,7 @@ def _transform_game(game: dict, league: str = "nba") -> dict:
 
 _boxscore_cache: dict[str, tuple[float, dict]] = {}
 _boxscore_lock = threading.Lock()
-_BOXSCORE_TTL = 9  # seconds
+_BOXSCORE_TTL = 55  # seconds — matches 60s poll interval
 
 
 def fetch_player_boxscore(game_id: str) -> dict | None:

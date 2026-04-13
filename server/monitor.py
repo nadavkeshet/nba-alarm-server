@@ -1347,15 +1347,18 @@ def _run_radar_tick(users: list[dict]) -> bool:
 
     today = _eastern_today()
     events_by_league: dict[str, list[dict]] = {}
+    any_fetch_ok = False
     for league in needed_leagues:
         try:
             events_by_league[league] = api_fetch_games(today, league=league)
+            any_fetch_ok = True
         except Exception as exc:
             log.warning("RADAR: scoreboard fetch failed for %s: %s", league, exc)
             events_by_league[league] = []
 
     if not any(events_by_league.values()):
-        return False
+        # Return None = "fetched OK but no games today" vs False = "API down"
+        return None if any_fetch_ok else False
 
     summaries: dict = {}   # shared lazy cache: game_id → summary JSON
 
@@ -1422,18 +1425,26 @@ def start_radar_job() -> None:
             if not _has_passive_monitoring(users):
                 log.info("RADAR: no active preferences for any user – stopping.")
                 return
-            success = _run_radar_tick(users)
-            if success:
+            # _run_radar_tick returns:
+            #   True  → processed live games successfully
+            #   None  → fetched OK but no games today
+            #   False → all API fetches failed
+            result = _run_radar_tick(users)
+            if result is True:
                 api_failures = 0
+                time.sleep(60)     # live games → poll every 1 min
+            elif result is None:
+                api_failures = 0   # no games is not an API failure
+                time.sleep(300)    # no games today → check every 5 min
             else:
                 api_failures += 1
                 if api_failures >= 3:
                     log.error(
-                        "RADAR_API_DOWN: API-Basketball has failed %d consecutive ticks – "
+                        "RADAR_API_DOWN: 365scores has failed %d consecutive ticks – "
                         "alerts may be missed until it recovers.",
                         api_failures,
                     )
-            time.sleep(POLL_INTERVAL)
+                time.sleep(60)     # retry on error after 1 min
     except Exception as exc:
         log.error("RADAR: unexpected error: %s", exc)
     finally:
@@ -1448,7 +1459,7 @@ def start_radar_job() -> None:
 
 _games_cache: list[dict] = []
 _games_cache_time: float = 0.0
-_GAMES_CACHE_TTL: int = 10  # seconds
+_GAMES_CACHE_TTL: int = 55  # seconds — matches 60s poll interval
 
 def _eastern_today() -> str:
     """Current US Eastern date as YYYYMMDD string."""
