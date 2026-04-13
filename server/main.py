@@ -911,11 +911,15 @@ async def _alarm_poller() -> None:
                 # Skip alarms scheduled for a future date — wait for their day
                 if alarm.game_date and alarm.game_date > today_str:
                     continue
+                # Alarms with no game_date are pre-migration orphans — expire them all.
+                if not alarm.game_date:
+                    stale.append(alarm)
+                    continue
                 # Auto-expire alarms whose game day is in the past — the game is
                 # over and we either missed the window or the condition was
                 # never met. Without this, the user's "active alarms" list grows
                 # forever after they set an alarm on a finished game.
-                if alarm.game_date and alarm.game_date < yesterday_str:
+                if alarm.game_date < yesterday_str:
                     stale.append(alarm)
                     continue
 
@@ -969,11 +973,12 @@ async def _alarm_poller() -> None:
                         # NULL game_date uses today_str (via date_key fallback above),
                         # so past-date NULL alarms are already grouped under today_str.
                         # Additionally expire NULL-date alarms that are no longer in feed.
+                        # At this point alarm.game_date is always set (NULL-date alarms
+                        # are caught above as stale). Expire if the game is no longer in feed.
                         alarm_game_id = str(alarm.game_id or alarm.target_id)
-                        past_date = alarm.game_date and date_str < today_str
-                        null_date_gone = (not alarm.game_date) and events and alarm_game_id not in live_game_ids
-                        today_gone = alarm.game_date and date_str == today_str and events and alarm_game_id not in live_game_ids
-                        game_is_gone = past_date or null_date_gone or today_gone
+                        past_date = date_str < today_str
+                        today_gone = date_str == today_str and events and alarm_game_id not in live_game_ids
+                        game_is_gone = past_date or today_gone
                         if game_is_gone:
                             log.info("ALARM EXPIRED   | alarm_id=%d | %s | game ended | ...%s",
                                      alarm.id, alarm.target_name or alarm.target_id, alarm.user_token[-8:])
