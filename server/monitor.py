@@ -1447,7 +1447,7 @@ def start_radar_job() -> None:
                     log.info("RADAR: next game at %s — sleeping %.0f s", nxt.isoformat(), secs)
                     time.sleep(secs)
                 else:
-                    time.sleep(300)    # no upcoming games in feed → 5 min
+                    time.sleep(6 * 3600)  # no upcoming games in feed → 6 h (off-season / schedule not yet published)
             else:
                 api_failures += 1
                 if api_failures >= 3:

@@ -1071,7 +1071,7 @@ async def _alarm_poller() -> None:
                 log.info("Poller: next game at %s — sleeping %.0f s", nxt.isoformat(), secs)
                 await asyncio.sleep(secs)
             else:
-                await asyncio.sleep(300)  # no upcoming games in feed → 5 min
+                await asyncio.sleep(6 * 3600)  # no upcoming games in feed → 6 h (off-season / schedule not yet published)
 
 
 # ── App Lifespan ───────────────────────────────────────────────────────────────
