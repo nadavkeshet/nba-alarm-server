@@ -2104,6 +2104,7 @@ def active_monitors(user_token: str = ""):
                             "enabled":       pref.radar_enabled,
                             "max_diff":      pref.radar_gap,
                             "start_quarter": pref.radar_start_q,
+                            "leagues":       _split_leagues(pref.radar_leagues),
                         }
                         hist_cfg = {
                             "enabled":    pref.historical_mode_enabled,
