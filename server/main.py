@@ -2258,6 +2258,26 @@ class BroadcastRequest(BaseModel):
     body:  str
     alert_type: str = "info"   # "alarm" plays sound, "info" is silent
 
+class SendToTokenRequest(BaseModel):
+    push_token: str
+    title: str
+    body: str
+    alert_type: str = "alarm"
+    sound_channel: str = "classic_alarm"
+
+@app.post("/admin/send-to-token")
+def admin_send_to_token(req: SendToTokenRequest, x_admin_key: str = Header(default="")):
+    if x_admin_key != ADMIN_KEY:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    _send_push_notification(
+        push_token=req.push_token,
+        title=req.title,
+        body=req.body,
+        alert_type=req.alert_type,
+        sound_channel=req.sound_channel,
+    )
+    return {"sent": True}
+
 @app.post("/admin/broadcast")
 def admin_broadcast(req: BroadcastRequest, x_admin_key: str = Header(default="")):
     if x_admin_key != ADMIN_KEY:
