@@ -670,7 +670,7 @@ register_db_get_all_users(_get_all_users_for_radar)
 
 # ── Background Async Poller ────────────────────────────────────────────────────
 
-from score365_adapter import fetch_player_boxscore as api_fetch_boxscore
+from score365_adapter import fetch_player_boxscore as api_fetch_boxscore, next_game_start
 
 
 def _get_event_state(event: dict) -> str:
@@ -882,17 +882,23 @@ def _check_and_fire(alarm: Alarm, events: list[dict], summary: dict | None = Non
 
 async def _alarm_poller() -> None:
     """
-    Every 10 s:
+    Dynamic poll interval:
+      • No active alarms            → sleep 5 min  (nothing to watch)
+      • Alarms exist, no live games → sleep 2 min  (games might start soon)
+      • Live games present          → sleep 60 s   (active monitoring)
+
+    Per cycle:
       1. Load all is_active alarms from DB.
       2. Group by (game_date, league) and fetch the right scoreboard once per group.
       3. Run _check_and_fire against each alarm with its proper event list.
-      4. Auto-expire alarms whose game_date is more than 1 day in the past
-         (the game is over and we still couldn't satisfy the condition).
+      4. Auto-expire alarms whose game_date is more than 1 day in the past.
     """
     while True:
-        await asyncio.sleep(10)
         if engine is None:
+            await asyncio.sleep(60)
             continue
+        alarms: list = []
+        events_by_group: dict[tuple[str, str], list[dict]] = {}
         try:
             with Session(engine) as session:
                 alarms = (
@@ -911,11 +917,15 @@ async def _alarm_poller() -> None:
                 # Skip alarms scheduled for a future date — wait for their day
                 if alarm.game_date and alarm.game_date > today_str:
                     continue
+                # Alarms with no game_date are pre-migration orphans — expire them all.
+                if not alarm.game_date:
+                    stale.append(alarm)
+                    continue
                 # Auto-expire alarms whose game day is in the past — the game is
                 # over and we either missed the window or the condition was
                 # never met. Without this, the user's "active alarms" list grows
                 # forever after they set an alarm on a finished game.
-                if alarm.game_date and alarm.game_date < yesterday_str:
+                if alarm.game_date < yesterday_str:
                     stale.append(alarm)
                     continue
 
@@ -936,7 +946,6 @@ async def _alarm_poller() -> None:
                              a.id, a.target_name or a.target_id, a.game_date, a.user_token[-8:])
 
             # ── Fetch scoreboards once per (date, league) ──
-            events_by_group: dict[tuple[str, str], list[dict]] = {}
             for key in groups:
                 date_str, league = key
                 try:
@@ -957,10 +966,34 @@ async def _alarm_poller() -> None:
 
             for (date_str, league), group_alarms in groups.items():
                 events = events_by_group.get((date_str, league), [])
+                # Build a set of game IDs that are still in the scoreboard feed
+                live_game_ids = {str(e.get("id")) for e in events}
                 for alarm in group_alarms:
                     try:
                         summary = summaries.get(alarm.game_id) if alarm.game_id else None
                         alarm_lang = _get_user_language_from_db(alarm.user_token)
+
+                        # If the game is from a past date, or is no longer in the
+                        # scoreboard feed for today — it has ended, expire it.
+                        # NULL game_date uses today_str (via date_key fallback above),
+                        # so past-date NULL alarms are already grouped under today_str.
+                        # Additionally expire NULL-date alarms that are no longer in feed.
+                        # At this point alarm.game_date is always set (NULL-date alarms
+                        # are caught above as stale). Expire if the game is no longer in feed.
+                        alarm_game_id = str(alarm.game_id or alarm.target_id)
+                        past_date = date_str < today_str
+                        today_gone = date_str == today_str and events and alarm_game_id not in live_game_ids
+                        game_is_gone = past_date or today_gone
+                        if game_is_gone:
+                            log.info("ALARM EXPIRED   | alarm_id=%d | %s | game ended | ...%s",
+                                     alarm.id, alarm.target_name or alarm.target_id, alarm.user_token[-8:])
+                            with Session(engine) as session:
+                                db_row = session.get(Alarm, alarm.id)
+                                if db_row:
+                                    db_row.is_active = False
+                                    session.commit()
+                            continue
+
                         result = _check_and_fire(alarm, events, summary, language=alarm_lang)
                         if isinstance(result, dict):
                             # Build dedup key using the same format as the radar
@@ -1022,6 +1055,23 @@ async def _alarm_poller() -> None:
 
         except Exception as exc:
             log.error("Poller: cycle error – %s", exc)
+
+        # Dynamic sleep: back off when there is nothing live to watch.
+        # When no live games are detected, sleep until 2 min before the next
+        # scheduled game (across all leagues the active alarms care about).
+        # Fall back to 5-min polling if no upcoming game is found in the feed.
+        if any(events_by_group.values()):
+            await asyncio.sleep(60)    # live games → 1 min
+        else:
+            alarm_leagues = list({alarm.league or "nba" for alarm in alarms}) if alarms else None
+            nxt = await asyncio.to_thread(next_game_start, alarm_leagues)
+            if nxt is not None:
+                secs = (nxt - datetime.now(timezone.utc)).total_seconds() - 120
+                secs = max(60.0, min(secs, 3600.0))  # clamp: 1 min – 1 hour
+                log.info("Poller: next game at %s — sleeping %.0f s", nxt.isoformat(), secs)
+                await asyncio.sleep(secs)
+            else:
+                await asyncio.sleep(6 * 3600)  # no upcoming games in feed → 6 h (off-season / schedule not yet published)
 
 
 # ── App Lifespan ───────────────────────────────────────────────────────────────
@@ -1991,8 +2041,8 @@ def roster(game_id: str):
 
 
 @app.get("/game-summary")
-def game_summary(gameId: str, date: Optional[str] = None):
-    return fetch_game_summary_roster(gameId, date=date)
+def game_summary(gameId: str, date: Optional[str] = None, league: Optional[str] = None):
+    return fetch_game_summary_roster(gameId, date=date, league=league)
 
 
 @app.get("/all-teams-and-players")
@@ -2104,6 +2154,7 @@ def active_monitors(user_token: str = ""):
                             "enabled":       pref.radar_enabled,
                             "max_diff":      pref.radar_gap,
                             "start_quarter": pref.radar_start_q,
+                            "leagues":       _split_leagues(pref.radar_leagues),
                         }
                         hist_cfg = {
                             "enabled":    pref.historical_mode_enabled,

@@ -428,7 +428,7 @@ def _eastern_today_yyyymmdd() -> str:
 # combined result briefly so concurrent monitor threads share one HTTP burst.
 _window_cache: dict[int, tuple[float, list[dict]]] = {}
 _window_lock = threading.Lock()
-_WINDOW_TTL = 30  # seconds
+_WINDOW_TTL = 55  # seconds — matches 60s poll interval
 
 
 def _fetch_competition_window(competition_id: int) -> list[dict]:
@@ -475,6 +475,42 @@ def _game_eastern_date(game: dict) -> str:
         return ""
     eastern = dt.astimezone(timezone(timedelta(hours=-5)))
     return eastern.strftime("%Y%m%d")
+
+
+def next_game_start(leagues: list[str] | None = None) -> datetime | None:
+    """
+    Return the UTC datetime of the earliest upcoming (not yet started) game
+    across the given leagues. Returns None if no future games are found in
+    the 365scores rolling window.
+    """
+    if leagues is None:
+        leagues = list(COMPETITION_IDS.keys())
+    now_utc = datetime.now(timezone.utc)
+    earliest: datetime | None = None
+    for league in leagues:
+        comp_id = COMPETITION_IDS.get(league)
+        if comp_id is None:
+            continue
+        try:
+            raw_games = _fetch_competition_window(comp_id)
+        except Exception:
+            continue
+        for g in raw_games:
+            raw = g.get("startTime", "")
+            if not raw:
+                continue
+            try:
+                dt = datetime.fromisoformat(raw)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+            # statusGroup: 2=pre, 3=live, 4=post — only consider pre-game
+            if g.get("statusGroup") != 2:
+                continue
+            if dt > now_utc and (earliest is None or dt < earliest):
+                earliest = dt
+    return earliest
 
 
 def fetch_games(date_str: str, league: str = "nba") -> list[dict]:
@@ -537,7 +573,7 @@ def _transform_game(game: dict, league: str = "nba") -> dict:
 
 _boxscore_cache: dict[str, tuple[float, dict]] = {}
 _boxscore_lock = threading.Lock()
-_BOXSCORE_TTL = 9  # seconds
+_BOXSCORE_TTL = 55  # seconds — matches 60s poll interval
 
 
 def fetch_player_boxscore(game_id: str) -> dict | None:

@@ -66,6 +66,7 @@ MOCK_STATS = {"PTS": 25, "REB": 9, "AST": 9, "STL": 2, "BLK": 9}
 from score365_adapter import (
     fetch_games as api_fetch_games,
     fetch_player_boxscore as api_fetch_boxscore,
+    next_game_start,
     fetch_all_teams as api_fetch_all_teams,
     fetch_team_players as api_fetch_team_players,
     validate_game_event,
@@ -549,7 +550,7 @@ def _fetch_player_stats(game_id: str, player_id: str) -> dict | None:
     return None
 
 
-def fetch_game_summary_roster(game_id: str, date: str | None = None) -> dict:
+def fetch_game_summary_roster(game_id: str, date: str | None = None, league: str | None = None) -> dict:
     """
     Return cached rosters for both teams in game_id.
 
@@ -561,20 +562,22 @@ def fetch_game_summary_roster(game_id: str, date: str | None = None) -> dict:
     # ── Step 1: collect raw team stubs ─────────────────────────────────────────
     team_stubs: list[dict] = []
 
-    # Try today's NBA cache first
-    event = _fetch_nba_game(game_id)
-    if event is not None:
-        for comp in event.get("competitions", [{}])[0].get("competitors", []):
-            team_stubs.append(comp.get("team", {}))
+    # Try today's NBA cache first (fast path for live NBA games)
+    if not league or league == "nba":
+        event = _fetch_nba_game(game_id)
+        if event is not None:
+            for comp in event.get("competitions", [{}])[0].get("competitors", []):
+                team_stubs.append(comp.get("team", {}))
 
-    # If not found, search all leagues for the given date (or today)
+    # If not found, search the relevant league(s) for the given date
     if not team_stubs:
         search_date = date or _eastern_today()
-        for league in LEAGUES:
-            if league == "nba" and not date:
-                continue  # already checked via cache
+        leagues_to_search = [league] if league and league in LEAGUES else list(LEAGUES.keys())
+        for lg in leagues_to_search:
+            if lg == "nba" and not date and not league:
+                continue  # already checked via NBA cache above
             try:
-                games = api_fetch_games(search_date, league=league)
+                games = api_fetch_games(search_date, league=lg)
                 for g in games:
                     if str(g.get("id")) == str(game_id):
                         for comp in g.get("competitions", [{}])[0].get("competitors", []):
@@ -1149,13 +1152,14 @@ def _run_radar_tick_for_user(
                             b.get("is_euroleague_evening") for b in broadcasts
                         ):
                             continue
+                    event_league = event.get("league", "nba")
                     if notify_start and diff > max_d:
                         label = t_title("period_starting", language)
                         body_text = t_body_period_start(game_name, quarter, diff, language)
                         dedup_key = f"{game_id}_fav_start_q{start_q}"
                     else:
                         title_key = "fav_team" if "team_name" in criteria else "radar"
-                        label = t_title(title_key, language)
+                        label = t_title(title_key, language, league=event_league)
                         body_text = t_body_game(game_name, quarter, diff, language)
                         dedup_key = f"{game_id}_fav_q{start_q}"
                     if _fire_once(dedup_key, token):
@@ -1312,8 +1316,8 @@ def _leagues_for_user(prefs: dict) -> set[str]:
     """
     Compute the set of leagues this user actually cares about right now:
       - the leagues their radar is configured to scan
-      - any league referenced by a favorite team (so favorite-team alerts work
-        even when the user hasn't enabled radar for that league)
+      - any league referenced by a favorite team
+      - any league referenced by a favorite player
     """
     leagues: set[str] = set()
     radar = prefs.get("GlobalGameRadar", {}) or {}
@@ -1321,6 +1325,8 @@ def _leagues_for_user(prefs: dict) -> set[str]:
         leagues.update(radar.get("leagues") or ["nba"])
     for t in prefs.get("FavoriteTeams", []) or []:
         leagues.add(t.get("league") or "nba")
+    for p in (prefs.get("FavoritePlayers", {}) or {}).values():
+        leagues.add(p.get("league") or "nba")
     return leagues
 
 
@@ -1343,15 +1349,18 @@ def _run_radar_tick(users: list[dict]) -> bool:
 
     today = _eastern_today()
     events_by_league: dict[str, list[dict]] = {}
+    any_fetch_ok = False
     for league in needed_leagues:
         try:
             events_by_league[league] = api_fetch_games(today, league=league)
+            any_fetch_ok = True
         except Exception as exc:
             log.warning("RADAR: scoreboard fetch failed for %s: %s", league, exc)
             events_by_league[league] = []
 
     if not any(events_by_league.values()):
-        return False
+        # Return None = "fetched OK but no games today" vs False = "API down"
+        return None if any_fetch_ok else False
 
     summaries: dict = {}   # shared lazy cache: game_id → summary JSON
 
@@ -1418,18 +1427,37 @@ def start_radar_job() -> None:
             if not _has_passive_monitoring(users):
                 log.info("RADAR: no active preferences for any user – stopping.")
                 return
-            success = _run_radar_tick(users)
-            if success:
+            # _run_radar_tick returns:
+            #   True  → processed live games successfully
+            #   None  → fetched OK but no games right now
+            #   False → all API fetches failed
+            result = _run_radar_tick(users)
+            if result is True:
                 api_failures = 0
+                time.sleep(60)     # live games → poll every 1 min
+            elif result is None:
+                api_failures = 0   # no games is not an API failure
+                # Sleep until 2 min before the next scheduled game (any league)
+                needed_leagues = []
+                for u in users:
+                    needed_leagues.extend(_leagues_for_user(u.get("prefs", {})))
+                nxt = next_game_start(list(set(needed_leagues)) or None)
+                if nxt is not None:
+                    secs = (nxt - datetime.now(timezone.utc)).total_seconds() - 120
+                    secs = max(60.0, min(secs, 3600.0))  # clamp: 1 min – 1 hour
+                    log.info("RADAR: next game at %s — sleeping %.0f s", nxt.isoformat(), secs)
+                    time.sleep(secs)
+                else:
+                    time.sleep(6 * 3600)  # no upcoming games in feed → 6 h (off-season / schedule not yet published)
             else:
                 api_failures += 1
                 if api_failures >= 3:
                     log.error(
-                        "RADAR_API_DOWN: API-Basketball has failed %d consecutive ticks – "
+                        "RADAR_API_DOWN: 365scores has failed %d consecutive ticks – "
                         "alerts may be missed until it recovers.",
                         api_failures,
                     )
-            time.sleep(POLL_INTERVAL)
+                time.sleep(60)     # retry on error after 1 min
     except Exception as exc:
         log.error("RADAR: unexpected error: %s", exc)
     finally:
@@ -1444,7 +1472,7 @@ def start_radar_job() -> None:
 
 _games_cache: list[dict] = []
 _games_cache_time: float = 0.0
-_GAMES_CACHE_TTL: int = 10  # seconds
+_GAMES_CACHE_TTL: int = 55  # seconds — matches 60s poll interval
 
 def _eastern_today() -> str:
     """Current US Eastern date as YYYYMMDD string."""
