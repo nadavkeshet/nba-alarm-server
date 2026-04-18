@@ -10,6 +10,19 @@ DEFAULT_PARAMS = {
 }
 
 
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Linux; Android 14; Pixel 8) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Mobile Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.365scores.com/",
+    "Origin": "https://www.365scores.com",
+}
+
+
 class Client365:
     """HTTP client for 365Scores API."""
 
@@ -20,6 +33,7 @@ class Client365:
         self._http = httpx.Client(
             base_url=BASE_URL,
             params=params,
+            headers=_HEADERS,
             timeout=30.0,
             follow_redirects=True,
         )
