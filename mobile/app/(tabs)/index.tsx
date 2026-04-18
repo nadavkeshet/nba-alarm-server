@@ -140,7 +140,7 @@ function GameCard({
   }, [isLive]);
 
   return (
-    <TouchableOpacity style={styles.gameCard} onPress={isFinal ? undefined : onPress} activeOpacity={isFinal ? 1 : 0.75} disabled={isFinal}>
+    <TouchableOpacity style={styles.gameCard} onPress={onPress} activeOpacity={0.75}>
       <View style={styles.cardHeader}>
         {isLive ? (
           <View style={styles.liveBadge}>
@@ -849,7 +849,10 @@ export default function HomeScreen() {
             return (
               <GameCard
                 item={item}
-                onPress={() => setSelectedGame(item)}
+                onPress={() => {
+                  setSelectedGame(item);
+                  if (item?.status?.type?.state === 'post') setAlarmTab('boxscore');
+                }}
                 favoriteTeamIds={favoriteTeamIds}
                 broadcasts={broadcasts[item.id] ?? []}
                 watchScore={score}
@@ -883,36 +886,39 @@ export default function HomeScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* Alert type toggle */}
-            <View style={styles.alertTypeRow}>
-              {(['alarm', 'silent'] as const).map(type => (
-                <TouchableOpacity
-                  key={type}
-                  style={[styles.alertTypeBtn, alertType === type && styles.alertTypeBtnActive]}
-                  onPress={() => setAlertType(type)}
-                >
-                  <Text style={styles.alertTypeIcon}>{type === 'alarm' ? '🚨' : '🔕'}</Text>
-                  <Text style={[styles.alertTypeText, alertType === type && styles.alertTypeTextActive]}>
-                    {type === 'alarm' ? t('alarm.alarm') : t('alarm.silent')}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+            {/* Alert type toggle + tabs — hidden for finished games */}
+            {selectedGame?.status?.type?.state !== 'post' && (
+              <>
+                <View style={styles.alertTypeRow}>
+                  {(['alarm', 'silent'] as const).map(type => (
+                    <TouchableOpacity
+                      key={type}
+                      style={[styles.alertTypeBtn, alertType === type && styles.alertTypeBtnActive]}
+                      onPress={() => setAlertType(type)}
+                    >
+                      <Text style={styles.alertTypeIcon}>{type === 'alarm' ? '🚨' : '🔕'}</Text>
+                      <Text style={[styles.alertTypeText, alertType === type && styles.alertTypeTextActive]}>
+                        {type === 'alarm' ? t('alarm.alarm') : t('alarm.silent')}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
 
-            {/* Tab selector */}
-            <View style={styles.alarmTabs}>
-              {(['game', 'player', 'boxscore'] as const).map(tab => (
-                <TouchableOpacity
-                  key={tab}
-                  style={[styles.alarmTab, alarmTab === tab && styles.alarmTabActive]}
-                  onPress={() => setAlarmTab(tab)}
-                >
-                  <Text style={[styles.alarmTabText, alarmTab === tab && styles.alarmTabTextActive]}>
-                    {tab === 'game' ? t('alarm.gameAlarm') : tab === 'player' ? t('alarm.playerAlarm') : 'Boxscore'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+                <View style={styles.alarmTabs}>
+                  {(['game', 'player', 'boxscore'] as const).map(tab => (
+                    <TouchableOpacity
+                      key={tab}
+                      style={[styles.alarmTab, alarmTab === tab && styles.alarmTabActive]}
+                      onPress={() => setAlarmTab(tab)}
+                    >
+                      <Text style={[styles.alarmTabText, alarmTab === tab && styles.alarmTabTextActive]}>
+                        {tab === 'game' ? t('alarm.gameAlarm') : tab === 'player' ? t('alarm.playerAlarm') : 'Boxscore'}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </>
+            )}
 
             {/* ── Game Alarm tab ── */}
             {alarmTab === 'game' && (
