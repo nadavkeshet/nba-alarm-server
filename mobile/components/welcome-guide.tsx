@@ -86,6 +86,13 @@ function makeSlides(t: TFunc): Slide[] {
       bullets: [t('guide.slide7.b1'), t('guide.slide7.b2'), t('guide.slide7.b3')],
     },
     {
+      icon:  'bar-chart' as const,
+      color: '#22c55e', bg: 'rgba(34,197,94,0.12)',
+      title: t('guide.slide9.title'),
+      body:  t('guide.slide9.body'),
+      where: t('guide.slide9.where'),
+    },
+    {
       icon:    'information-circle' as const,
       color:   C.muted, bg: 'rgba(107,138,173,0.12)',
       title:   t('guide.slide8.title'),

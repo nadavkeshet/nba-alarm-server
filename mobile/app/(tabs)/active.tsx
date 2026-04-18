@@ -54,6 +54,7 @@ interface GlobalRadar {
   running: boolean;
   max_diff: number;
   start_quarter: number;
+  leagues?: string[];
 }
 
 interface FavTeam {
@@ -266,7 +267,7 @@ export default function ActiveScreen() {
   useEffect(() => {
     const unsub = messaging().onMessage(async remoteMessage => {
       const data = remoteMessage.data ?? {};
-      if (data.alert_type !== 'alarm') return;
+      if (!data.title && !data.body) return;
       const hit: TrophyHit = {
         title:      String(data.title ?? 'Alarm Fired'),
         body:       String(data.body  ?? ''),
@@ -616,9 +617,18 @@ export default function ActiveScreen() {
           <View style={styles.statusRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.rowLabel}>{t('active.radarAlerts')}</Text>
-              <Text style={styles.rowSub}>
-                {radar?.enabled ? `≤ ${radar.max_diff} pts · From ${qLabel(radar.start_quarter)}` : t('active.radarDisabled')}
-              </Text>
+              {radar?.enabled ? (
+                <>
+                  <Text style={styles.rowSub}>{`≤ ${radar.max_diff} pts · From ${qLabel(radar.start_quarter)}`}</Text>
+                  <Text style={styles.rowSub}>
+                    {(radar.leagues && radar.leagues.length > 0 ? radar.leagues : ['nba'])
+                      .map(l => ({ nba: 'NBA', euroleague: 'Euroleague', eurocup: 'EuroCup', bcl: 'BCL', winner_league: 'Winner' }[l] ?? l.toUpperCase()))
+                      .join(' · ')}
+                  </Text>
+                </>
+              ) : (
+                <Text style={styles.rowSub}>{t('active.radarDisabled')}</Text>
+              )}
             </View>
             <View style={[styles.statusDot, { backgroundColor: radar?.enabled ? C.accentBlue : C.border }]} />
           </View>

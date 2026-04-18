@@ -43,6 +43,18 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 
 const REGISTER_TOKEN_URL = `${SERVER_URL}/register-token`;
 
+// ─── League definitions ───────────────────────────────────────────────────────
+
+const LEAGUES = [
+  { id: 'nba',          label: 'NBA' },
+  { id: 'euroleague',   label: 'Euroleague' },
+  { id: 'eurocup',      label: 'EuroCup' },
+  { id: 'bcl',          label: 'BCL' },
+  { id: 'winner_league', label: 'Winner' },
+] as const;
+
+type LeagueId = typeof LEAGUES[number]['id'];
+
 // ─── Notification setup ───────────────────────────────────────────────────────
 
 const ALARM_CHANNEL = 'classic_alarm';
@@ -87,11 +99,15 @@ function GameCard({
   onPress,
   favoriteTeamIds,
   broadcasts,
+  watchScore,
+  noSpoiler,
 }: {
   item: any;
   onPress: () => void;
   favoriteTeamIds: Set<string>;
   broadcasts: BroadcastInfo[];
+  watchScore?: number | null;
+  noSpoiler?: boolean;
 }) {
   const { colors: C } = useTheme();
   const styles = useMemo(() => makeStyles(C), [C]);
@@ -151,18 +167,28 @@ function GameCard({
         <View style={styles.teamBlock}>
           <TeamBadge abbreviation={away?.team?.abbreviation ?? ''} size={56} />
           <Text style={styles.teamAbbr}>{isHebrew ? teamAbbrToHe(away?.team?.abbreviation ?? '') : (away?.team?.abbreviation ?? '?')}</Text>
-          {showScore && <Text style={styles.scoreText}>{away?.score ?? '—'}</Text>}
+          {showScore && <Text style={styles.scoreText}>{(noSpoiler && isFinal) ? '—' : (away?.score ?? '—')}</Text>}
           {awayStarred ? <Text style={styles.starBtnActive}>★</Text> : null}
         </View>
 
         <View style={styles.vsDivider}>
           <Text style={styles.vsText}>VS</Text>
+          {isFinal && watchScore != null && (
+            <View style={[styles.watchScoreBadge, {
+              backgroundColor: watchScore >= 8 ? 'rgba(34,197,94,0.15)' : watchScore >= 5 ? 'rgba(255,107,0,0.15)' : 'rgba(107,138,173,0.12)',
+              borderColor:     watchScore >= 8 ? '#22c55e'              : watchScore >= 5 ? '#FF6B00'              : '#4a6580',
+            }]}>
+              <Text style={[styles.watchScoreText, {
+                color: watchScore >= 8 ? '#22c55e' : watchScore >= 5 ? '#FF6B00' : '#6b8aad',
+              }]}>{watchScore.toFixed(1)}</Text>
+            </View>
+          )}
         </View>
 
         <View style={styles.teamBlock}>
           <TeamBadge abbreviation={home?.team?.abbreviation ?? ''} size={56} />
           <Text style={styles.teamAbbr}>{isHebrew ? teamAbbrToHe(home?.team?.abbreviation ?? '') : (home?.team?.abbreviation ?? '?')}</Text>
-          {showScore && <Text style={styles.scoreText}>{home?.score ?? '—'}</Text>}
+          {showScore && <Text style={styles.scoreText}>{(noSpoiler && isFinal) ? '—' : (home?.score ?? '—')}</Text>}
           {homeStarred ? <Text style={styles.starBtnActive}>★</Text> : null}
         </View>
       </View>
@@ -259,7 +285,7 @@ async function sendTokenToServer(token: string): Promise<boolean> {
 // ─── HomeScreen ───────────────────────────────────────────────────────────────
 
 export default function HomeScreen() {
-  const { colors: C } = useTheme();
+  const { colors: C, noSpoiler } = useTheme();
   const styles = useMemo(() => makeStyles(C), [C]);
   const { t, isHebrew } = useLanguage();
 
@@ -308,6 +334,10 @@ export default function HomeScreen() {
       return next;
     });
 
+  // ── League filter ─────────────────────────────────────────────────
+  const [selectedLeague, setSelectedLeague] = useState<LeagueId>('nba');
+  const selectedLeagueRef = useRef<LeagueId>('nba');
+
   // ── Games state ───────────────────────────────────────────────────
   const [games, setGames]       = useState<any[]>([]);
   const [loading, setLoading]   = useState(true);
@@ -321,6 +351,9 @@ export default function HomeScreen() {
 
   // ── Broadcast (EPG) state ─────────────────────────────────────────
   const [broadcasts, setBroadcasts] = useState<Record<string, BroadcastInfo[]>>({});
+
+  // ── Watch scores ──────────────────────────────────────────────────
+  const [watchScores, setWatchScores] = useState<Record<string, Record<string, number>>>({});
 
   // ── Info modal (replaces system alert() for confirmations & errors) ─
   const [infoModal, setInfoModal] = useState<{ visible: boolean; title: string; message: string }>(
@@ -373,16 +406,16 @@ export default function HomeScreen() {
   };
 
   // ── Fetch games ──────────────────────────────────────────────────
-  const fetchGames = async (silent = false, dateOverride?: Date) => {
+  const fetchGames = async (silent = false, dateOverride?: Date, leagueOverride?: LeagueId) => {
     if (!silent) setLoading(true);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10_000);
     const dateStr = toDateStr(dateOverride ?? selectedDate);
+    const league = leagueOverride ?? selectedLeagueRef.current;
     try {
-      const resp = await fetch(`${SERVER_URL}/games?date=${dateStr}`, { signal: controller.signal });
+      const resp = await fetch(`${SERVER_URL}/games?date=${dateStr}&league=${encodeURIComponent(league)}`, { signal: controller.signal });
       if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
       const data = await resp.json();
-      if (!silent) LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setGames(data.games || []);
       setFetchError(false);
       // Server recovered — stop auto-retry if running
@@ -409,12 +442,19 @@ export default function HomeScreen() {
     setRefreshing(false);
   };
 
+  const onLeagueChange = (leagueId: LeagueId) => {
+    setSelectedLeague(leagueId);
+    selectedLeagueRef.current = leagueId;
+    fetchGames(false, selectedDate, leagueId);
+  };
+
   // ── Load roster ──────────────────────────────────────────────────
   const loadRoster = async () => {
     if (!selectedGame) return;
     setRosterLoading(true);
     try {
-      const resp = await fetch(`${SERVER_URL}/game-summary?gameId=${selectedGame.id}`);
+      const leagueParam = selectedGame.league ? `&league=${encodeURIComponent(selectedGame.league)}` : '';
+      const resp = await fetch(`${SERVER_URL}/game-summary?gameId=${selectedGame.id}&date=${toDateStr(selectedDate)}${leagueParam}`);
       if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
       const data = await resp.json();
       setTeams(data.teams || []);
@@ -512,7 +552,7 @@ export default function HomeScreen() {
     // 60-second live-score auto-refresh (today only)
     const refreshInterval = setInterval(() => {
       const cur = selectedDateRef.current;
-      if (isToday(cur)) fetchGames(true, cur);
+      if (isToday(cur)) fetchGames(true, cur, selectedLeagueRef.current);
     }, 60_000);
 
     return () => {
@@ -530,8 +570,24 @@ export default function HomeScreen() {
 
   // Re-fetch when selected date changes
   useEffect(() => {
-    fetchGames(false, selectedDate);
+    fetchGames(false, selectedDate, selectedLeagueRef.current);
   }, [selectedDate]);
+
+
+  // Fetch watch scores for current date+league (only matters for finished games)
+  useEffect(() => {
+    const dateStr = toDateStr(selectedDate);
+    const cacheKey = `${dateStr}_${selectedLeague}`;
+    fetch(`${SERVER_URL}/watch-scores?date=${dateStr}&league=${encodeURIComponent(selectedLeague)}`)
+      .then(r => r.json())
+      .then(data => {
+        const raw: Record<string, { score: number }> = data.scores ?? {};
+        const flat: Record<string, number> = {};
+        for (const [key, val] of Object.entries(raw)) flat[key] = val.score;
+        setWatchScores(prev => ({ ...prev, [cacheKey]: flat }));
+      })
+      .catch(() => {});
+  }, [selectedDate, selectedLeague]);
 
   // Auto-load roster when switching to player tab
   useEffect(() => {
@@ -705,6 +761,26 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* League filter pills */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.leaguePillsContainer}
+        style={styles.leaguePillsScroll}
+      >
+        {LEAGUES.map(lg => (
+          <TouchableOpacity
+            key={lg.id}
+            style={[styles.leaguePill, selectedLeague === lg.id && styles.leaguePillActive]}
+            onPress={() => onLeagueChange(lg.id)}
+          >
+            <Text style={[styles.leaguePillText, selectedLeague === lg.id && styles.leaguePillTextActive]}>
+              {lg.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+
       {/* Game list label */}
       <Text style={[styles.sectionLabel, { paddingHorizontal: 16, marginBottom: 8 }]}>
         {isToday(selectedDate) ? t('home.todaysGames') : t('home.dateGames')}
@@ -733,14 +809,24 @@ export default function HomeScreen() {
         <FlatList
           data={games}
           keyExtractor={(item: any) => item.id.toString()}
-          renderItem={({ item }: { item: any }) => (
-            <GameCard
-              item={item}
-              onPress={() => setSelectedGame(item)}
-              favoriteTeamIds={favoriteTeamIds}
-              broadcasts={broadcasts[item.id] ?? []}
-            />
-          )}
+          renderItem={({ item }: { item: any }) => {
+            const { home, away } = getTeams(item);
+            const homeAbbr = home?.team?.abbreviation ?? '';
+            const awayAbbr = away?.team?.abbreviation ?? '';
+            const dateStr = toDateStr(selectedDate);
+            const wsKey = `${homeAbbr}_${awayAbbr}`;
+            const score = watchScores[`${dateStr}_${selectedLeague}`]?.[wsKey] ?? null;
+            return (
+              <GameCard
+                item={item}
+                onPress={() => setSelectedGame(item)}
+                favoriteTeamIds={favoriteTeamIds}
+                broadcasts={broadcasts[item.id] ?? []}
+                watchScore={score}
+                noSpoiler={noSpoiler}
+              />
+            );
+          }}
           contentContainerStyle={{ paddingBottom: 24 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#4d8cf5" />}
         />
@@ -1104,8 +1190,10 @@ const makeStyles = (C: AppColors) => StyleSheet.create({
   logoPlaceholder: { backgroundColor: C.border, borderRadius: 28 },
   teamAbbr:        { fontSize: 14, fontWeight: '800', color: C.textPrimary, letterSpacing: 0.5 },
   scoreText:       { fontSize: 32, fontWeight: '800', color: C.textPrimary, lineHeight: 36 },
-  vsDivider:       { width: 40, alignItems: 'center' },
+  vsDivider:       { width: 40, alignItems: 'center', gap: 6 },
   vsText:          { fontSize: 12, color: C.textMuted, fontWeight: '700', letterSpacing: 1 },
+  watchScoreBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, borderWidth: 1 },
+  watchScoreText:  { fontSize: 11, fontWeight: '800' },
 
   starBtn:       { fontSize: 22, color: C.textMuted },
   starBtnActive: { color: '#f5c518' },
@@ -1288,5 +1376,25 @@ const makeStyles = (C: AppColors) => StyleSheet.create({
     alignItems: 'center',
   },
   infoOkText: { color: C.orange, fontWeight: '800', fontSize: 15 },
+
+  // ── League filter pills ───────────────────────────────────────────
+  leaguePillsScroll: { height: 44, flexGrow: 0, flexShrink: 0, marginBottom: 2 },
+  leaguePillsContainer: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 16, paddingVertical: 6, gap: 8,
+  },
+  leaguePill: {
+    height: 32, paddingHorizontal: 14, borderRadius: 16,
+    backgroundColor: C.cardAlt, borderWidth: 1, borderColor: C.border,
+    flexShrink: 0, alignItems: 'center', justifyContent: 'center',
+  },
+  leaguePillActive: {
+    backgroundColor: 'rgba(255,107,0,0.12)', borderColor: C.orange,
+  },
+  leaguePillText: {
+    fontSize: 13, fontWeight: '700', color: C.textMuted,
+    includeFontPadding: false, textAlignVertical: 'center', lineHeight: 16,
+  },
+  leaguePillTextActive: { color: C.orange },
 
 });

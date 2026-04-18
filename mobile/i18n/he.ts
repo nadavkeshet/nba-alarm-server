@@ -16,7 +16,7 @@ export const he = {
   'home.connectionErrorSub':'לא ניתן לטעון את משחקי היום. בדוק את החיבור ונסה שוב.',
   'home.retry':            'נסה שוב',
   'home.noGames':          'אין משחקים',
-  'home.noGamesSub':       'אין משחקי NBA ביום זה.',
+  'home.noGamesSub':       'אין משחקים ביום זה.',
 
   // ── Game status ─────────────────────────────────────────────────
   'status.live':      'לייב',
@@ -111,7 +111,7 @@ export const he = {
   'settings.addPlayer':       'הוסף שחקן מועדף',
   'settings.noFavPlayers':    'אין שחקנים מועדפים עדיין.',
   'settings.radar':           'רדאר משחקים גלובלי',
-  'settings.radarSub':        'זיהוי אוטומטי של כל משחק NBA צמוד — גם ללא התראה ידנית.',
+  'settings.radarSub':        'זיהוי אוטומטי של כל משחק צמוד — גם ללא התראה ידנית.',
   'settings.enableRadar':     'הפעל רדאר',
   'settings.radarStatus':     'מצב הרדאר',
   'settings.radarRunning':    'פועל ברקע',

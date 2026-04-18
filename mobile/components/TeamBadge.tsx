@@ -23,6 +23,38 @@ const TEAM_COLORS: Record<string, [string, string]> = {
   SAC: ['#5A2D81', '#000000'], SA:  ['#C4CED4', '#000000'],
   SAS: ['#C4CED4', '#000000'], UTAH: ['#000000', '#FFF215'],
   UTA: ['#000000', '#FFF215'],
+  // ── Euroleague ────────────────────────────────────────────────────────
+  EFE: ['#D73430', '#00A4D2'], MON: ['#C20E1A', '#FFFFFF'],
+  LYN: ['#000000', '#FFFFFF'], BAR: ['#004D98', '#A50044'],
+  BAY: ['#0066B2', '#DC052D'], BAS: ['#CF152D', '#0B2240'],
+  CZV: ['#EB1926', '#FFFFFF'], DUB: ['#000000', '#D4AF37'],
+  FEN: ['#00417F', '#FFED00'], MLN: ['#E2231A', '#FFFFFF'],
+  OLY: ['#D0061F', '#FFFFFF'], PAN: ['#007841', '#FFFFFF'],
+  PAR: ['#000000', '#FF0000'], PAT: ['#000000', '#FFFFFF'],
+  RMA: ['#00529F', '#FFFFFF'], VAL: ['#FF6C0C', '#5B6670'],
+  VIR: ['#000000', '#FFFFFF'], ZAL: ['#146734', '#FFFFFF'],
+  HTA: ['#E3001B', '#FFFFFF'], MTA: ['#2371B5', '#FFF100'],
+  // ── EuroCup ──────────────────────────────────────────────────────────
+  BOU: ['#D52127', '#FFFFFF'], BES: ['#000000', '#FFFFFF'],
+  BHK: ['#FFCC00', '#000000'], CLJ: ['#E2231A', '#000000'],
+  BUD: ['#0033A0', '#FFFFFF'], CED: ['#F5811F', '#000000'],
+  MAN: ['#E2231A', '#000000'], RVN: ['#7E1A1F', '#FFFFFF'],
+  TUR: ['#003DA5', '#FFD100'], ULM: ['#F47B20', '#000000'],
+  // ── FIBA BCL ─────────────────────────────────────────────────────────
+  NYM: ['#FFD100', '#000000'], AEK: ['#F1C40F', '#000000'],
+  PRO: ['#FFD500', '#000000'], ALB: ['#005CA9', '#FFFFFF'],
+  CHO: ['#E2231A', '#FFFFFF'], GLT: ['#A90432', '#FFB81C'],
+  GRA: ['#005CA9', '#FFD100'], JOV: ['#1B7C3E', '#000000'],
+  TEN: ['#000000', '#FFFFFF'], TOF: ['#0072CE', '#FFFFFF'],
+  UNI: ['#006F45', '#5BC2E7'], HEI: ['#E2231A', '#000000'],
+  WUR: ['#E2231A', '#FFFFFF'],
+  // ── Winner League (Israel) ────────────────────────────────────────────
+  JER: ['#E31837', '#000000'], HOL: ['#4B2163', '#FFC72C'],
+  HER: ['#0033A0', '#FFFFFF'], NES: ['#F37021', '#002B5C'],
+  RMG: ['#2371B5', '#FFFFFF'], GAL: ['#E2001A', '#FFFFFF'],
+  ATA: ['#0055A5', '#FFFFFF'], BSV: ['#D21245', '#FFFFFF'],
+  NET: ['#FFD700', '#000000'], EMK: ['#E31837', '#FFFFFF'],
+  RSH: ['#F37021', '#FFFFFF'], RNA: ['#0055A5', '#FFFFFF'],
 };
 
 const DEFAULT_COLORS: [string, string] = ['#1a3451', '#0B1623'];

@@ -14,6 +14,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -27,7 +28,7 @@ import { teamFullToHe } from '../../utils/teamNames';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface GlobalRadar      { enabled: boolean; max_diff: number; start_quarter: number; alert_type: string }
+interface GlobalRadar      { enabled: boolean; max_diff: number; start_quarter: number; alert_type: string; leagues?: string[] }
 interface FavTeam          { team_id: string; team_name: string; max_diff: number; start_quarter: number; alert_type: string; broadcast_only: boolean; notify_at_start?: boolean; paused?: boolean }
 interface FavPlayerEntry {
   name:           string;
@@ -47,7 +48,7 @@ interface AppSettings {
   HistoricalMode:   { enabled: boolean; alert_type: string; categories: HistoricalCats };
 }
 interface CachedPlayer { id: string; name: string; jersey: string; position: string }
-interface CachedTeam   { id: string; name: string; abbreviation: string; logo: string | null; players: CachedPlayer[] }
+interface CachedTeam   { id: string; name: string; abbreviation: string; logo: string | null; players: CachedPlayer[]; league?: string }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -95,11 +96,24 @@ export default function FavoritesScreen() {
   const ListSeparator = useCallback(() => <View style={styles.separator} />, []);
 
   // Global radar local inputs
-  const [radarMaxDiff, setRadarMaxDiff] = useState('5');
-  const [radarStartQ, setRadarStartQ]   = useState('4');
+  const [radarMaxDiff, setRadarMaxDiff]     = useState('5');
+  const [radarStartQ, setRadarStartQ]       = useState('4');
+  const [radarLeagues, setRadarLeagues]     = useState<string[]>(['nba']);
 
   // Per-team in-place edit state
   const [teamEdits, setTeamEdits] = useState<Record<string, { max_diff: number; start_quarter: string; alert_type: string; broadcast_only: boolean; notify_at_start: boolean }>>({});
+
+  // ── League filter + search (shared between team & player pickers) ────
+  const LEAGUES = [
+    { id: 'nba',          label: 'NBA' },
+    { id: 'euroleague',   label: 'Euroleague' },
+    { id: 'eurocup',      label: 'EuroCup' },
+    { id: 'bcl',          label: 'BCL' },
+    { id: 'winner_league', label: 'Winner' },
+  ] as const;
+
+  const [pickerLeague, setPickerLeague] = useState<string>('nba');
+  const [pickerSearch, setPickerSearch] = useState('');
 
   // ── Add Team Modal state ──────────────────────────────────────────────
   const [teamModalVisible, setTeamModalVisible] = useState(false);
@@ -164,6 +178,7 @@ export default function FavoritesScreen() {
       setRadarRunning(r.running ?? false);
       setRadarMaxDiff(String(s.GlobalGameRadar?.max_diff ?? 5));
       setRadarStartQ(String(s.GlobalGameRadar?.start_quarter ?? 4));
+      setRadarLeagues(s.GlobalGameRadar?.leagues?.length ? s.GlobalGameRadar.leagues : ['nba']);
 
       const edits: Record<string, { max_diff: number; start_quarter: string; alert_type: string; broadcast_only: boolean; notify_at_start: boolean }> = {};
       for (const ft of s.FavoriteTeams ?? []) {
@@ -295,6 +310,21 @@ export default function FavoritesScreen() {
     setSettings(s => s ? {
       ...s,
       FavoriteTeams: s.FavoriteTeams.map(ft => ft.team_id === team_id ? { ...ft, paused: next } : ft),
+    } : s);
+  };
+
+  const pauseAllFavorites = async (paused: boolean) => {
+    if (!requireToken()) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    await fetch(`${SERVER_URL}/settings/favorites/pause-all`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_token: userToken, paused }),
+    });
+    setSettings(s => s ? {
+      ...s,
+      FavoriteTeams:   s.FavoriteTeams.map(ft => ({ ...ft, paused })),
+      FavoritePlayers: Object.fromEntries(Object.entries(s.FavoritePlayers).map(([id, p]) => [id, { ...p, paused }])),
     } : s);
   };
 
@@ -460,6 +490,8 @@ export default function FavoritesScreen() {
   // ── Modal helpers ─────────────────────────────────────────────────────
   const openTeamModal = () => {
     setPickedTeam(null);
+    setPickerLeague('nba');
+    setPickerSearch('');
     setNewTeamMaxDiff(5);
     setNewTeamStartQ('4');
     setNewTeamAlertType('silent');
@@ -472,6 +504,8 @@ export default function FavoritesScreen() {
   const openPlayerModal = () => {
     setPickedTeamForPlayer(null);
     setPickedPlayer(null);
+    setPickerLeague('nba');
+    setPickerSearch('');
     setPlayerModalVisible(true);
   };
   const closePlayerModal = () => {
@@ -491,6 +525,10 @@ export default function FavoritesScreen() {
   // ── Derived ───────────────────────────────────────────────────────────
   const favTeamIds   = new Set(settings?.FavoriteTeams?.map(ft => ft.team_id) ?? []);
   const favPlayerIds = new Set(Object.keys(settings?.FavoritePlayers ?? {}));
+
+  const allFavs = [...(settings?.FavoriteTeams ?? []), ...Object.values(settings?.FavoritePlayers ?? {})];
+  const hasFavs = allFavs.length > 0;
+  const allPaused = hasFavs && allFavs.every(f => f.paused);
 
   if (loading) {
     return (
@@ -513,6 +551,19 @@ export default function FavoritesScreen() {
         contentContainerStyle={{ paddingBottom: 48 }}
         keyboardShouldPersistTaps="handled"
       >
+
+        {/* ── Pause All button ─────────────────────────────────────────── */}
+        {hasFavs && (
+          <TouchableOpacity
+            style={[styles.pauseAllBtn, allPaused && styles.pauseAllBtnResume]}
+            onPress={() => pauseAllFavorites(!allPaused)}
+          >
+            <Ionicons name={allPaused ? 'play-circle' : 'pause-circle'} size={20} color="#fff" />
+            <Text style={styles.pauseAllBtnText}>
+              {allPaused ? 'Resume All Favorites' : 'Pause All Favorites'}
+            </Text>
+          </TouchableOpacity>
+        )}
 
         {/* ═══════════════════════════════════════════════════════════════
             FAVORITE TEAMS
@@ -788,6 +839,31 @@ export default function FavoritesScreen() {
 
           {radar?.enabled && (
             <>
+              {/* League multi-select */}
+              <Text style={[styles.inputLabel, { marginTop: 12 }]}>LEAGUES</Text>
+              <View style={styles.radarLeagueRow}>
+                {LEAGUES.map(lg => {
+                  const active = radarLeagues.includes(lg.id);
+                  return (
+                    <TouchableOpacity
+                      key={lg.id}
+                      style={[styles.radarLeaguePill, active && styles.radarLeaguePillActive]}
+                      onPress={() => {
+                        if (active && radarLeagues.length === 1) return; // keep at least one
+                        const next = active ? radarLeagues.filter(l => l !== lg.id) : [...radarLeagues, lg.id];
+                        setRadarLeagues(next);
+                        patchGlobalRadar({ leagues: next });
+                      }}
+                    >
+                      {active && <Ionicons name="checkmark" size={13} color={C.orange} />}
+                      <Text style={[styles.radarLeaguePillText, active && styles.radarLeaguePillTextActive]}>
+                        {lg.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
               <View style={styles.sliderRow}>
                 <Text style={styles.inputLabel}>{t('settings.maxDiff')}</Text>
                 <Text style={styles.sliderValue}>{radarMaxDiff}</Text>
@@ -803,7 +879,7 @@ export default function FavoritesScreen() {
               <QRow value={radarStartQ} onChange={setRadarStartQ} styles={styles} />
               <TouchableOpacity
                 style={styles.updateBtn}
-                onPress={() => patchGlobalRadar({ max_diff: radarMaxDiff || 5, start_quarter: parseInt(radarStartQ, 10) || 4 })}
+                onPress={() => patchGlobalRadar({ max_diff: radarMaxDiff || 5, start_quarter: parseInt(radarStartQ, 10) || 4, leagues: radarLeagues })}
                 disabled={saving}
               >
                 <Text style={[styles.updateBtnText, savedId === 'radar' && styles.savedBtnText]}>
@@ -895,27 +971,69 @@ export default function FavoritesScreen() {
             </View>
 
             {!pickedTeam && (
-              <FlatList
-                data={allTeams}
-                keyExtractor={item => item.id}
-                initialNumToRender={15} maxToRenderPerBatch={10} windowSize={5}
-                renderItem={({ item: team }) => {
-                  const isFav = favTeamIds.has(team.id);
-                  return (
-                    <TouchableOpacity style={styles.pickerRow} onPress={() => setPickedTeam(team)}>
-                      <TeamBadge abbreviation={team.abbreviation ?? ''} size={28} />
-                      <Text style={styles.pickerRowText}>{isHebrew ? teamFullToHe(team.name) : team.name}</Text>
-                      <View style={styles.pickerRowRight}>
-                        {isFav && <Text style={styles.savedBadge}>{t('settings.savedBadge')}</Text>}
-                        <Text style={styles.pickerRowAbbr}>{team.abbreviation}</Text>
-                        <Ionicons name="chevron-forward" size={16} color={C.textMuted} />
-                      </View>
+              <>
+                {/* Search bar */}
+                <View style={styles.searchBar}>
+                  <Ionicons name="search" size={16} color={C.textMuted} />
+                  <TextInput
+                    style={styles.searchInput}
+                    placeholder="Search team..."
+                    placeholderTextColor={C.textMuted}
+                    value={pickerSearch}
+                    onChangeText={setPickerSearch}
+                    autoCorrect={false}
+                    autoCapitalize="none"
+                  />
+                  {pickerSearch.length > 0 && (
+                    <TouchableOpacity onPress={() => setPickerSearch('')}>
+                      <Ionicons name="close-circle" size={16} color={C.textMuted} />
                     </TouchableOpacity>
-                  );
-                }}
-                ItemSeparatorComponent={ListSeparator}
-                contentContainerStyle={{ paddingBottom: 24 }}
-              />
+                  )}
+                </View>
+
+                {/* League pills */}
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.pickerLeagueScroll} contentContainerStyle={styles.pickerLeaguePills}>
+                  {LEAGUES.map(lg => (
+                    <TouchableOpacity
+                      key={lg.id}
+                      style={[styles.pickerLeaguePill, pickerLeague === lg.id && styles.pickerLeaguePillActive]}
+                      onPress={() => { setPickerLeague(lg.id); setPickerSearch(''); }}
+                    >
+                      <Text style={[styles.pickerLeaguePillText, pickerLeague === lg.id && styles.pickerLeaguePillTextActive]}>
+                        {lg.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+
+                <FlatList
+                  data={allTeams.filter(tm => {
+                    const matchLeague = pickerSearch.length > 0 || tm.league === pickerLeague;
+                    const matchSearch = pickerSearch.length === 0 ||
+                      tm.name.toLowerCase().includes(pickerSearch.toLowerCase()) ||
+                      tm.abbreviation.toLowerCase().includes(pickerSearch.toLowerCase());
+                    return matchLeague && matchSearch;
+                  })}
+                  keyExtractor={item => item.id}
+                  initialNumToRender={15} maxToRenderPerBatch={10} windowSize={5}
+                  renderItem={({ item: team }) => {
+                    const isFav = favTeamIds.has(team.id);
+                    return (
+                      <TouchableOpacity style={styles.pickerRow} onPress={() => setPickedTeam(team)}>
+                        <TeamBadge abbreviation={team.abbreviation ?? ''} size={28} />
+                        <Text style={styles.pickerRowText}>{isHebrew ? teamFullToHe(team.name) : team.name}</Text>
+                        <View style={styles.pickerRowRight}>
+                          {isFav && <Text style={styles.savedBadge}>{t('settings.savedBadge')}</Text>}
+                          <Text style={styles.pickerRowAbbr}>{team.abbreviation}</Text>
+                          <Ionicons name="chevron-forward" size={16} color={C.textMuted} />
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  }}
+                  ItemSeparatorComponent={ListSeparator}
+                  contentContainerStyle={{ paddingBottom: 24 }}
+                />
+              </>
             )}
 
             {pickedTeam && (
@@ -1036,22 +1154,100 @@ export default function FavoritesScreen() {
             </View>
 
             {!pickedTeamForPlayer && (
-              <FlatList
-                data={allTeams}
-                keyExtractor={item => item.id}
-                initialNumToRender={15} maxToRenderPerBatch={10} windowSize={5}
-                renderItem={({ item: team }) => (
-                  <TouchableOpacity style={styles.pickerRow} onPress={() => setPickedTeamForPlayer(team)}>
-                    <Text style={styles.pickerRowText}>{isHebrew ? teamFullToHe(team.name) : team.name}</Text>
-                    <View style={styles.pickerRowRight}>
-                      <Text style={styles.pickerRowAbbr}>{t('settings.players', team.players.length)}</Text>
-                      <Ionicons name="chevron-forward" size={16} color={C.textMuted} />
-                    </View>
-                  </TouchableOpacity>
+              <>
+                {/* Search bar */}
+                <View style={styles.searchBar}>
+                  <Ionicons name="search" size={16} color={C.textMuted} />
+                  <TextInput
+                    style={styles.searchInput}
+                    placeholder="Search player..."
+                    placeholderTextColor={C.textMuted}
+                    value={pickerSearch}
+                    onChangeText={setPickerSearch}
+                    autoCorrect={false}
+                    autoCapitalize="none"
+                  />
+                  {pickerSearch.length > 0 && (
+                    <TouchableOpacity onPress={() => setPickerSearch('')}>
+                      <Ionicons name="close-circle" size={16} color={C.textMuted} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                {pickerSearch.length > 0 ? (
+                  /* Player search results across all teams */
+                  <FlatList
+                    data={allTeams.flatMap(tm =>
+                      tm.players
+                        .filter(p => p.name.toLowerCase().includes(pickerSearch.toLowerCase()))
+                        .map(p => ({ ...p, team: tm }))
+                    )}
+                    keyExtractor={item => `${item.team.id}-${item.id}`}
+                    initialNumToRender={20} maxToRenderPerBatch={15} windowSize={5}
+                    renderItem={({ item: p }) => {
+                      const isFav = favPlayerIds.has(p.id);
+                      return (
+                        <TouchableOpacity style={styles.pickerRow} onPress={() => {
+                          setPickedTeamForPlayer(p.team);
+                          setPickedPlayer(p);
+                        }}>
+                          <TeamBadge abbreviation={p.team.abbreviation ?? ''} size={28} />
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.pickerRowText}>{p.name}</Text>
+                            <Text style={styles.pickerRowSub}>
+                              {isHebrew ? teamFullToHe(p.team.name) : p.team.name}
+                              {p.jersey ? `  ·  #${p.jersey}` : ''}
+                              {p.position ? `  ·  ${p.position}` : ''}
+                            </Text>
+                          </View>
+                          <View style={styles.pickerRowRight}>
+                            {isFav && <Text style={styles.savedBadge}>★</Text>}
+                            <Ionicons name="chevron-forward" size={16} color={C.textMuted} />
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    }}
+                    ItemSeparatorComponent={ListSeparator}
+                    contentContainerStyle={{ paddingBottom: 24 }}
+                  />
+                ) : (
+                  <>
+                    {/* League pills */}
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.pickerLeagueScroll} contentContainerStyle={styles.pickerLeaguePills}>
+                      {LEAGUES.map(lg => (
+                        <TouchableOpacity
+                          key={lg.id}
+                          style={[styles.pickerLeaguePill, pickerLeague === lg.id && styles.pickerLeaguePillActive]}
+                          onPress={() => setPickerLeague(lg.id)}
+                        >
+                          <Text style={[styles.pickerLeaguePillText, pickerLeague === lg.id && styles.pickerLeaguePillTextActive]}>
+                            {lg.label}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+
+                    {/* Team list filtered by league */}
+                    <FlatList
+                      data={allTeams.filter(tm => tm.league === pickerLeague)}
+                      keyExtractor={item => item.id}
+                      initialNumToRender={15} maxToRenderPerBatch={10} windowSize={5}
+                      renderItem={({ item: team }) => (
+                        <TouchableOpacity style={styles.pickerRow} onPress={() => setPickedTeamForPlayer(team)}>
+                          <TeamBadge abbreviation={team.abbreviation ?? ''} size={28} />
+                          <Text style={styles.pickerRowText}>{isHebrew ? teamFullToHe(team.name) : team.name}</Text>
+                          <View style={styles.pickerRowRight}>
+                            <Text style={styles.pickerRowAbbr}>{t('settings.players', team.players.length)}</Text>
+                            <Ionicons name="chevron-forward" size={16} color={C.textMuted} />
+                          </View>
+                        </TouchableOpacity>
+                      )}
+                      ItemSeparatorComponent={ListSeparator}
+                      contentContainerStyle={{ paddingBottom: 24 }}
+                    />
+                  </>
                 )}
-                ItemSeparatorComponent={ListSeparator}
-                contentContainerStyle={{ paddingBottom: 24 }}
-              />
+              </>
             )}
 
             {pickedTeamForPlayer && !pickedPlayer && (
@@ -1349,6 +1545,39 @@ const makeStyles = (C: AppColors) => StyleSheet.create({
   alertTypeIcon:       { fontSize: 14 },
   alertTypeText:       { fontSize: 12, fontWeight: '700', color: C.textMuted },
   alertTypeTextActive: { color: C.red },
+  pauseAllBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    marginHorizontal: 16, marginBottom: 8, paddingVertical: 13, borderRadius: 14,
+    backgroundColor: '#C8102E',
+  },
+  pauseAllBtnResume: { backgroundColor: C.liveGreen },
+  pauseAllBtnText: { color: '#fff', fontWeight: '800', fontSize: 15 },
+  radarLeagueRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  radarLeaguePill: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 12, paddingVertical: 7, borderRadius: 16,
+    backgroundColor: C.cardAlt, borderWidth: 1, borderColor: C.border,
+  },
+  radarLeaguePillActive: { backgroundColor: 'rgba(255,107,0,0.12)', borderColor: C.orange },
+  radarLeaguePillText: { fontSize: 13, fontWeight: '700', color: C.textMuted },
+  radarLeaguePillTextActive: { color: C.orange },
+  searchBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    marginHorizontal: 16, marginTop: 10, marginBottom: 6,
+    paddingHorizontal: 12, paddingVertical: 8,
+    backgroundColor: C.bg, borderRadius: 10, borderWidth: 1, borderColor: C.border,
+  },
+  searchInput: { flex: 1, fontSize: 14, color: C.textPrimary, padding: 0 },
+  pickerLeagueScroll: { height: 44, flexGrow: 0, flexShrink: 0, marginBottom: 2 },
+  pickerLeaguePills: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 6, gap: 8 },
+  pickerLeaguePill: {
+    height: 30, paddingHorizontal: 14, borderRadius: 15,
+    backgroundColor: C.cardAlt, borderWidth: 1, borderColor: C.border,
+    flexShrink: 0, alignItems: 'center', justifyContent: 'center',
+  },
+  pickerLeaguePillActive: { backgroundColor: 'rgba(255,107,0,0.12)', borderColor: C.orange },
+  pickerLeaguePillText: { fontSize: 13, fontWeight: '700', color: C.textMuted, includeFontPadding: false, textAlignVertical: 'center', lineHeight: 16 },
+  pickerLeaguePillTextActive: { color: C.orange },
   infoOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', alignItems: 'center', justifyContent: 'center', padding: 32 },
   infoBox:     { width: '100%', backgroundColor: C.card, borderRadius: 20, borderWidth: 1, borderColor: C.border, padding: 28, alignItems: 'center' },
   infoTitle:   { fontSize: 20, fontWeight: '900', color: C.textPrimary, letterSpacing: 0.5, marginBottom: 10 },

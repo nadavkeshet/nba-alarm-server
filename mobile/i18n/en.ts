@@ -16,7 +16,7 @@ export const en = {
   'home.connectionErrorSub':'Could not reach the server.',
   'home.retry':            'Retry',
   'home.noGames':          'No Games',
-  'home.noGamesSub':       'No NBA games scheduled for this day.',
+  'home.noGamesSub':       'No games scheduled for this day.',
 
   // ── Game status ─────────────────────────────────────────────────
   'status.live':      'LIVE',
@@ -111,7 +111,7 @@ export const en = {
   'settings.addPlayer':       'Add New Favorite Player',
   'settings.noFavPlayers':    'No favorite players yet.',
   'settings.radar':           'GLOBAL GAME RADAR',
-  'settings.radarSub':        'Automatically detect any close NBA game — even without a manual alarm.',
+  'settings.radarSub':        'Automatically detect any close game — even without a manual alarm.',
   'settings.enableRadar':     'Enable Radar',
   'settings.radarStatus':     'Radar Status',
   'settings.radarRunning':    'Running in background',

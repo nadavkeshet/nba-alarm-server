@@ -3,7 +3,8 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 
 export type ThemeMode = 'dark' | 'light';
 
-const THEME_KEY = 'nba_alarm_theme';
+const THEME_KEY      = 'nba_alarm_theme';
+const NO_SPOILER_KEY = 'nba_no_spoiler';
 
 export const darkColors = {
   bg:          '#0B1623',
@@ -42,23 +43,31 @@ export const lightColors = {
 export type AppColors = typeof darkColors;
 
 interface ThemeContextValue {
-  mode:        ThemeMode;
-  colors:      AppColors;
-  toggleTheme: () => void;
+  mode:            ThemeMode;
+  colors:          AppColors;
+  toggleTheme:     () => void;
+  noSpoiler:       boolean;
+  toggleNoSpoiler: () => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue>({
-  mode:        'dark',
-  colors:      darkColors,
-  toggleTheme: () => {},
+  mode:            'dark',
+  colors:          darkColors,
+  toggleTheme:     () => {},
+  noSpoiler:       false,
+  toggleNoSpoiler: () => {},
 });
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [mode, setMode] = useState<ThemeMode>('dark');
+  const [mode, setMode]           = useState<ThemeMode>('dark');
+  const [noSpoiler, setNoSpoiler] = useState(false);
 
   useEffect(() => {
     AsyncStorage.getItem(THEME_KEY).then(val => {
       if (val === 'light' || val === 'dark') setMode(val);
+    });
+    AsyncStorage.getItem(NO_SPOILER_KEY).then(val => {
+      setNoSpoiler(val === '1');
     });
   }, []);
 
@@ -70,8 +79,16 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const toggleNoSpoiler = useCallback(() => {
+    setNoSpoiler(prev => {
+      const next = !prev;
+      AsyncStorage.setItem(NO_SPOILER_KEY, next ? '1' : '0');
+      return next;
+    });
+  }, []);
+
   return (
-    <ThemeContext.Provider value={{ mode, colors: mode === 'dark' ? darkColors : lightColors, toggleTheme }}>
+    <ThemeContext.Provider value={{ mode, colors: mode === 'dark' ? darkColors : lightColors, toggleTheme, noSpoiler, toggleNoSpoiler }}>
       {children}
     </ThemeContext.Provider>
   );
