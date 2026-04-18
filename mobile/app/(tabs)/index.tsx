@@ -366,7 +366,11 @@ export default function HomeScreen() {
 
   // ── Modal / alarm tab state ───────────────────────────────────────
   const [selectedGame, setSelectedGame] = useState<any>(null);
-  const [alarmTab, setAlarmTab]         = useState<'game' | 'player'>('game');
+  const [alarmTab, setAlarmTab]         = useState<'game' | 'player' | 'boxscore'>('game');
+
+  // ── Boxscore state ────────────────────────────────────────────────
+  const [boxscore, setBoxscore]         = useState<any[] | null>(null);
+  const boxscoreRefreshRef              = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── Alert type ────────────────────────────────────────────────────
   const [alertType, setAlertType] = useState<'alarm' | 'silent'>('alarm');
@@ -448,7 +452,7 @@ export default function HomeScreen() {
     fetchGames(false, selectedDate, leagueId);
   };
 
-  // ── Load roster ──────────────────────────────────────────────────
+  // ── Load roster + boxscore ───────────────────────────────────────
   const loadRoster = async () => {
     if (!selectedGame) return;
     setRosterLoading(true);
@@ -458,13 +462,38 @@ export default function HomeScreen() {
       if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
       const data = await resp.json();
       setTeams(data.teams || []);
+      setBoxscore(data.boxscore ?? null);
     } catch (error) {
       console.error('Roster fetch error:', error);
       setTeams([]);
+      setBoxscore(null);
     } finally {
       setRosterLoading(false);
     }
   };
+
+  // Auto-refresh boxscore every 30s while modal is open and game is live
+  useEffect(() => {
+    const isLive = selectedGame?.status?.type?.state === 'in';
+    if (selectedGame && isLive) {
+      boxscoreRefreshRef.current = setInterval(async () => {
+        try {
+          const leagueParam = selectedGame.league ? `&league=${encodeURIComponent(selectedGame.league)}` : '';
+          const resp = await fetch(`${SERVER_URL}/game-summary?gameId=${selectedGame.id}&date=${toDateStr(selectedDate)}${leagueParam}`);
+          if (resp.ok) {
+            const data = await resp.json();
+            setBoxscore(data.boxscore ?? null);
+          }
+        } catch {}
+      }, 30_000);
+    }
+    return () => {
+      if (boxscoreRefreshRef.current) {
+        clearInterval(boxscoreRefreshRef.current);
+        boxscoreRefreshRef.current = null;
+      }
+    };
+  }, [selectedGame?.id]);
 
   // ── Alarm audio helpers (native MediaPlayer via AlarmChannelModule) ──
   const playAlarmSound = async () => {
@@ -603,6 +632,7 @@ export default function HomeScreen() {
     setAlertType('alarm');
     setNoCondition(false);
     setTeams([]);
+    setBoxscore(null);
     setSelectedPlayer(null);
     setPtsGoalEnabled(true);
     setPtsGoalThreshold(25);
@@ -871,14 +901,14 @@ export default function HomeScreen() {
 
             {/* Tab selector */}
             <View style={styles.alarmTabs}>
-              {(['game', 'player'] as const).map(tab => (
+              {(['game', 'player', 'boxscore'] as const).map(tab => (
                 <TouchableOpacity
                   key={tab}
                   style={[styles.alarmTab, alarmTab === tab && styles.alarmTabActive]}
                   onPress={() => setAlarmTab(tab)}
                 >
                   <Text style={[styles.alarmTabText, alarmTab === tab && styles.alarmTabTextActive]}>
-                    {tab === 'game' ? t('alarm.gameAlarm') : t('alarm.playerAlarm')}
+                    {tab === 'game' ? t('alarm.gameAlarm') : tab === 'player' ? t('alarm.playerAlarm') : 'Boxscore'}
                   </Text>
                 </TouchableOpacity>
               ))}
@@ -1089,6 +1119,111 @@ export default function HomeScreen() {
                 )}
               </>
             )}
+
+            {/* ── Boxscore tab ── */}
+            {alarmTab === 'boxscore' && (() => {
+              const state = selectedGame?.status?.type?.state;
+              const isLive = state === 'in';
+              const isFinal = state === 'post';
+              const { away, home } = getTeams(selectedGame);
+
+              if (rosterLoading) {
+                return (
+                  <View style={styles.rosterLoading}>
+                    <ActivityIndicator color="#4d8cf5" />
+                  </View>
+                );
+              }
+
+              if (!boxscore) {
+                return (
+                  <View style={{ alignItems: 'center', paddingVertical: 24 }}>
+                    <Text style={{ fontSize: 28, marginBottom: 8 }}>🏀</Text>
+                    <Text style={styles.emptyText}>
+                      {state === 'pre'
+                        ? 'Stats will be available once the game tips off.'
+                        : 'Boxscore unavailable.'}
+                    </Text>
+                  </View>
+                );
+              }
+
+              const BS_COLS = ['MIN', 'PTS', 'REB', 'AST', 'STL'] as const;
+              const minToNum = (m: string) => parseInt(m?.split(':')[0] ?? '0', 10);
+
+              const renderTeamTable = (section: any, teamSide: 'away' | 'home') => {
+                const teamInfo = teamSide === 'away' ? away : home;
+                const teamName = teamInfo?.team?.abbreviation ?? (teamSide === 'away' ? 'AWAY' : 'HOME');
+                const players: any[] = (section?.players ?? [])
+                  .filter((p: any) => minToNum(p.stats?.MIN ?? '0') > 0)
+                  .sort((a: any, b: any) => {
+                    if (a.starter !== b.starter) return a.starter ? -1 : 1;
+                    return minToNum(b.stats?.MIN ?? '0') - minToNum(a.stats?.MIN ?? '0');
+                  });
+
+                return (
+                  <View key={teamSide} style={styles.bsTeamBlock}>
+                    {/* Team header */}
+                    <View style={styles.bsTeamHeader}>
+                      <Text style={styles.bsTeamName}>{teamName}</Text>
+                      {isLive && (
+                        <View style={styles.bsLivePill}>
+                          <Text style={styles.bsLiveText}>LIVE</Text>
+                        </View>
+                      )}
+                    </View>
+
+                    {/* Column headers */}
+                    <View style={styles.bsRow}>
+                      <Text style={[styles.bsPlayerCol, styles.bsHeaderText]}>PLAYER</Text>
+                      {BS_COLS.map(col => (
+                        <Text key={col} style={[styles.bsStatCol, styles.bsHeaderText]}>{col}</Text>
+                      ))}
+                    </View>
+
+                    {/* Player rows */}
+                    {players.map((p: any, i: number) => {
+                      const nameParts = (p.name ?? '').split(' ');
+                      const shortName = nameParts.length > 1
+                        ? `${nameParts[0][0]}. ${nameParts.slice(1).join(' ')}`
+                        : p.name;
+                      return (
+                        <View key={p.id ?? i} style={[styles.bsRow, i % 2 === 0 && styles.bsRowAlt]}>
+                          <Text style={styles.bsPlayerCol} numberOfLines={1}>
+                            {p.starter ? '● ' : '  '}{shortName}
+                          </Text>
+                          {BS_COLS.map(col => (
+                            <Text key={col} style={styles.bsStatCol}>
+                              {p.stats?.[col] ?? '—'}
+                            </Text>
+                          ))}
+                        </View>
+                      );
+                    })}
+                  </View>
+                );
+              };
+
+              // Match sections to home/away by team_id
+              const awaySection = boxscore.find((s: any) =>
+                String(s.team_id) === String(away?.team?.id)
+              ) ?? boxscore[0];
+              const homeSection = boxscore.find((s: any) =>
+                String(s.team_id) === String(home?.team?.id)
+              ) ?? boxscore[1];
+
+              return (
+                <View>
+                  {isFinal && (
+                    <Text style={[styles.emptyText, { textAlign: 'center', marginBottom: 8, fontSize: 11 }]}>
+                      Final Stats
+                    </Text>
+                  )}
+                  {awaySection && renderTeamTable(awaySection, 'away')}
+                  {homeSection && renderTeamTable(homeSection, 'home')}
+                </View>
+              );
+            })()}
 
             {/* Cancel */}
             <TouchableOpacity style={styles.cancelButton} onPress={closeModal}>
@@ -1350,6 +1485,22 @@ const makeStyles = (C: AppColors) => StyleSheet.create({
     backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center',
     borderWidth: 1, borderColor: C.border,
   },
+
+  // ── Boxscore ──────────────────────────────────────────────────────
+  bsTeamBlock:  { marginBottom: 16 },
+  bsTeamHeader: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingVertical: 6, marginBottom: 4,
+    borderBottomWidth: 1, borderColor: C.border,
+  },
+  bsTeamName:   { fontSize: 13, fontWeight: '800', color: C.accentBlue, letterSpacing: 1.5, flex: 1 },
+  bsLivePill:   { backgroundColor: 'rgba(63,185,80,0.15)', borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2 },
+  bsLiveText:   { fontSize: 9, fontWeight: '800', color: '#3fb950', letterSpacing: 1 },
+  bsRow:        { flexDirection: 'row', alignItems: 'center', paddingVertical: 4, paddingHorizontal: 2 },
+  bsRowAlt:     { backgroundColor: 'rgba(255,255,255,0.03)' },
+  bsHeaderText: { color: C.textMuted, fontSize: 9, fontWeight: '800', letterSpacing: 1 },
+  bsPlayerCol:  { flex: 1, fontSize: 12, color: C.textPrimary, fontWeight: '500' },
+  bsStatCol:    { width: 36, textAlign: 'center', fontSize: 12, color: C.textPrimary, fontWeight: '600' },
 
   // ── Info Modal ────────────────────────────────────────────────────
   infoOverlay: {
