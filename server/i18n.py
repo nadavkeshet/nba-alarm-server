@@ -167,8 +167,22 @@ _TITLES = {
 }
 
 
-def t_title(key: str, lang: str) -> str:
-    return _TITLES.get(lang, _TITLES["en"]).get(key, _TITLES["en"].get(key, key))
+_LEAGUE_DISPLAY = {
+    "nba":          {"en": "NBA",         "he": "NBA"},
+    "euroleague":   {"en": "Euroleague",  "he": "יורוליג"},
+    "eurocup":      {"en": "EuroCup",     "he": "יורוקאפ"},
+    "bcl":          {"en": "BCL",         "he": "BCL"},
+    "winner_league":{"en": "Winner",      "he": "ליגת וינר"},
+}
+
+
+def t_title(key: str, lang: str, league: str = "nba") -> str:
+    title = _TITLES.get(lang, _TITLES["en"]).get(key, _TITLES["en"].get(key, key))
+    if key in ("radar", "fav_team") and league and league != "nba":
+        league_name = _LEAGUE_DISPLAY.get(league, {}).get(lang, league.upper())
+        # Replace the hardcoded "NBA" in the title with the actual league name
+        title = title.replace("NBA", league_name)
+    return title
 
 
 def t_body_game(game_name: str, quarter: int, diff: int, lang: str) -> str:
