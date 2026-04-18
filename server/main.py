@@ -2042,7 +2042,35 @@ def roster(game_id: str):
 
 @app.get("/game-summary")
 def game_summary(gameId: str, date: Optional[str] = None, league: Optional[str] = None):
-    return fetch_game_summary_roster(gameId, date=date, league=league)
+    roster = fetch_game_summary_roster(gameId, date=date, league=league)
+
+    # Attach live boxscore (player stats) to the response.
+    # fetch_player_boxscore is cached 55s so this adds negligible overhead.
+    boxscore_data: list[dict] | None = None
+    try:
+        from score365_adapter import fetch_player_boxscore as _fetch_bs
+        raw = _fetch_bs(gameId)
+        if raw:
+            stat_names = ["MIN", "FG", "3PT", "FT", "REB", "AST", "STL", "BLK", "TO", "PF", "PTS", "3PM"]
+            boxscore_data = []
+            for section in raw.get("boxscore", {}).get("players", []):
+                team_id = section.get("team", {}).get("id", "")
+                players_out = []
+                for ath in section.get("statistics", [{}])[0].get("athletes", []):
+                    vals = ath.get("stats", [])
+                    stats_dict = dict(zip(stat_names, vals)) if len(vals) == len(stat_names) else {}
+                    players_out.append({
+                        "id":      ath.get("athlete", {}).get("id", ""),
+                        "name":    ath.get("athlete", {}).get("displayName", ""),
+                        "starter": ath.get("starter", False),
+                        "stats":   stats_dict,
+                    })
+                boxscore_data.append({"team_id": team_id, "players": players_out})
+    except Exception as exc:
+        log.warning("game-summary: boxscore fetch failed for %s: %s", gameId, exc)
+
+    roster["boxscore"] = boxscore_data
+    return roster
 
 
 @app.get("/all-teams-and-players")
