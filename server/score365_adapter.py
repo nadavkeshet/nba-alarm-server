@@ -596,6 +596,7 @@ def fetch_player_boxscore(game_id: str) -> dict | None:
         return None
 
     if not game:
+        log.warning("365scores: get_game_detail returned empty for game_id=%s", game_id)
         return None
 
     try:

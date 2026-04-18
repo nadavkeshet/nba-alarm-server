@@ -2050,6 +2050,7 @@ def game_summary(gameId: str, date: Optional[str] = None, league: Optional[str] 
     try:
         from score365_adapter import fetch_player_boxscore as _fetch_bs
         raw = _fetch_bs(gameId)
+        log.info("game-summary: boxscore for %s: is_truthy=%s", gameId, bool(raw))
         if raw:
             stat_names = ["MIN", "FG", "3PT", "FT", "REB", "AST", "STL", "BLK", "TO", "PF", "PTS", "3PM"]
             boxscore_data = []
@@ -2067,7 +2068,7 @@ def game_summary(gameId: str, date: Optional[str] = None, league: Optional[str] 
                     })
                 boxscore_data.append({"team_id": team_id, "players": players_out})
     except Exception as exc:
-        log.warning("game-summary: boxscore fetch failed for %s: %s", gameId, exc)
+        log.warning("game-summary: boxscore fetch EXCEPTION for %s: %r", gameId, exc)
 
     roster["boxscore"] = boxscore_data
     return roster
