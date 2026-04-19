@@ -546,6 +546,10 @@ def calculate_watch_score(game_id: str | int, league: str = "nba") -> WatchScore
     Calculate watch score for a 365scores game ID.
     Uses per-play SportRadar PBP if available (NBA), otherwise falls back to
     coarse per-quarter stage data (Euroleague et al.).
+
+    For NBA games involving the Portland Trail Blazers, the score gets a
+    "Deni boost" — Israeli audience cares disproportionately when Avdija has
+    a strong night, so the rating is bumped accordingly.
     """
     game = _fetch_game_detail(int(game_id))
     if not game:
@@ -555,8 +559,141 @@ def calculate_watch_score(game_id: str | int, league: str = "nba") -> WatchScore
     messages = _fetch_pbp_messages(game)
 
     if messages:
-        return _score_from_pbp(messages, game, period_length)
-    return _score_from_stages_only(game, period_length)
+        result = _score_from_pbp(messages, game, period_length)
+    else:
+        result = _score_from_stages_only(game, period_length)
+
+    if result is None:
+        return None
+
+    if league == "nba":
+        boost, boost_details = _compute_avdija_boost(int(game_id), result)
+        if boost > 0:
+            result.score = max(1.0, min(10.0, round(result.score + boost, 1)))
+        if boost_details:
+            result.details["avdija_boost"] = boost_details
+
+    return result
+
+
+# ── Deni Avdija boost ────────────────────────────────────────────────────────
+# Portland Trail Blazers id in 365scores. Avdija is matched by name in the
+# boxscore so any future trade just needs the team id to be updated here.
+_PORTLAND_TEAM_ID = "1324"
+_DENI_NAME_PATTERNS = ("deni avdija", "avdija")
+_AVDIJA_BOOST_MAX = 2.5
+# 365scores boxscore stats column order — must match server/main.py.
+_AVDIJA_STAT_NAMES = ["MIN", "FG", "3PT", "FT", "REB", "AST",
+                      "STL", "BLK", "TO", "PF", "PTS", "3PM"]
+
+
+def _compute_avdija_boost(game_id: int, result: WatchScoreResult) -> tuple[float, dict]:
+    """
+    Returns (boost_in_points, debug_details). Boost is added to final_score.
+    Capped at _AVDIJA_BOOST_MAX so a monster night can't dominate the score
+    completely. Returns (0, {}) when not a Portland game or Deni didn't play.
+    """
+    team_info = result.details.get("teams", {})
+    home_id = str(team_info.get("home_id") or "")
+    away_id = str(team_info.get("away_id") or "")
+
+    if _PORTLAND_TEAM_ID not in (home_id, away_id):
+        return 0.0, {}
+
+    try:
+        from score365_adapter import fetch_player_boxscore
+        bs = fetch_player_boxscore(game_id) or {}
+    except Exception as exc:
+        log.debug("Avdija boost: boxscore fetch failed for %s: %s", game_id, exc)
+        return 0.0, {}
+
+    deni_stats: dict | None = None
+    deni_team_id: str = ""
+    for section in bs.get("boxscore", {}).get("players", []) or []:
+        team_id = str(section.get("team", {}).get("id", ""))
+        athletes = section.get("statistics", [{}])[0].get("athletes", []) or []
+        for ath in athletes:
+            name = (ath.get("athlete", {}).get("displayName") or "").lower()
+            if any(p in name for p in _DENI_NAME_PATTERNS):
+                vals = ath.get("stats", []) or []
+                if len(vals) == len(_AVDIJA_STAT_NAMES):
+                    deni_stats = dict(zip(_AVDIJA_STAT_NAMES, vals))
+                deni_team_id = team_id
+                break
+        if deni_stats is not None:
+            break
+
+    if deni_stats is None:
+        return 0.0, {"reason": "not_in_boxscore"}
+
+    def _num(v) -> float:
+        s = str(v).strip()
+        if not s or s == "-":
+            return 0.0
+        # Shooting splits like "5-9" → use the made portion.
+        if "-" in s and ":" not in s:
+            s = s.split("-", 1)[0]
+        try:
+            return float(s)
+        except ValueError:
+            return 0.0
+
+    pts = _num(deni_stats.get("PTS"))
+    reb = _num(deni_stats.get("REB"))
+    ast = _num(deni_stats.get("AST"))
+    stl = _num(deni_stats.get("STL"))
+    blk = _num(deni_stats.get("BLK"))
+
+    min_str = str(deni_stats.get("MIN", "")).strip()
+    if min_str in ("", "-", "0", "0:00"):
+        return 0.0, {"reason": "did_not_play"}
+
+    boost = 0.0
+
+    # Scoring — the headline number. 10 PTS = 0, scales linearly.
+    # 20 PTS → +0.7, 30 PTS → +1.4, capped at +1.5.
+    if pts >= 10:
+        boost += min(1.5, (pts - 10) / 10 * 0.7)
+
+    # Playmaking/glass — REB + AST combined so a balanced line still rewards.
+    ra = reb + ast
+    if ra >= 7:
+        boost += min(0.6, (ra - 7) / 10 * 0.5)
+
+    # Defensive impact.
+    boost += min(0.4, (stl + blk) * 0.1)
+
+    # Double-double / triple-double bonus (most exciting outcomes).
+    cats = sum(1 for v in (pts, reb, ast, stl, blk) if v >= 10)
+    if cats >= 3:
+        boost += 1.5   # triple-double
+    elif cats == 2:
+        boost += 0.5   # double-double
+
+    # Did Portland win? Biggest mood-shifter for an Israeli viewer.
+    home_final = int(result.details.get("final_score_home") or 0)
+    away_final = int(result.details.get("final_score_away") or 0)
+    portland_won = False
+    if deni_team_id == _PORTLAND_TEAM_ID:
+        if home_id == _PORTLAND_TEAM_ID:
+            portland_won = home_final > away_final
+        elif away_id == _PORTLAND_TEAM_ID:
+            portland_won = away_final > home_final
+    if portland_won:
+        boost += 0.8
+
+    boost = min(_AVDIJA_BOOST_MAX, round(boost, 2))
+
+    return boost, {
+        "applied": boost > 0,
+        "pts": pts, "reb": reb, "ast": ast, "stl": stl, "blk": blk,
+        "min": min_str,
+        "fg":   str(deni_stats.get("FG", "")),
+        "3pt":  str(deni_stats.get("3PT", "")),
+        "team_won": portland_won,
+        "double_categories": cats,
+        "boost": boost,
+    }
 
 
 def _score_from_pbp(messages: list[dict], game: dict, period_length: int) -> WatchScoreResult | None:
