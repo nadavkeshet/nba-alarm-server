@@ -1167,6 +1167,21 @@ async def lifespan(_app: FastAPI):
     threading.Thread(target=get_today_games, daemon=True).start()
     # Radar reads all users directly from DB — always start it
     threading.Thread(target=start_radar_job, daemon=True).start()
+    # v3 soccer radar (event-driven). Wired with our existing FCM helper + dedup.
+    try:
+        import soccer_monitor
+        from monitor import _send_push_notification
+        soccer_monitor.wire(
+            send_push=_send_push_notification,
+            get_user_language=_get_user_language_from_db,
+            fire_once=_fire_once,
+            db_engine=engine,
+            alarm_model=SoccerAlarmDB,
+        )
+        soccer_monitor.start_soccer_radar()
+        log.info("soccer radar wired and started")
+    except Exception as soccer_exc:
+        log.warning("soccer radar not started: %s", soccer_exc)
     # Start the async DB poller
     poller_task = asyncio.create_task(_alarm_poller())
 
@@ -1207,17 +1222,22 @@ def health():
         except Exception as exc:
             db_msg = str(exc)
     # v3 soccer readiness: confirms the new modules and competition map loaded.
-    soccer_status = {"ready": False, "competitions": 0, "bsd_token": False}
+    soccer_status = {"ready": False, "competitions": 0, "bsd_token": False, "radar_running": False}
     try:
         from score365_soccer_adapter import _COMPETITION_MAP, PRIMARY_SOURCE
         soccer_status["competitions"] = len(_COMPETITION_MAP)
         soccer_status["ready"] = len(PRIMARY_SOURCE) >= 10
         soccer_status["bsd_token"] = bool(os.environ.get("BZZOIRO_API_TOKEN", "").strip())
+        try:
+            import soccer_monitor
+            soccer_status["radar_running"] = soccer_monitor.is_radar_running()
+        except Exception:
+            pass
     except Exception as exc:
         soccer_status["error"] = str(exc)[:120]
     return {
         "status": "ok",
-        "version": "v3-p2.2",
+        "version": "v3-p2.3",
         "db": {"connected": db_ok, "detail": db_msg},
         "soccer": soccer_status,
     }

@@ -149,6 +149,16 @@ _TITLES = {
         "quad_double":      "Quad-Double Threat!",
         "test":             "Test Notification",
         "player_alert":     "Player Alert!",
+        # Soccer titles (v3)
+        "soccer_late_drama":   "⚡ Late Drama Brewing",
+        "soccer_kickoff":      "🟢 Match Kicking Off",
+        "soccer_knockout_et":  "⏱ Extra Time Underway!",
+        "soccer_penalty":      "🎯 Penalty Awarded",
+        "soccer_red_card":     "🟥 Red Card Drama",
+        "soccer_comeback":     "🔥 Comeback In Progress",
+        "soccer_hat_trick":    "⚽ Hat-Trick Watch",
+        "soccer_big_chance":   "💥 Chances Pouring In",
+        "soccer_drama_radar":  "⚡ Drama Brewing",
     },
     "he": {
         "smart_alarm":      "!Smart Alarm! הולך להיות דרמטי",
@@ -163,6 +173,16 @@ _TITLES = {
         "quad_double":      "!איום קוואדרופל דאבל",
         "test":             "התראת בדיקה",
         "player_alert":     "!התראת שחקן",
+        # Soccer titles (v3)
+        "soccer_late_drama":   "⚡ דרמה לקראת הסיום",
+        "soccer_kickoff":      "🟢 המשחק יוצא לדרך",
+        "soccer_knockout_et":  "⏱ הארכה במשחק!",
+        "soccer_penalty":      "🎯 פנדל!",
+        "soccer_red_card":     "🟥 דרמת כרטיס אדום",
+        "soccer_comeback":     "🔥 קאמבק בתהליך",
+        "soccer_hat_trick":    "⚽ מעקב האט-טריק",
+        "soccer_big_chance":   "💥 הזדמנויות בכמויות",
+        "soccer_drama_radar":  "⚡ דרמה בדרך",
     },
 }
 
@@ -249,3 +269,118 @@ def t_body_quad(player_name: str, hot_stats: str, game_name: str, lang: str) -> 
     if lang == "he":
         return f"{player_name}: {hot_stats} ב-{gn}!"
     return f"{player_name}: {hot_stats} in {gn}!"
+
+
+# ── Soccer notifications (v3) ──────────────────────────────────────────────────
+# All soccer bodies are SPOILER-SAFE by default — they describe the *moment*,
+# not the score. Score is revealed only when the user opens the app.
+
+_SOCCER_COMPETITION_HE = {
+    "premier_league": "פרמייר ליג",
+    "ucl":            "ליגת האלופות",
+    "europa_league":  "ליגה אירופית",
+    "la_liga":        "לה ליגה",
+    "serie_a":        "סריה א",
+    "bundesliga":     "בונדסליגה",
+    "ligue_1":        "ליג 1",
+    "world_cup":      "מונדיאל",
+    "euros":          "אליפות אירופה",
+    "ligat_haal":     "ליגת ווינר",
+}
+
+_SOCCER_COMPETITION_EN = {
+    "premier_league": "Premier League",
+    "ucl":            "Champions League",
+    "europa_league":  "Europa League",
+    "la_liga":        "LaLiga",
+    "serie_a":        "Serie A",
+    "bundesliga":     "Bundesliga",
+    "ligue_1":        "Ligue 1",
+    "world_cup":      "World Cup",
+    "euros":          "Euros",
+    "ligat_haal":     "Ligat Ha'al",
+}
+
+
+def soccer_competition_name(slug: str, lang: str) -> str:
+    table = _SOCCER_COMPETITION_HE if lang == "he" else _SOCCER_COMPETITION_EN
+    return table.get(slug, slug.replace("_", " ").title())
+
+
+def soccer_match_label(home_name: str, away_name: str, lang: str) -> str:
+    """'Home vs Away' (EN) / 'בית נגד חוץ' (HE) — used in notification bodies."""
+    if lang == "he":
+        return f"{home_name} נגד {away_name}"
+    return f"{home_name} vs {away_name}"
+
+
+def t_soccer_body_late_drama(home: str, away: str, competition: str, minute: int, lang: str) -> str:
+    m = soccer_match_label(home, away, lang)
+    comp = soccer_competition_name(competition, lang)
+    if lang == "he":
+        return f"{m}\n{comp} · דקה {minute} · משחק צמוד בסיום"
+    return f"{m}\n{comp} · {minute}' · close game late on"
+
+
+def t_soccer_body_kickoff(home: str, away: str, competition: str, lang: str) -> str:
+    m = soccer_match_label(home, away, lang)
+    comp = soccer_competition_name(competition, lang)
+    if lang == "he":
+        return f"{m}\n{comp} · המשחק התחיל"
+    return f"{m}\n{comp} · kicking off now"
+
+
+def t_soccer_body_knockout_et(home: str, away: str, competition: str, lang: str) -> str:
+    m = soccer_match_label(home, away, lang)
+    comp = soccer_competition_name(competition, lang)
+    if lang == "he":
+        return f"{m}\n{comp} · הולכים להארכות!"
+    return f"{m}\n{comp} · heading to extra time!"
+
+
+def t_soccer_body_penalty(home: str, away: str, competition: str, lang: str) -> str:
+    m = soccer_match_label(home, away, lang)
+    comp = soccer_competition_name(competition, lang)
+    if lang == "he":
+        return f"{m}\n{comp} · פנדל!"
+    return f"{m}\n{comp} · penalty!"
+
+
+def t_soccer_body_red_card(home: str, away: str, competition: str, minute: int, lang: str) -> str:
+    m = soccer_match_label(home, away, lang)
+    comp = soccer_competition_name(competition, lang)
+    if lang == "he":
+        return f"{m}\n{comp} · דקה {minute} · כרטיס אדום במשחק צמוד"
+    return f"{m}\n{comp} · {minute}' · red card in a close game"
+
+
+def t_soccer_body_comeback(home: str, away: str, competition: str, lang: str) -> str:
+    m = soccer_match_label(home, away, lang)
+    comp = soccer_competition_name(competition, lang)
+    if lang == "he":
+        return f"{m}\n{comp} · קאמבק בעיצומו"
+    return f"{m}\n{comp} · comeback in progress"
+
+
+def t_soccer_body_hat_trick(player_name: str, competition: str, lang: str) -> str:
+    comp = soccer_competition_name(competition, lang)
+    if lang == "he":
+        return f"{player_name} עם 2 שערים\n{comp} · האט-טריק במרחק נגיעה"
+    return f"{player_name} on 2 goals\n{comp} · hat-trick in reach"
+
+
+def t_soccer_body_big_chance(home: str, away: str, competition: str, lang: str) -> str:
+    m = soccer_match_label(home, away, lang)
+    comp = soccer_competition_name(competition, lang)
+    if lang == "he":
+        return f"{m}\n{comp} · גל של הזדמנויות"
+    return f"{m}\n{comp} · big chances pouring in"
+
+
+def t_soccer_body_drama_radar(home: str, away: str, competition: str, lang: str) -> str:
+    """Generic spoiler-safe Drama Radar body."""
+    m = soccer_match_label(home, away, lang)
+    comp = soccer_competition_name(competition, lang)
+    if lang == "he":
+        return f"{m}\n{comp} · שווה לפתוח את האפליקציה"
+    return f"{m}\n{comp} · worth opening the app"
