@@ -196,6 +196,31 @@ class UserPreferenceDB(_Base):
     created_at              = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
+# ── v3 Soccer ORM ──────────────────────────────────────────────────────────────
+
+from sqlalchemy.dialects.postgresql import JSONB as _PG_JSONB  # noqa: E402
+from sqlalchemy import JSON as _SA_JSON  # noqa: E402
+_JSONB = _PG_JSONB if engine is not None and "postgres" in str(engine.url).lower() else _SA_JSON
+
+
+class SoccerAlarmDB(_Base):
+    """Soccer alarm. Most types are event-driven; drama_radar is Drama-Engine-driven (P3)."""
+    __tablename__ = "soccer_alarms"
+
+    id              = Column(Integer, primary_key=True, index=True)
+    user_token      = Column(String,  nullable=False, index=True)
+    alarm_type      = Column(String,  nullable=False)   # match | late_drama | knockout_et | comeback | hat_trick | red_card | big_chance | penalty | drama_radar
+    match_id        = Column(String,  nullable=True)    # canonical id ('bsd-372'); nullable for radar-type
+    competition_id  = Column(String,  nullable=True)    # slug
+    player_id       = Column(String,  nullable=True)
+    threshold       = Column(_SA_JSON, nullable=True)   # numeric or JSON struct per alarm_type
+    config          = Column(_JSONB,   nullable=False, default=dict)
+    alert_type      = Column(String,  nullable=False, default="alarm")
+    is_active       = Column(Boolean, nullable=False, default=True)
+    created_at      = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    fired_at        = Column(DateTime(timezone=True), nullable=True)
+
+
 def _init_db() -> None:
     """Create tables if they don't already exist, and run lightweight migrations."""
     if engine is None:
@@ -1192,7 +1217,7 @@ def health():
         soccer_status["error"] = str(exc)[:120]
     return {
         "status": "ok",
-        "version": "v3-p2.1",
+        "version": "v3-p2.2",
         "db": {"connected": db_ok, "detail": db_msg},
         "soccer": soccer_status,
     }
@@ -1941,6 +1966,142 @@ def soccer_live(leagues: Optional[str] = None):
     return {"matches": _ss.get_live_matches(league_slugs)}
 
 
+# ── Soccer alarm CRUD ────────────────────────────────────────────────────────
+
+# alarm_type values accepted by the API. Keep in sync with the iOS SoccerAlarmType
+# enum and the soccer_monitor evaluator.
+_SOCCER_ALARM_TYPES = {
+    "match",          # single-match alarm — config carries the condition
+    "late_drama",     # any tracked match, ≥75', score within 1
+    "knockout_et",    # any tracked knockout match entering ET or pens
+    "comeback",       # favorite team trailing, score brought within 1
+    "hat_trick",      # favorite player has 2 goals (fire on next attempt)
+    "red_card",       # red card in close match in last 20 min
+    "big_chance",     # 3+ big chances in last 10 min, score within 1
+    "penalty",        # penalty awarded in any tracked match
+    "drama_radar",    # P3 — Drama Engine threshold
+}
+
+
+class SoccerAlarmRequest(BaseModel):
+    user_token: str
+    alarm_type: str
+    match_id: Optional[str] = None       # canonical id ('bsd-372') — required for 'match' type
+    competition_id: Optional[str] = None # slug — used by radar-style alarms to scope
+    player_id: Optional[str] = None      # for hat_trick
+    threshold: Optional[float] = None    # interpretation depends on alarm_type
+    config: Optional[dict] = None        # alarm-type-specific overrides
+    alert_type: str = "alarm"            # 'alarm' | 'silent'
+
+
+@app.post("/soccer-alarm")
+def soccer_alarm_create(req: SoccerAlarmRequest):
+    """Create a soccer alarm. Returns the row id for later deletion."""
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Database not configured.")
+    if not req.user_token.strip():
+        raise HTTPException(status_code=400, detail="user_token is required.")
+    if req.alarm_type not in _SOCCER_ALARM_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"alarm_type must be one of: {sorted(_SOCCER_ALARM_TYPES)}",
+        )
+    if req.alarm_type == "match" and not req.match_id:
+        raise HTTPException(status_code=400, detail="match_id is required for alarm_type='match'.")
+    if req.alarm_type == "hat_trick" and not req.player_id:
+        raise HTTPException(status_code=400, detail="player_id is required for alarm_type='hat_trick'.")
+
+    with Session(engine) as session:
+        # Idempotency: if an active alarm already exists for the same (user, type, match, player),
+        # update it in place rather than stacking duplicates.
+        existing = session.query(SoccerAlarmDB).filter(
+            SoccerAlarmDB.user_token == req.user_token,
+            SoccerAlarmDB.alarm_type == req.alarm_type,
+            SoccerAlarmDB.match_id == req.match_id,
+            SoccerAlarmDB.player_id == req.player_id,
+            SoccerAlarmDB.is_active.is_(True),
+        ).first()
+        if existing:
+            existing.competition_id = req.competition_id
+            existing.threshold      = req.threshold
+            existing.config         = req.config or {}
+            existing.alert_type     = req.alert_type
+            session.commit()
+            session.refresh(existing)
+            alarm_id = existing.id
+            created = False
+        else:
+            alarm = SoccerAlarmDB(
+                user_token=req.user_token,
+                alarm_type=req.alarm_type,
+                match_id=req.match_id,
+                competition_id=req.competition_id,
+                player_id=req.player_id,
+                threshold=req.threshold,
+                config=req.config or {},
+                alert_type=req.alert_type,
+                is_active=True,
+            )
+            session.add(alarm)
+            session.commit()
+            session.refresh(alarm)
+            alarm_id = alarm.id
+            created = True
+
+    return {
+        "status": "alarm_set" if created else "alarm_updated",
+        "alarm_id": alarm_id,
+        "alarm_type": req.alarm_type,
+        "match_id": req.match_id,
+    }
+
+
+@app.delete("/soccer-alarm/{alarm_id}")
+def soccer_alarm_delete(alarm_id: int, user_token: str = ""):
+    """Deactivate a soccer alarm. Requires the same user_token that created it."""
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Database not configured.")
+    if not user_token.strip():
+        raise HTTPException(status_code=400, detail="user_token is required.")
+    with Session(engine) as session:
+        alarm = session.query(SoccerAlarmDB).filter(
+            SoccerAlarmDB.id == alarm_id,
+            SoccerAlarmDB.user_token == user_token,
+        ).first()
+        if alarm is None:
+            raise HTTPException(status_code=404, detail="alarm not found.")
+        alarm.is_active = False
+        session.commit()
+    return {"status": "alarm_deactivated", "alarm_id": alarm_id}
+
+
+@app.get("/soccer-alarms")
+def soccer_alarms_list(user_token: str = ""):
+    """List a user's soccer alarms (active + recently-fired)."""
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Database not configured.")
+    if not user_token.strip():
+        raise HTTPException(status_code=400, detail="user_token is required.")
+    with Session(engine) as session:
+        rows = session.query(SoccerAlarmDB).filter(
+            SoccerAlarmDB.user_token == user_token
+        ).order_by(SoccerAlarmDB.created_at.desc()).limit(100).all()
+        out = [{
+            "id": r.id,
+            "alarm_type": r.alarm_type,
+            "match_id": r.match_id,
+            "competition_id": r.competition_id,
+            "player_id": r.player_id,
+            "threshold": r.threshold,
+            "config": r.config or {},
+            "alert_type": r.alert_type,
+            "is_active": r.is_active,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "fired_at": r.fired_at.isoformat() if r.fired_at else None,
+        } for r in rows]
+    return {"alarms": out}
+
+
 # ── EPG (TV Broadcast Guide) ─────────────────────────────────────────────────
 
 # Countries whose EPG files are small enough to safely load in memory.
@@ -2171,6 +2332,7 @@ def active_monitors(user_token: str = ""):
         "game_alarms":   [],
         "player_alarms": [],
         "db_alarms":     [],
+        "soccer_alarms": [],
         "global_radar":  {"enabled": False, "running": False, "max_diff": 5, "start_quarter": 4},
         "favorite_teams":   [],
         "favorite_players": {},
@@ -2274,10 +2436,42 @@ def active_monitors(user_token: str = ""):
                 log.error("DB error in active_monitors query: %s", db_err)
                 # Degrade gracefully — return whatever was built before the error
 
+        # v3 soccer alarms — best-effort; never break the basketball path
+        soccer_alarms: list[dict] = []
+        if engine is not None and user_token:
+            try:
+                with Session(engine) as session:
+                    rows = (
+                        session.query(SoccerAlarmDB)
+                               .filter(SoccerAlarmDB.user_token == user_token,
+                                       SoccerAlarmDB.is_active.is_(True))
+                               .order_by(SoccerAlarmDB.created_at.desc())
+                               .limit(50)
+                               .all()
+                    )
+                    soccer_alarms = [
+                        {
+                            "id":             r.id,
+                            "alarm_type":     r.alarm_type,
+                            "match_id":       r.match_id,
+                            "competition_id": r.competition_id,
+                            "player_id":      r.player_id,
+                            "threshold":      r.threshold,
+                            "alert_type":     r.alert_type,
+                            "is_active":      r.is_active,
+                            "config":         r.config or {},
+                            "fired_at":       r.fired_at.isoformat() if r.fired_at else None,
+                        }
+                        for r in rows
+                    ]
+            except Exception as soccer_err:
+                log.warning("DB error fetching soccer alarms: %s", soccer_err)
+
         return {
             "game_alarms":   game_alarms,
             "player_alarms": player_alarms,
             "db_alarms":     db_alarms,
+            "soccer_alarms": soccer_alarms,
             "global_radar": {
                 **radar_cfg,
                 "running": get_radar_status(),   # live thread status — not stored in DB
