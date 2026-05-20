@@ -1879,6 +1879,54 @@ def games(date: Optional[str] = None, league: str = "nba"):
     return {"games": get_games_for_date(date, league=league)}
 
 
+# ── Soccer endpoints (v3) ────────────────────────────────────────────────────
+
+
+def _yyyymmdd_to_iso(s: str | None) -> str | None:
+    """'20260517' → '2026-05-17'. Pass-through for already-ISO strings."""
+    if not s:
+        return None
+    s = s.strip()
+    if len(s) == 8 and s.isdigit():
+        return f"{s[0:4]}-{s[4:6]}-{s[6:8]}"
+    return s
+
+
+@app.get("/soccer/games")
+def soccer_games(date: Optional[str] = None, league: str = "premier_league"):
+    """Return soccer matches for a given date (YYYYMMDD or YYYY-MM-DD) and league.
+    `league` is a slug from competition_map.json (premier_league, ucl, world_cup, etc.).
+    Defaults: today, Premier League.
+    """
+    import soccer_source as _ss  # late import to avoid heavy startup if soccer deps missing
+    iso_date = _yyyymmdd_to_iso(date)
+    matches = _ss.get_soccer_matches(league, date_iso=iso_date)
+    return {"matches": matches, "league": league, "date": iso_date}
+
+
+@app.get("/soccer/match/{canonical_id}")
+def soccer_match_detail(canonical_id: str):
+    """Full match payload including xG, momentum, shotmap, incidents.
+    `canonical_id` is the source-tagged id ('bsd-372' or 'sofa-14023956')
+    returned by /soccer/games.
+    """
+    import soccer_source as _ss
+    detail = _ss.get_soccer_match_detail(canonical_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="match not found")
+    return detail
+
+
+@app.get("/soccer/live")
+def soccer_live(leagues: Optional[str] = None):
+    """All currently-live soccer matches across requested leagues
+    (comma-separated slugs). Defaults to all 10 tracked competitions.
+    """
+    import soccer_source as _ss
+    league_slugs = leagues.split(",") if leagues else None
+    return {"matches": _ss.get_live_matches(league_slugs)}
+
+
 # ── EPG (TV Broadcast Guide) ─────────────────────────────────────────────────
 
 # Countries whose EPG files are small enough to safely load in memory.
