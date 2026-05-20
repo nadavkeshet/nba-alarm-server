@@ -1,31 +1,42 @@
-"""All scraping functions for 365Scores basketball data."""
+"""Scraping functions for 365Scores. Sport-parameterized — defaults to basketball
+so existing call sites work unchanged."""
 
 from score365.client import Client365
 
 BASKETBALL_SPORT_ID = 2
+FOOTBALL_SPORT_ID = 1
 
 
-def get_games_by_date(client: Client365, start: str, end: str | None = None) -> dict:
-    """Get all basketball games for a date range.
+def get_games_by_date(
+    client: Client365,
+    start: str,
+    end: str | None = None,
+    sport_id: int = BASKETBALL_SPORT_ID,
+) -> dict:
+    """Get all games for a date range.
 
     Dates in MM/DD/YYYY format. Returns full response with 'games' and 'competitions'.
     """
     return client.get("/games/allscores/", params={
-        "sports": str(BASKETBALL_SPORT_ID),
+        "sports": str(sport_id),
         "startDate": start,
         "endDate": end or start,
     })
 
 
 def get_game_detail(client: Client365, game_id: int) -> dict:
-    """Get full game detail including box score, lineups, quarter scores."""
+    """Get full game detail. Sport-agnostic — same endpoint shape for basketball
+    and football."""
     data = client.get("/game/", params={"gameId": str(game_id)})
     return data.get("game", data)
 
 
-def get_all_competitions(client: Client365) -> list[dict]:
-    """Get ALL basketball competitions (215+)."""
-    data = client.get("/competitions/", params={"sports": str(BASKETBALL_SPORT_ID)})
+def get_all_competitions(
+    client: Client365,
+    sport_id: int = BASKETBALL_SPORT_ID,
+) -> list[dict]:
+    """Get ALL competitions for a sport (basketball has ~215, football ~800)."""
+    data = client.get("/competitions/", params={"sports": str(sport_id)})
     return data.get("competitions", [])
 
 

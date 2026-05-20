@@ -5,6 +5,7 @@ import threading
 import requests
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
 log = logging.getLogger("nba_monitor")
@@ -247,6 +248,20 @@ def _init_db() -> None:
                 conn.commit()
         except Exception:
             pass  # column already exists – safe to ignore
+
+    # ── v3 (soccer) — load multi-statement SQL file ───────────────────────
+    soccer_schema_path = Path(__file__).resolve().parent / "migrations" / "001_soccer_schema.sql"
+    if soccer_schema_path.exists():
+        soccer_sql = soccer_schema_path.read_text()
+        # Statements separated by `;\n` (semicolons inside JSONB defaults won't trip
+        # this because we keep them quoted on one line)
+        for stmt in [s.strip() for s in soccer_sql.split(";\n") if s.strip()]:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(stmt))
+                    conn.commit()
+            except Exception as exc:
+                log.warning("DB: soccer migration skipped (%s): %s", exc, stmt[:80])
 
 
 def _migrate_team_ids_to_365() -> None:
