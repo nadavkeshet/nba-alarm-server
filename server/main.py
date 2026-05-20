@@ -1276,7 +1276,7 @@ def health():
         soccer_status["error"] = str(exc)[:120]
     return {
         "status": "ok",
-        "version": "v3-p2.6",
+        "version": "v3-p3.0",
         "db": {"connected": db_ok, "detail": db_msg},
         "soccer": soccer_status,
     }
@@ -2013,6 +2013,39 @@ def soccer_match_detail(canonical_id: str):
     if detail is None:
         raise HTTPException(status_code=404, detail="match not found")
     return detail
+
+
+@app.get("/soccer/drama/{canonical_id}")
+def soccer_drama(canonical_id: str):
+    """Return the Drama Engine breakdown for a match. Debug + iOS Drama Meter.
+
+    Response shape:
+        {
+          "match_id": "bsd-372",
+          "minute": 78,
+          "drama": {"total": 7.4, "state": 3.6, "momentum": 2.83, "events": 0.0, "stakes": 1.15},
+          "match": {...slim match payload...}
+        }
+    """
+    import soccer_source as _ss
+    import drama_engine as _de
+    detail = _ss.get_soccer_match_detail(canonical_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="match not found")
+    ctx = _de.context_from_match_detail(detail)
+    score = _de.compute_drama(ctx)
+    return {
+        "match_id": detail.get("id"),
+        "minute":   detail.get("minute"),
+        "status":   detail.get("status"),
+        "drama":    score.as_dict(),
+        "match":    {
+            "home":        detail.get("home"),
+            "away":        detail.get("away"),
+            "competition": detail.get("competition"),
+            "round_name":  detail.get("round_name"),
+        },
+    }
 
 
 @app.get("/soccer/live")

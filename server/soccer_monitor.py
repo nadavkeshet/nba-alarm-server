@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 import soccer_source as ss
+import drama_engine
 from i18n import (
     t_title,
     t_soccer_body_kickoff,
@@ -38,6 +39,7 @@ from i18n import (
     t_soccer_body_late_drama,
     t_soccer_body_penalty,
     t_soccer_body_red_card,
+    t_soccer_body_drama_radar,
 )
 
 logger = logging.getLogger(__name__)
@@ -119,7 +121,6 @@ def _tick() -> None:
     with Session(_db_engine) as session:
         rows = session.query(_alarm_model).filter(
             _alarm_model.is_active.is_(True),
-            _alarm_model.match_id.isnot(None),
         ).all()
         if not rows:
             return
@@ -134,16 +135,26 @@ def _tick() -> None:
                 "player_id": r.player_id,
                 "threshold": r.threshold,
                 "alert_type": r.alert_type,
+                "config": r.config or {},
             }
             for r in rows
         ]
 
-    # Group by match_id so we fetch each match's state once per tick
-    grouped: dict[str, list[dict]] = defaultdict(list)
-    for a in alarms:
-        grouped[a["match_id"]].append(a)
+    # Two passes:
+    # 1) Match-scoped alarms (match_id != None) — fetch each match once.
+    # 2) Comp-scoped drama_radar alarms (match_id == None, competition_id != None)
+    #    — fetch live matches in each requested competition once.
 
-    for match_id, alarm_group in grouped.items():
+    match_scoped: dict[str, list[dict]] = defaultdict(list)
+    comp_radar:   list[dict]            = []
+    for a in alarms:
+        if a["match_id"]:
+            match_scoped[a["match_id"]].append(a)
+        elif a["alarm_type"] == "drama_radar" and a["competition_id"]:
+            comp_radar.append(a)
+
+    # ── Pass 1: per-match
+    for match_id, alarm_group in match_scoped.items():
         try:
             detail = ss.get_soccer_match_detail(match_id)
         except Exception as exc:
@@ -156,6 +167,36 @@ def _tick() -> None:
                 _evaluate_alarm(alarm, detail)
             except Exception as exc:
                 logger.exception("alarm %s eval failed: %s", alarm["id"], exc)
+
+    # ── Pass 2: competition-scoped drama radar
+    if comp_radar:
+        # Group comp-radar alarms by competition so we hit get_live_matches once per slug
+        by_comp: dict[str, list[dict]] = defaultdict(list)
+        for a in comp_radar:
+            by_comp[a["competition_id"]].append(a)
+
+        for comp_slug, alarm_group in by_comp.items():
+            try:
+                live_matches = ss.get_live_matches([comp_slug])
+            except Exception as exc:
+                logger.warning("drama_radar: live fetch failed for %s: %s", comp_slug, exc)
+                continue
+            for slim_match in live_matches:
+                cid = slim_match.get("id")
+                if not cid:
+                    continue
+                try:
+                    detail = ss.get_soccer_match_detail(cid)
+                except Exception as exc:
+                    logger.warning("drama_radar: detail fetch failed for %s: %s", cid, exc)
+                    continue
+                if detail is None:
+                    continue
+                for alarm in alarm_group:
+                    try:
+                        _evaluate_drama_radar(alarm, detail)
+                    except Exception as exc:
+                        logger.exception("drama_radar alarm %s eval failed: %s", alarm["id"], exc)
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +244,11 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
                   signal="penalty", one_shot=False)  # can fire on multiple pens in same match
         return
 
+    if alarm_type == "drama_radar":
+        # Match-scoped drama_radar: same evaluator as comp-scoped pass 2.
+        _evaluate_drama_radar(alarm, match)
+        return
+
     if alarm_type == "red_card":
         # Red card in last 20 min, score within 1
         home_score = (match.get("home") or {}).get("score") or 0
@@ -219,6 +265,77 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
         return
 
     # Unknown alarm_type → no-op (keeps forward compat for P3 types)
+
+
+# ---------------------------------------------------------------------------
+# Drama Engine evaluator (P3)
+
+
+_DEFAULT_DRAMA_THRESHOLD = 7.0
+
+
+def _evaluate_drama_radar(alarm: dict, match: dict) -> None:
+    """Compute the Drama Engine score for `match` and fire if it crosses
+    the user's threshold. Persists a row to `drama_snapshots` either way
+    so we can tune weights from real data over time."""
+    status = (match.get("status") or "").lower()
+    # Only meaningful during a live or live-like phase
+    if status not in {"live", "ht", "et", "pens", "1h", "2h"}:
+        return
+
+    ctx = drama_engine.context_from_match_detail(match)
+    score = drama_engine.compute_drama(ctx)
+
+    # Persist snapshot (best-effort — never block firing on log failure)
+    _log_drama_snapshot(match.get("id"), match.get("minute") or 0, score)
+
+    threshold = alarm.get("threshold") if alarm.get("threshold") is not None else _DEFAULT_DRAMA_THRESHOLD
+    if score.total < threshold:
+        return
+
+    # Bucket the score so a hovering 7.2 doesn't re-fire each tick. A bump
+    # from 7.x → 8.x will, because the bucket changes.
+    bucket = int(score.total)
+    home_name = (match.get("home") or {}).get("name", "")
+    away_name = (match.get("away") or {}).get("name", "")
+    competition = match.get("competition", "")
+    match_id = match.get("id", "")
+
+    _fire(
+        alarm, "soccer_drama_radar",
+        lambda h, a, c, lang: t_soccer_body_drama_radar(h, a, c, score.total, lang),
+        home_name, away_name, competition,
+        signal=f"drama_{match_id}_{bucket}",
+        one_shot=False,  # radar keeps watching other matches
+    )
+
+
+def _log_drama_snapshot(match_id: str | None, minute: int, score) -> None:
+    if _db_engine is None or not match_id:
+        return
+    try:
+        from sqlalchemy import text
+        with _db_engine.connect() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO drama_snapshots "
+                    "(match_id, sport, minute, state_score, momentum_score, "
+                    " events_score, stakes_mult, drama_total) "
+                    "VALUES (:m, 'football', :min, :st, :mo, :ev, :sk, :tot)"
+                ),
+                {
+                    "m":   match_id,
+                    "min": minute,
+                    "st":  score.state,
+                    "mo":  score.momentum,
+                    "ev":  score.events,
+                    "sk":  score.stakes,
+                    "tot": score.total,
+                },
+            )
+            conn.commit()
+    except Exception as exc:
+        logger.debug("drama snapshot log failed for %s: %s", match_id, exc)
 
 
 def _recent_incident(match: dict, *, types: tuple[str, ...], window_min: int) -> bool:

@@ -377,10 +377,16 @@ def t_soccer_body_big_chance(home: str, away: str, competition: str, lang: str) 
     return f"{m}\n{comp} · big chances pouring in"
 
 
-def t_soccer_body_drama_radar(home: str, away: str, competition: str, lang: str) -> str:
-    """Generic spoiler-safe Drama Radar body."""
-    m = soccer_match_label(home, away, lang)
+def t_soccer_body_drama_radar(home: str, away: str, competition: str, drama: float | None = None, lang: str = "en") -> str:
+    """Spoiler-safe Drama Radar body. Surfaces the drama score (rounded
+    to one decimal) so users can decide whether to look."""
+    # Accept legacy 4-positional callers: (home, away, comp, lang)
+    if isinstance(drama, str):
+        lang, drama = drama, None
+
+    m    = soccer_match_label(home, away, lang)
     comp = soccer_competition_name(competition, lang)
+    drama_tag = f" · {drama:.1f}/10" if drama is not None else ""
     if lang == "he":
-        return f"{m}\n{comp} · שווה לפתוח את האפליקציה"
-    return f"{m}\n{comp} · worth opening the app"
+        return f"{m}\n{comp}{drama_tag} · שווה לפתוח את האפליקציה"
+    return f"{m}\n{comp}{drama_tag} · worth opening the app"
