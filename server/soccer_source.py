@@ -48,7 +48,7 @@ def parse_canonical_id(cid: str) -> tuple[str, str]:
     if "-" not in cid:
         raise ValueError(f"bad canonical id: {cid!r}")
     source, native = cid.split("-", 1)
-    if source not in ("bsd", "sofa"):
+    if source not in ("bsd", "sofa", "s365"):
         raise ValueError(f"unknown source in canonical id: {cid!r}")
     return source, native
 
@@ -240,6 +240,13 @@ def get_soccer_matches(
 
     `league_slug` must be one of the keys in PRIMARY_SOURCE.
     `date_iso` is YYYY-MM-DD; defaults to today (UTC).
+
+    Source chain (cascades on either exception OR empty result):
+        1. primary       (from PRIMARY_SOURCE — bsd or sofascore)
+        2. the other unofficial source (bsd ↔ sofascore)
+        3. 365scores     (free fallback; covers all 10 competitions and is
+                         reachable from Railway egress IPs that Sofascore
+                         occasionally blocks)
     """
     if league_slug not in PRIMARY_SOURCE:
         logger.warning("get_soccer_matches: unknown league %r", league_slug)
@@ -250,27 +257,32 @@ def get_soccer_matches(
 
     primary = PRIMARY_SOURCE[league_slug]
 
-    # Try primary, fall back to secondary on error
-    try:
-        if primary == "bsd" and league_slug in BSD_COMPETITION_IDS:
-            return _fetch_bsd(league_slug, date_iso)
-        if primary == "sofascore" and league_slug in SOFASCORE_COMPETITION_IDS:
-            return _fetch_sofa(league_slug, date_iso)
-    except Exception as exc:
-        logger.warning("primary source %s failed for %s: %s — trying fallback", primary, league_slug, exc)
-
-    # Fallback path
-    try:
+    # Build the order of sources to try: primary, then the other, then 365scores
+    sources: list[tuple[str, callable]] = []  # type: ignore[type-arg]
+    if primary == "bsd":
         if league_slug in BSD_COMPETITION_IDS:
-            return _fetch_bsd(league_slug, date_iso)
-    except Exception:
-        pass
-    try:
+            sources.append(("bsd", _fetch_bsd))
         if league_slug in SOFASCORE_COMPETITION_IDS:
-            return _fetch_sofa(league_slug, date_iso)
-    except Exception as exc:
-        logger.error("both sources failed for %s: %s", league_slug, exc)
+            sources.append(("sofascore", _fetch_sofa))
+    else:
+        if league_slug in SOFASCORE_COMPETITION_IDS:
+            sources.append(("sofascore", _fetch_sofa))
+        if league_slug in BSD_COMPETITION_IDS:
+            sources.append(("bsd", _fetch_bsd))
+    sources.append(("score365", _fetch_365))
 
+    for name, fetcher in sources:
+        try:
+            matches = fetcher(league_slug, date_iso)
+        except Exception as exc:
+            logger.warning("soccer source %s errored for %s/%s: %s", name, league_slug, date_iso, exc)
+            continue
+        if matches:
+            logger.info("soccer source %s served %s/%s with %d matches", name, league_slug, date_iso, len(matches))
+            return matches
+        logger.info("soccer source %s returned 0 for %s/%s — trying next", name, league_slug, date_iso)
+
+    logger.warning("all soccer sources empty for %s/%s", league_slug, date_iso)
     return []
 
 
@@ -289,6 +301,82 @@ def _fetch_sofa(slug: str, date_iso: str) -> list[dict]:
         if (e.get("tournament", {}) or {}).get("uniqueTournament", {}).get("id") == tournament_id
     ]
     return [_from_sofa_event(e, slug=slug) for e in matched]
+
+
+def _fetch_365(slug: str, date_iso: str) -> list[dict]:
+    """Free fallback via the existing 365scores client. Covers all 10 launch
+    competitions. Used when both BSD and Sofascore come up empty (e.g. when
+    Sofascore blocks Railway's egress IP)."""
+    from score365_soccer_adapter import soccer_games_by_date, COMPETITION_IDS as S365_IDS
+    competition_id = S365_IDS.get(slug)
+    if competition_id is None:
+        return []
+    # 365scores wants MM/DD/YYYY
+    y, m, d = date_iso.split("-")
+    mdy = f"{m}/{d}/{y}"
+    raw = soccer_games_by_date(mdy)
+    matched = [g for g in raw if g.get("competitionId") == competition_id]
+    return [_from_365_game(g, slug=slug) for g in matched]
+
+
+def _from_365_game(game: dict, *, slug: str | None = None) -> dict:
+    """Normalize a 365scores football game dict into SoccerMatch shape."""
+    gid = game.get("id")
+    home = game.get("homeCompetitor", {}) or {}
+    away = game.get("awayCompetitor", {}) or {}
+    status_group = game.get("statusGroup")
+    status_text = (game.get("shortStatusText") or "").lower()
+    # Heuristic status normalization for 365scores
+    if status_group == 2 or status_text in ("sched.", "scheduled"):
+        status, period = "scheduled", "pre"
+    elif status_group == 4 or status_text == "ended":
+        status, period = "ft", "ft"
+    elif status_text == "ht":
+        status, period = "ht", "ht"
+    elif status_text == "post.":
+        status, period = "postponed", "pre"
+    else:
+        status, period = "live", "1h"
+
+    def _crest(team_id):
+        if not team_id:
+            return None
+        return f"https://imagecache.365scores.com/image/upload/d_Competitors:default1.png/Competitors/{team_id}"
+
+    return {
+        "id": canonical_id("s365", gid),
+        "source": "score365",
+        "source_event_id": gid,
+        "competition": slug,
+        "competition_id_native": game.get("competitionId"),
+        "kickoff": game.get("startTime"),
+        "status": status,
+        "period": period,
+        "minute": int(game.get("gameTime")) if isinstance(game.get("gameTime"), (int, float)) else None,
+        "home": {
+            "id": str(home.get("id") or ""),
+            "name": home.get("name", ""),
+            "short_name": home.get("symbolicName", "") or home.get("shortName", ""),
+            "crest": _crest(home.get("id")),
+            "score": int(home.get("score")) if isinstance(home.get("score"), (int, float)) and home.get("score") is not None and home.get("score") >= 0 else None,
+            "score_ht": None,
+            "xg": None,
+        },
+        "away": {
+            "id": str(away.get("id") or ""),
+            "name": away.get("name", ""),
+            "short_name": away.get("symbolicName", "") or away.get("shortName", ""),
+            "crest": _crest(away.get("id")),
+            "score": int(away.get("score")) if isinstance(away.get("score"), (int, float)) and away.get("score") is not None and away.get("score") >= 0 else None,
+            "score_ht": None,
+            "xg": None,
+        },
+        "venue": ({"name": (game.get("venue") or {}).get("name")} if game.get("venue") else None),
+        "is_derby": False,
+        "is_neutral_ground": False,
+        "round_number": game.get("roundNum"),
+        "round_name": game.get("roundName"),
+    }
 
 
 def get_live_matches(league_slugs: list[str] | None = None) -> list[dict]:

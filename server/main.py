@@ -1237,7 +1237,7 @@ def health():
         soccer_status["error"] = str(exc)[:120]
     return {
         "status": "ok",
-        "version": "v3-p2.4",
+        "version": "v3-p2.5",
         "db": {"connected": db_ok, "detail": db_msg},
         "soccer": soccer_status,
     }
