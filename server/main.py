@@ -221,6 +221,45 @@ class SoccerAlarmDB(_Base):
     fired_at        = Column(DateTime(timezone=True), nullable=True)
 
 
+class SoccerFavoritePlayerDB(_Base):
+    """Persistent soccer favorite player (e.g. hat-trick watch)."""
+    __tablename__ = "soccer_favorites"
+
+    user_token  = Column(String, primary_key=True)
+    player_id   = Column(String, primary_key=True)
+    player_name = Column(String, nullable=True)
+    team_id     = Column(String, nullable=True)
+    config      = Column(_JSONB, nullable=False, default=dict)
+    alert_type  = Column(String, nullable=False, default="alarm")
+    paused      = Column(Boolean, nullable=False, default=False)
+    created_at  = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class SoccerFavoriteTeamDB(_Base):
+    """Persistent soccer favorite team (drives team-scoped drama alerts)."""
+    __tablename__ = "soccer_favorite_teams"
+
+    user_token        = Column(String,  primary_key=True)
+    team_id           = Column(String,  primary_key=True)
+    team_name         = Column(String,  nullable=True)
+    competition_id    = Column(String,  nullable=True)
+    drama_threshold   = Column(Float,   nullable=False, default=7.0)
+    alert_type        = Column(String,  nullable=False, default="alarm")
+    paused            = Column(Boolean, nullable=False, default=False)
+    notify_at_kickoff = Column(Boolean, nullable=False, default=False)
+    created_at        = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class SoccerFavoriteCompetitionDB(_Base):
+    """Persistent soccer favorite competition (drives Drama Radar scope per user)."""
+    __tablename__ = "soccer_favorite_competitions"
+
+    user_token      = Column(String,  primary_key=True)
+    competition_id  = Column(String,  primary_key=True)
+    drama_threshold = Column(Float,   nullable=False, default=7.0)
+    created_at      = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 def _init_db() -> None:
     """Create tables if they don't already exist, and run lightweight migrations."""
     if engine is None:
@@ -1237,7 +1276,7 @@ def health():
         soccer_status["error"] = str(exc)[:120]
     return {
         "status": "ok",
-        "version": "v3-p2.5",
+        "version": "v3-p2.6",
         "db": {"connected": db_ok, "detail": db_msg},
         "soccer": soccer_status,
     }
@@ -2122,6 +2161,210 @@ def soccer_alarms_list(user_token: str = ""):
     return {"alarms": out}
 
 
+# ── Soccer Favorites CRUD ────────────────────────────────────────────────────
+# Persistent player / team / competition watch lists. Players & teams power
+# event-driven alerts (hat-trick, red card, etc.); competitions scope the
+# Drama Radar (P3). All endpoints are idempotent — POST upserts by PK.
+
+class SoccerFavoritePlayerRequest(BaseModel):
+    user_token: str
+    player_id: str
+    player_name: Optional[str] = None
+    team_id: Optional[str] = None
+    config: Optional[dict] = None
+    alert_type: str = "alarm"
+    paused: bool = False
+
+
+class SoccerFavoriteTeamRequest(BaseModel):
+    user_token: str
+    team_id: str
+    team_name: Optional[str] = None
+    competition_id: Optional[str] = None
+    drama_threshold: float = 7.0
+    alert_type: str = "alarm"
+    paused: bool = False
+    notify_at_kickoff: bool = False
+
+
+class SoccerFavoriteCompetitionRequest(BaseModel):
+    user_token: str
+    competition_id: str
+    drama_threshold: float = 7.0
+
+
+def _require_token(user_token: str) -> None:
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Database not configured.")
+    if not user_token.strip():
+        raise HTTPException(status_code=400, detail="user_token is required.")
+
+
+# ─── Players ────────────────────────────────────────────────────────────────
+
+@app.post("/soccer/favorites/players")
+def soccer_fav_player_upsert(req: SoccerFavoritePlayerRequest):
+    _require_token(req.user_token)
+    with Session(engine) as session:
+        row = session.get(SoccerFavoritePlayerDB, (req.user_token, req.player_id))
+        if row is None:
+            row = SoccerFavoritePlayerDB(
+                user_token=req.user_token,
+                player_id=req.player_id,
+            )
+            session.add(row)
+        row.player_name = req.player_name
+        row.team_id     = req.team_id
+        row.config      = req.config or {}
+        row.alert_type  = req.alert_type
+        row.paused      = req.paused
+        session.commit()
+    return {"status": "ok", "player_id": req.player_id}
+
+
+@app.delete("/soccer/favorites/players/{player_id}")
+def soccer_fav_player_delete(player_id: str, user_token: str = ""):
+    _require_token(user_token)
+    with Session(engine) as session:
+        row = session.get(SoccerFavoritePlayerDB, (user_token, player_id))
+        if row is None:
+            raise HTTPException(status_code=404, detail="favorite player not found.")
+        session.delete(row)
+        session.commit()
+    return {"status": "deleted", "player_id": player_id}
+
+
+@app.get("/soccer/favorites/players")
+def soccer_fav_players_list(user_token: str = ""):
+    _require_token(user_token)
+    with Session(engine) as session:
+        rows = session.query(SoccerFavoritePlayerDB).filter(
+            SoccerFavoritePlayerDB.user_token == user_token,
+        ).order_by(SoccerFavoritePlayerDB.created_at.desc()).all()
+        out = [{
+            "player_id":   r.player_id,
+            "player_name": r.player_name,
+            "team_id":     r.team_id,
+            "config":      r.config or {},
+            "alert_type":  r.alert_type,
+            "paused":      r.paused,
+            "created_at":  r.created_at.isoformat() if r.created_at else None,
+        } for r in rows]
+    return {"players": out}
+
+
+# ─── Teams ──────────────────────────────────────────────────────────────────
+
+@app.post("/soccer/favorites/teams")
+def soccer_fav_team_upsert(req: SoccerFavoriteTeamRequest):
+    _require_token(req.user_token)
+    with Session(engine) as session:
+        row = session.get(SoccerFavoriteTeamDB, (req.user_token, req.team_id))
+        if row is None:
+            row = SoccerFavoriteTeamDB(
+                user_token=req.user_token,
+                team_id=req.team_id,
+            )
+            session.add(row)
+        row.team_name         = req.team_name
+        row.competition_id    = req.competition_id
+        row.drama_threshold   = req.drama_threshold
+        row.alert_type        = req.alert_type
+        row.paused            = req.paused
+        row.notify_at_kickoff = req.notify_at_kickoff
+        session.commit()
+    return {"status": "ok", "team_id": req.team_id}
+
+
+@app.delete("/soccer/favorites/teams/{team_id}")
+def soccer_fav_team_delete(team_id: str, user_token: str = ""):
+    _require_token(user_token)
+    with Session(engine) as session:
+        row = session.get(SoccerFavoriteTeamDB, (user_token, team_id))
+        if row is None:
+            raise HTTPException(status_code=404, detail="favorite team not found.")
+        session.delete(row)
+        session.commit()
+    return {"status": "deleted", "team_id": team_id}
+
+
+@app.get("/soccer/favorites/teams")
+def soccer_fav_teams_list(user_token: str = ""):
+    _require_token(user_token)
+    with Session(engine) as session:
+        rows = session.query(SoccerFavoriteTeamDB).filter(
+            SoccerFavoriteTeamDB.user_token == user_token,
+        ).order_by(SoccerFavoriteTeamDB.created_at.desc()).all()
+        out = [{
+            "team_id":           r.team_id,
+            "team_name":         r.team_name,
+            "competition_id":    r.competition_id,
+            "drama_threshold":   r.drama_threshold,
+            "alert_type":        r.alert_type,
+            "paused":            r.paused,
+            "notify_at_kickoff": r.notify_at_kickoff,
+            "created_at":        r.created_at.isoformat() if r.created_at else None,
+        } for r in rows]
+    return {"teams": out}
+
+
+# ─── Competitions ───────────────────────────────────────────────────────────
+
+@app.post("/soccer/favorites/competitions")
+def soccer_fav_competition_upsert(req: SoccerFavoriteCompetitionRequest):
+    _require_token(req.user_token)
+    with Session(engine) as session:
+        row = session.get(SoccerFavoriteCompetitionDB, (req.user_token, req.competition_id))
+        if row is None:
+            row = SoccerFavoriteCompetitionDB(
+                user_token=req.user_token,
+                competition_id=req.competition_id,
+            )
+            session.add(row)
+        row.drama_threshold = req.drama_threshold
+        session.commit()
+    return {"status": "ok", "competition_id": req.competition_id}
+
+
+@app.delete("/soccer/favorites/competitions/{competition_id}")
+def soccer_fav_competition_delete(competition_id: str, user_token: str = ""):
+    _require_token(user_token)
+    with Session(engine) as session:
+        row = session.get(SoccerFavoriteCompetitionDB, (user_token, competition_id))
+        if row is None:
+            raise HTTPException(status_code=404, detail="favorite competition not found.")
+        session.delete(row)
+        session.commit()
+    return {"status": "deleted", "competition_id": competition_id}
+
+
+@app.get("/soccer/favorites/competitions")
+def soccer_fav_competitions_list(user_token: str = ""):
+    _require_token(user_token)
+    with Session(engine) as session:
+        rows = session.query(SoccerFavoriteCompetitionDB).filter(
+            SoccerFavoriteCompetitionDB.user_token == user_token,
+        ).order_by(SoccerFavoriteCompetitionDB.created_at.desc()).all()
+        out = [{
+            "competition_id":  r.competition_id,
+            "drama_threshold": r.drama_threshold,
+            "created_at":      r.created_at.isoformat() if r.created_at else None,
+        } for r in rows]
+    return {"competitions": out}
+
+
+# ─── Combined fetch (one round-trip from iOS) ───────────────────────────────
+
+@app.get("/soccer/favorites")
+def soccer_favorites_all(user_token: str = ""):
+    _require_token(user_token)
+    return {
+        "players":      soccer_fav_players_list(user_token=user_token)["players"],
+        "teams":        soccer_fav_teams_list(user_token=user_token)["teams"],
+        "competitions": soccer_fav_competitions_list(user_token=user_token)["competitions"],
+    }
+
+
 # ── EPG (TV Broadcast Guide) ─────────────────────────────────────────────────
 
 # Countries whose EPG files are small enough to safely load in memory.
@@ -2487,11 +2730,56 @@ def active_monitors(user_token: str = ""):
             except Exception as soccer_err:
                 log.warning("DB error fetching soccer alarms: %s", soccer_err)
 
+        # v3 soccer favorites — best-effort; failure must not break basketball
+        soccer_fav_players: list[dict] = []
+        soccer_fav_teams: list[dict]   = []
+        soccer_fav_comps: list[dict]   = []
+        if engine is not None and user_token:
+            try:
+                with Session(engine) as session:
+                    p_rows = (session.query(SoccerFavoritePlayerDB)
+                                     .filter(SoccerFavoritePlayerDB.user_token == user_token)
+                                     .all())
+                    soccer_fav_players = [{
+                        "player_id":   r.player_id,
+                        "player_name": r.player_name,
+                        "team_id":     r.team_id,
+                        "config":      r.config or {},
+                        "alert_type":  r.alert_type,
+                        "paused":      r.paused,
+                    } for r in p_rows]
+
+                    t_rows = (session.query(SoccerFavoriteTeamDB)
+                                     .filter(SoccerFavoriteTeamDB.user_token == user_token)
+                                     .all())
+                    soccer_fav_teams = [{
+                        "team_id":           r.team_id,
+                        "team_name":         r.team_name,
+                        "competition_id":    r.competition_id,
+                        "drama_threshold":   r.drama_threshold,
+                        "alert_type":        r.alert_type,
+                        "paused":            r.paused,
+                        "notify_at_kickoff": r.notify_at_kickoff,
+                    } for r in t_rows]
+
+                    c_rows = (session.query(SoccerFavoriteCompetitionDB)
+                                     .filter(SoccerFavoriteCompetitionDB.user_token == user_token)
+                                     .all())
+                    soccer_fav_comps = [{
+                        "competition_id":  r.competition_id,
+                        "drama_threshold": r.drama_threshold,
+                    } for r in c_rows]
+            except Exception as fav_err:
+                log.warning("DB error fetching soccer favorites: %s", fav_err)
+
         return {
             "game_alarms":   game_alarms,
             "player_alarms": player_alarms,
             "db_alarms":     db_alarms,
             "soccer_alarms": soccer_alarms,
+            "soccer_favorite_players":      soccer_fav_players,
+            "soccer_favorite_teams":        soccer_fav_teams,
+            "soccer_favorite_competitions": soccer_fav_comps,
             "global_radar": {
                 **radar_cfg,
                 "running": get_radar_status(),   # live thread status — not stored in DB
