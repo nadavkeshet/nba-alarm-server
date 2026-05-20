@@ -1181,7 +1181,21 @@ def health():
             db_msg = "connected"
         except Exception as exc:
             db_msg = str(exc)
-    return {"status": "ok", "version": "ios-v5", "db": {"connected": db_ok, "detail": db_msg}}
+    # v3 soccer readiness: confirms the new modules and competition map loaded.
+    soccer_status = {"ready": False, "competitions": 0, "bsd_token": False}
+    try:
+        from score365_soccer_adapter import _COMPETITION_MAP, PRIMARY_SOURCE
+        soccer_status["competitions"] = len(_COMPETITION_MAP)
+        soccer_status["ready"] = len(PRIMARY_SOURCE) >= 10
+        soccer_status["bsd_token"] = bool(os.environ.get("BZZOIRO_API_TOKEN", "").strip())
+    except Exception as exc:
+        soccer_status["error"] = str(exc)[:120]
+    return {
+        "status": "ok",
+        "version": "v3-p2.1",
+        "db": {"connected": db_ok, "detail": db_msg},
+        "soccer": soccer_status,
+    }
 
 
 # ── DB Alarm Endpoint ──────────────────────────────────────────────────────────
