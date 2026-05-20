@@ -198,8 +198,8 @@ class UserPreferenceDB(_Base):
 
 # ── v3 Soccer ORM ──────────────────────────────────────────────────────────────
 
+from sqlalchemy import Float, JSON as _SA_JSON  # noqa: E402
 from sqlalchemy.dialects.postgresql import JSONB as _PG_JSONB  # noqa: E402
-from sqlalchemy import JSON as _SA_JSON  # noqa: E402
 _JSONB = _PG_JSONB if engine is not None and "postgres" in str(engine.url).lower() else _SA_JSON
 
 
@@ -213,8 +213,8 @@ class SoccerAlarmDB(_Base):
     match_id        = Column(String,  nullable=True)    # canonical id ('bsd-372'); nullable for radar-type
     competition_id  = Column(String,  nullable=True)    # slug
     player_id       = Column(String,  nullable=True)
-    threshold       = Column(_SA_JSON, nullable=True)   # numeric or JSON struct per alarm_type
-    config          = Column(_JSONB,   nullable=False, default=dict)
+    threshold       = Column(Float,   nullable=True)    # SQL column type is REAL (see migrations/001_soccer_schema.sql)
+    config          = Column(_JSONB,  nullable=False, default=dict)
     alert_type      = Column(String,  nullable=False, default="alarm")
     is_active       = Column(Boolean, nullable=False, default=True)
     created_at      = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
@@ -1237,7 +1237,7 @@ def health():
         soccer_status["error"] = str(exc)[:120]
     return {
         "status": "ok",
-        "version": "v3-p2.3",
+        "version": "v3-p2.4",
         "db": {"connected": db_ok, "detail": db_msg},
         "soccer": soccer_status,
     }
