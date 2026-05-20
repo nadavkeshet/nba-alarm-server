@@ -211,23 +211,53 @@ Each alarm honors:
 
 ### 5a. Sources (final, all free)
 
+After P1 audit (2026-05-18), **BSD (bzzoiro) is the primary source for football**.
+It's an official, documented, free, indie-friendly API that delivers everything
+the Drama Engine needs in one JSON shape per match. Sofascore stays as the
+secondary — it covers the two competitions BSD doesn't (Euros, Ligat Ha'al) and
+acts as failover if BSD has an outage.
+
 | Layer | Source | Access | Purpose |
 |---|---|---|---|
-| Schedule, fixtures, score, minute, stages, events timeline, lineups | **365scores** | Existing `Client365` — no auth | Authoritative match state. Already integrated. |
-| Live xG (cumulative + per shot), momentum graph, shotmap with coordinates, statistics, incidents | **Sofascore via `curl_cffi`** | Chrome120 TLS impersonation, no headless browser | The Drama Engine's pressure input. Verified working on Premier League / La Liga / Bundesliga / UCL matches. |
-| xG fallback when shot has location but no xG number | **`soccer_xg`** (ML-KULeuven, Apache 2.0) — pretrained `openplay_xgboost_advanced` | Local Python | Decouples Drama Engine from any single provider |
-| Backup live source | **bzzoiro BSD** | API key (free, no rate limit) | Failover if Sofascore degrades. Register and verify in P1. |
+| Live xG (cumulative + per shot), per-minute Attack Momentum, per-minute cumulative xG timeline, shotmap with coordinates+body part+situation, 40+ per-team stats, confirmed/predicted lineups, incidents, CatBoost ML predictions | **BSD (bzzoiro)** v2 API — primary for 8 of 10 competitions (top 5 + UCL + EL + World Cup) | Official REST, `Authorization: Token <BZZOIRO_API_TOKEN>` env var. Free tier with Redis-side caching (30s live window, 15min social, etc.) | Drama Engine's pressure + xG input. Verified 9/9 tests passing live |
+| Same data for Euros + Ligat Ha'al | **Sofascore via `curl_cffi`** | Chrome120 TLS impersonation, no headless browser | Covers the two competitions BSD doesn't. Verified 8/8 tests passing live |
+| Schedule, fixtures, events timeline (basketball-style consistency) | **365scores** (existing `Client365` — no auth) | Authoritative match listing layer. Already integrated for basketball — sport_id=1 parameterizes for football | Authoritative match state listing + fallback metadata |
+| xG fallback when no provider has xG for a particular shot | **`soccer_xg`** (ML-KULeuven, Apache 2.0) — pretrained `openplay_xgboost_advanced` | Local Python | Decouples Drama Engine from any single provider — stub in P1, full impl in P3 |
 
-**Total ongoing data cost: $0/mo.**
+**Total ongoing data cost: $0/mo.** Optional $3/mo BSD WebSocket add-on
+(`wss://sports.bzzoiro.com/ws/live/`) for true real-time streaming, deferrable
+until polling at 25s proves insufficient.
+
+### 5a.i. BSD competition coverage
+
+| Competition | BSD ID | Notes |
+|---|---|---|
+| Premier League | 1 | |
+| La Liga | 3 | |
+| Serie A | 4 | |
+| Bundesliga | 5 | |
+| Ligue 1 | 6 | |
+| Champions League | 7 | |
+| Europa League | 8 | |
+| World Cup 2026 | 27 | |
+| Euros | — | Use Sofascore id=1 |
+| Ligat Ha'al | — | Use Sofascore id=266 |
+
+### 5a.ii. BSD data confirmed live on Newcastle 3-1 West Ham (PL, 2026-05-17)
+
+- `/events/{id}/stats/` returns 30 shots with per-shot xG + position, 92 minute-points of momentum, 22 entries of cumulative xG-per-minute, average positions per side, 40+ per-team aggregated counters (`expected_goals`, `big_chances`, `dangerous_attack`, `touches_in_penalty_area`, `ball_possession`, `pass_accuracy_pct`, …)
+- `/events/{id}/lineups/` returns confirmed formation (4-2-3-1) + 11 starters + subs
+- `/events/{id}/incidents/` returns chronological play-by-play
+- `/events/{id}/prediction/` returns pre-match CatBoost prediction (match result probs, xG forecast, over/under, BTTS)
 
 ### 5b. Server modules (new files in `Server/`)
 
-- `sofascore_adapter.py` — `curl_cffi` client with `chrome120` impersonation; methods: `live_events()`, `event_detail(eid)`, `event_statistics(eid)`, `event_graph(eid)`, `event_shotmap(eid)`, `event_incidents(eid)`. Caches each response in Postgres with 25s TTL.
-- `score365_soccer_adapter.py` — extends existing `score365/scraper.py` for `sport_id=1`. Methods: `soccer_games_by_date()`, `soccer_game_detail()`, `soccer_competitions()`. Reuses `Client365`.
-- `drama_engine.py` — sport-agnostic scoring service. Composition: `DramaState`, `DramaMomentum`, `DramaEvents`, `DramaStakes`. Each is overridden per sport in `drama_basketball.py` (existing logic adapted) and `drama_soccer.py`.
-- `soccer_monitor.py` — mirrors `monitor.py`. One thread per soccer alarm + one global radar thread polling all live matches every 30s.
-- `xg_fallback.py` — thin wrapper over `soccer_xg` to compute xG locally from (x, y, body_part, situation).
-- `bzzoiro_adapter.py` — secondary client. Built but feature-flagged off at launch.
+- `bzzoiro_adapter.py` — **primary** football source. httpx client with Token auth from `BZZOIRO_API_TOKEN` env var. Methods: `live_events()`, `league_events()`, `event_detail()`, `event_stats()`, `event_incidents()`, `event_lineups()`, `event_prediction()`. Helper functions: `get_team_xg()`, `momentum_pressure_window()`, `cum_xg_at_minute()`, `xg_in_window()`. Per-method TTL cache (live 20s, stats 25s, lineups 5min, prediction 10min).
+- `sofascore_adapter.py` — secondary football source via `curl_cffi` with `chrome120` impersonation. Covers Euros + Ligat Ha'al (the two competitions BSD doesn't), and serves as failover for the 8 BSD-primary competitions if BSD has an outage. Same method shape as `bzzoiro_adapter` so the Drama Engine can swap sources transparently.
+- `score365_soccer_adapter.py` — extends existing `score365/scraper.py` for `sport_id=1`. Methods: `soccer_games_by_date()`, `soccer_game_detail()`, `soccer_competitions()`. Reuses `Client365`. Also exports `BSD_COMPETITION_IDS`, `SOFASCORE_COMPETITION_IDS`, and `PRIMARY_SOURCE` lookup dicts.
+- `drama_engine.py` — sport-agnostic scoring service (P3). Composition: `DramaState`, `DramaMomentum`, `DramaEvents`, `DramaStakes`. Each is overridden per sport in `drama_basketball.py` (existing logic adapted) and `drama_soccer.py`.
+- `soccer_monitor.py` — P2 module. Mirrors `monitor.py`. One thread per soccer alarm + one global radar thread polling all live matches every 25s. Routes each match through `PRIMARY_SOURCE` to the right adapter.
+- `xg_fallback.py` — thin wrapper over `soccer_xg` to compute xG locally from (x, y, body_part, situation). P1 stub; full impl in P3 once Python 3.14 compatibility is sorted.
 
 ### 5c. Database additions
 
@@ -409,4 +439,5 @@ P1 starts immediately. The implementation plan is the next document.
 - **2026-05-18** — User confirms full multi-sport rebrand (Approach C), with soccer as pillar #2.
 - **2026-05-18** — Sportmonks rejected: €281/mo without live xG (Pressure Index & xG bundle is post-match in the affordable tier).
 - **2026-05-18** — Sofascore via `curl_cffi` verified working on Manchester United 3-2 Nottingham Forest (PL, 2026-05-17). xG, momentum graph, shotmap, incidents all returned. Confirms free-stack path.
-- **2026-05-18** — Data architecture locked: 365scores (existing) + Sofascore (curl_cffi) + `soccer_xg` fallback + bzzoiro (backup).
+- **2026-05-18** — Initial data architecture: 365scores (existing) + Sofascore (curl_cffi) + `soccer_xg` fallback + bzzoiro (backup).
+- **2026-05-18 (later)** — **BSD (bzzoiro) audited and promoted to primary** for the 8 of 10 target competitions it covers (top 5 + UCL + EL + World Cup). Verified live: per-shot xG, 92-point momentum, cumulative xG-per-minute timeline, 40+ team stats, ML predictions, confirmed lineups, full incident timeline. Official API with token auth, free tier, indie-friendly. Sofascore demoted to secondary — handles Euros + Ligat Ha'al + failover. The data quality is at parity with paid Sportmonks tiers (and ahead in some areas — BSD provides ML predictions out of the box).

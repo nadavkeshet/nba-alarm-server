@@ -40,6 +40,26 @@ COMPETITION_IDS: dict[str, int] = {
     if entry.get("score365_id")
 }
 
+# slug → BSD (bzzoiro) league id (primary source for 8/10 competitions)
+BSD_COMPETITION_IDS: dict[str, int] = {
+    slug: entry["bsd_id"]
+    for slug, entry in _COMPETITION_MAP.items()
+    if entry.get("bsd_id")
+}
+
+# slug → Sofascore unique-tournament id (covers all 10; primary for the 2 BSD doesn't)
+SOFASCORE_COMPETITION_IDS: dict[str, int] = {
+    slug: entry["sofascore_id"]
+    for slug, entry in _COMPETITION_MAP.items()
+    if entry.get("sofascore_id")
+}
+
+# slug → which source to query first
+PRIMARY_SOURCE: dict[str, str] = {
+    slug: entry.get("primary_source", "bsd")
+    for slug, entry in _COMPETITION_MAP.items()
+}
+
 # slug → public-facing metadata mirroring the LEAGUES dict in score365_adapter.py
 FOOTBALL_LEAGUES: dict[str, dict] = {
     slug: {
