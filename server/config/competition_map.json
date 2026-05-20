@@ -1,0 +1,72 @@
+{
+  "premier_league": {
+    "name_en": "Premier League",
+    "name_he": "פרמייר ליג",
+    "score365_id": 7,
+    "sofascore_id": 17,
+    "country": "England"
+  },
+  "la_liga": {
+    "name_en": "La Liga",
+    "name_he": "לה ליגה",
+    "score365_id": 11,
+    "sofascore_id": 8,
+    "country": "Spain"
+  },
+  "serie_a": {
+    "name_en": "Serie A",
+    "name_he": "סריה א",
+    "score365_id": 17,
+    "sofascore_id": 23,
+    "country": "Italy"
+  },
+  "bundesliga": {
+    "name_en": "Bundesliga",
+    "name_he": "בונדסליגה",
+    "score365_id": 25,
+    "sofascore_id": 35,
+    "country": "Germany"
+  },
+  "ligue_1": {
+    "name_en": "Ligue 1",
+    "name_he": "ליג 1",
+    "score365_id": 35,
+    "sofascore_id": 34,
+    "country": "France"
+  },
+  "ucl": {
+    "name_en": "UEFA Champions League",
+    "name_he": "ליגת האלופות",
+    "score365_id": 572,
+    "sofascore_id": 7,
+    "country": "Europe"
+  },
+  "europa_league": {
+    "name_en": "UEFA Europa League",
+    "name_he": "ליגה אירופית",
+    "score365_id": 573,
+    "sofascore_id": 679,
+    "country": "Europe"
+  },
+  "world_cup": {
+    "name_en": "FIFA World Cup",
+    "name_he": "מונדיאל",
+    "score365_id": 5930,
+    "sofascore_id": 16,
+    "country": "World"
+  },
+  "euros": {
+    "name_en": "UEFA European Championship",
+    "name_he": "אליפות אירופה",
+    "score365_id": 6316,
+    "sofascore_id": 1,
+    "country": "Europe"
+  },
+  "ligat_haal": {
+    "name_en": "Israeli Premier League",
+    "name_he": "ליגת ווינר",
+    "score365_id": 42,
+    "sofascore_id": 266,
+    "country": "Israel"
+  }
+}
