@@ -142,8 +142,12 @@ def _score_state(ctx: dict) -> float:
     if status in {"scheduled", "postponed", "canceled"}:
         return 0.0
 
-    # Base closeness — how tense the scoreline is on its own
-    if   diff == 0: base, late_max = 3.0, 1.5
+    # Base closeness — how tense the scoreline is on its own. Tied
+    # baselines are intentionally low: a 0-0 at minute 30 isn't dramatic
+    # on its own, but a 0-0 at minute 89 *is* — that's what the lateness
+    # multiplier (below) is for. Without this, even tedious tied finals
+    # got pumped to 6/10 mid-game by the stakes multiplier.
+    if   diff == 0: base, late_max = 1.5, 2.5  # tied — lean on lateness + momentum
     elif diff == 1: base, late_max = 2.0, 0.8  # 1-goal late is only dramatic
                                                 # if the trailer is pressuring;
                                                 # we let momentum do that work
