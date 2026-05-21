@@ -471,37 +471,55 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
             return out
 
     if source == "sofa":
-        # Sofascore — four independent calls; parallelize the same way.
-        with ThreadPoolExecutor(max_workers=4) as pool:
+        # Sofascore — five independent calls; parallelize. Per-call failures
+        # are isolated so one upstream hiccup doesn't 500 the endpoint.
+        with ThreadPoolExecutor(max_workers=5) as pool:
             f_detail    = pool.submit(sofa.event_detail, eid)
             f_stats     = pool.submit(sofa.event_statistics, eid)
             f_graph     = pool.submit(sofa.event_graph, eid)
             f_shotmap   = pool.submit(sofa.event_shotmap, eid)
             f_incidents = pool.submit(sofa.event_incidents, eid)
-            ev = f_detail.result()
+            try:
+                ev = f_detail.result()
+            except Exception as exc:
+                logger.warning("sofa event_detail failed for %s: %s", canonical, exc)
+                return None
             if not ev:
                 return None
             out = _from_sofa_event(ev)
+            # Stats
             try:
                 stats = f_stats.result() or {}
                 xg = sofa.find_team_xg(stats)
                 if xg:
                     out["home"]["xg"] = xg[0]
                     out["away"]["xg"] = xg[1]
+            except Exception as exc:
+                logger.warning("sofa stats failed for %s: %s", canonical, exc)
+            # Momentum (Sofa key shape {minute, value} → canonical {m, v})
+            try:
                 graph = f_graph.result() or {}
-                # Sofascore graphPoints come in as [{minute, value}]; the iOS
-                # decoder and BSD both speak [{m, v}]. Normalize at the
-                # boundary so the API contract stays uniform.
-                out["momentum"]  = [
+                out["momentum"] = [
                     {"m": p.get("minute"), "v": p.get("value")}
                     for p in (graph.get("graphPoints") or [])
                     if p.get("minute") is not None and p.get("value") is not None
                 ]
-                out["shotmap"]   = _normalize_sofa_shotmap(f_shotmap.result() or [])
-                out["incidents"] = _normalize_sofa_incidents(f_incidents.result() or [])
-                out["xg_per_minute"] = []
             except Exception as exc:
-                logger.warning("sofa stats failed for %s: %s", canonical, exc)
+                logger.warning("sofa graph failed for %s: %s", canonical, exc)
+                out["momentum"] = []
+            # Shotmap
+            try:
+                out["shotmap"] = _normalize_sofa_shotmap(f_shotmap.result() or [])
+            except Exception as exc:
+                logger.warning("sofa shotmap failed for %s: %s", canonical, exc)
+                out["shotmap"] = []
+            # Incidents
+            try:
+                out["incidents"] = _normalize_sofa_incidents(f_incidents.result() or [])
+            except Exception as exc:
+                logger.warning("sofa incidents failed for %s: %s", canonical, exc)
+                out["incidents"] = []
+            out["xg_per_minute"] = []
             return out
 
     return None
