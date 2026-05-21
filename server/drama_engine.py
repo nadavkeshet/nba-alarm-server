@@ -404,13 +404,168 @@ _INCIDENT_TYPE_MAP: dict[str, str] = {
 }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Retroactive timeline — replay drama at every minute of a finished match.
+# Purely computational: no DB, no history table. Uses the same xg_per_minute,
+# momentum, and incidents arrays that get_soccer_match_detail already returns.
+
+
+def context_at_minute(detail: dict, t: int) -> dict:
+    """Rebuild a Drama Engine context as it would have looked at minute `t`.
+
+    Replays:
+      - score: count goals from incidents up to and including minute t
+      - xG / xg_last_15: derived from xg_per_minute cumulative array
+      - momentum_pressure: mean of momentum values in (t-15, t]
+      - recent_events: incidents in (t-10, t]
+      - status: 'live' / 'ht' / 'et' / 'ft' based on t and final status
+
+    Stakes (competition + round) are constant across the match.
+    """
+    if not detail:
+        return {"home": {}, "away": {}}
+
+    incidents = detail.get("incidents") or []
+
+    # ── Score at minute t (replay goal incidents) ───────────────────────────
+    home_score, away_score = 0, 0
+    for inc in incidents:
+        m = inc.get("minute")
+        if m is None or m > t:
+            continue
+        raw_type = (inc.get("type") or "").lower()
+        # 'goal', 'owngoal', 'ownGoal' all count
+        if "goal" not in raw_type:
+            continue
+        # Own goals score against the scoring team
+        is_own = "own" in raw_type
+        is_home_team = bool(inc.get("is_home"))
+        scoring_for_home = (is_home_team and not is_own) or (not is_home_team and is_own)
+        if scoring_for_home:
+            home_score += 1
+        else:
+            away_score += 1
+
+    # ── Status at minute t ──────────────────────────────────────────────────
+    final_status = (detail.get("status") or "").lower()
+    if t >= 120 and final_status in {"ft", "et", "pens"}:
+        status_t = "ft"
+    elif t >= 90 and final_status == "ft":
+        status_t = "ft"
+    elif t > 90:
+        status_t = "et"
+    elif 45 <= t < 50:
+        status_t = "ht"
+    else:
+        status_t = "live"
+
+    home = (detail.get("home") or {}).copy()
+    away = (detail.get("away") or {}).copy()
+    home["score"] = home_score
+    away["score"] = away_score
+
+    # ── xG window at minute t ───────────────────────────────────────────────
+    xg_per_minute = detail.get("xg_per_minute") or []
+    if xg_per_minute:
+        window_start = max(0, t - 15)
+        cum_at_start = _cum_xg_at(xg_per_minute, window_start)
+        cum_at_now   = _cum_xg_at(xg_per_minute, t)
+        if cum_at_start is not None and cum_at_now is not None:
+            home["xg_last_15"] = max(0.0, cum_at_now[0] - cum_at_start[0])
+            away["xg_last_15"] = max(0.0, cum_at_now[1] - cum_at_start[1])
+        if cum_at_now is not None:
+            home["xg"] = cum_at_now[0]
+            away["xg"] = cum_at_now[1]
+
+    # ── Momentum pressure at minute t ───────────────────────────────────────
+    pressure = None
+    momentum_points = detail.get("momentum") or []
+    if momentum_points:
+        recent = []
+        for p in momentum_points:
+            m = p.get("m", p.get("minute"))
+            v = p.get("v", p.get("value"))
+            if m is None or v is None:
+                continue
+            if t - 15 <= m <= t:
+                try:
+                    recent.append(float(v))
+                except (TypeError, ValueError):
+                    continue
+        if recent:
+            pressure = sum(recent) / len(recent)
+            if any(abs(v) > 1.5 for v in recent):
+                pressure = (pressure - 50.0) / 50.0
+
+    recent_events = _normalize_recent_incidents(
+        incidents, minute_now=t, window_min=10
+    )
+
+    return {
+        "minute": t,
+        "status": status_t,
+        "competition": detail.get("competition"),
+        "round_name": detail.get("round_name"),
+        "is_derby": bool(detail.get("is_derby")),
+        "is_neutral_ground": bool(detail.get("is_neutral_ground")),
+        "home": home,
+        "away": away,
+        "momentum_pressure": pressure,
+        "recent_events": recent_events,
+    }
+
+
+def compute_drama_timeline(detail: dict, step: int = 1) -> list[dict]:
+    """Return per-minute drama scores reconstructed from match detail.
+
+    Output: [{m, drama, state, momentum, events, stakes}, ...] starting at
+    minute `step` and ending at the last incident minute (or current
+    `minute` for live matches). Pure function — no I/O.
+    """
+    if not detail:
+        return []
+
+    incidents = detail.get("incidents") or []
+    max_minute = int(detail.get("minute") or 0)
+    for inc in incidents:
+        m = inc.get("minute")
+        if m is not None:
+            try:
+                max_minute = max(max_minute, int(m))
+            except (TypeError, ValueError):
+                continue
+    # Most finished matches cap around 95–100' (added time); ET can hit 120'.
+    max_minute = max(max_minute, 90)
+    max_minute = min(max_minute, 120)
+
+    out: list[dict] = []
+    for t in range(max(1, step), max_minute + 1, step):
+        ctx = context_at_minute(detail, t)
+        ds = compute_drama(ctx)
+        out.append({
+            "m":        t,
+            "drama":    ds.total,
+            "state":    ds.state,
+            "momentum": ds.momentum,
+            "events":   ds.events,
+            "stakes":   ds.stakes,
+        })
+    return out
+
+
 def _normalize_recent_incidents(
     incidents: list[dict],
     *,
     minute_now: int,
     window_min: int,
 ) -> list[dict]:
-    """Return [{type, minute, team}] for incidents in the last `window_min`."""
+    """Return [{type, minute, team}] for incidents in the last `window_min`.
+
+    Bounded on BOTH sides — anything after minute_now is excluded too.
+    That doesn't matter for live drama (the incidents array only has past
+    events), but it matters for retroactive timeline reconstruction where
+    the array spans the whole match.
+    """
     cutoff = max(0, minute_now - window_min)
     out: list[dict] = []
     for inc in incidents:
@@ -418,7 +573,7 @@ def _normalize_recent_incidents(
         raw_type  = (inc.get("type") or inc.get("incidentType") or "").lower()
         card_type = (inc.get("card_type") or inc.get("incidentClass") or "").lower()
         inc_min   = inc.get("minute") or inc.get("time") or 0
-        if inc_min < cutoff:
+        if inc_min < cutoff or inc_min > minute_now:
             continue
 
         # Red-card detection (the most important non-goal incident)

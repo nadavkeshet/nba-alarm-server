@@ -2048,6 +2048,29 @@ def soccer_drama(canonical_id: str):
     }
 
 
+@app.get("/soccer/drama/{canonical_id}/timeline")
+def soccer_drama_timeline(canonical_id: str, step: int = 2):
+    """Retroactive per-minute Drama Engine timeline.
+
+    Reconstructs the match state at each minute (score, xG window,
+    momentum window, recent events) by replaying the immutable arrays
+    BSD returns (xg_per_minute, momentum, incidents) and runs the engine
+    over each rebuilt context. No DB persistence — recomputed on demand.
+
+    `step` controls minute granularity (default 2, max 5).
+
+    Response: { match_id, timeline: [{m, drama, state, momentum, events, stakes}] }
+    """
+    import soccer_source as _ss
+    import drama_engine as _de
+    detail = _ss.get_soccer_match_detail(canonical_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="match not found")
+    step = max(1, min(5, step))
+    timeline = _de.compute_drama_timeline(detail, step=step)
+    return {"match_id": detail.get("id"), "timeline": timeline}
+
+
 @app.get("/soccer/live")
 def soccer_live(leagues: Optional[str] = None):
     """All currently-live soccer matches across requested leagues

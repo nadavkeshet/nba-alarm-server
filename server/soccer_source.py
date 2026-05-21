@@ -433,53 +433,68 @@ def get_soccer_match_state(canonical: str) -> dict | None:
 def get_soccer_match_detail(canonical: str) -> dict | None:
     """Full match payload including xG, momentum, shotmap, incidents.
 
-    This is the expensive call. Use in the per-alarm watcher or Drama Engine
-    cycle — not in the radar polling loop.
+    This is the expensive call. Fans the three upstream HTTP requests
+    (event_detail, event_stats, event_incidents) out in parallel — they
+    are independent, so doing them sequentially was adding 400–1000 ms of
+    latency to every Match Summary open.
     """
+    from concurrent.futures import ThreadPoolExecutor
     source, native = parse_canonical_id(canonical)
     eid = int(native)
     if source == "bsd":
-        ev = bsd.event_detail(eid)
-        if not ev:
-            return None
-        out = _from_bsd_event(ev)
-        try:
-            stats = bsd.event_stats(eid) or {}
-            xg = bsd.get_team_xg(stats)
-            if xg:
-                out["home"]["xg"] = xg[0]
-                out["away"]["xg"] = xg[1]
-            out["momentum"] = stats.get("momentum") or []
-            out["xg_per_minute"] = stats.get("xg_per_minute") or []
-            out["shotmap"] = stats.get("shotmap") or []
-            out["stats"] = stats.get("stats") or {}
-        except Exception as exc:
-            logger.warning("bsd stats failed for %s: %s", canonical, exc)
-        try:
-            out["incidents"] = bsd.event_incidents(eid)
-        except Exception as exc:
-            logger.warning("bsd incidents failed for %s: %s", canonical, exc)
-        return out
+        # Fan out the three upstream calls. Adapter has its own LRU + TTL
+        # cache, so a warm match returns near-instantly here.
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            f_detail    = pool.submit(bsd.event_detail, eid)
+            f_stats     = pool.submit(bsd.event_stats, eid)
+            f_incidents = pool.submit(bsd.event_incidents, eid)
+            ev = f_detail.result()
+            if not ev:
+                return None
+            out = _from_bsd_event(ev)
+            try:
+                stats = f_stats.result() or {}
+                xg = bsd.get_team_xg(stats)
+                if xg:
+                    out["home"]["xg"] = xg[0]
+                    out["away"]["xg"] = xg[1]
+                out["momentum"]      = stats.get("momentum") or []
+                out["xg_per_minute"] = stats.get("xg_per_minute") or []
+                out["shotmap"]       = stats.get("shotmap") or []
+                out["stats"]         = stats.get("stats") or {}
+            except Exception as exc:
+                logger.warning("bsd stats failed for %s: %s", canonical, exc)
+            try:
+                out["incidents"] = f_incidents.result()
+            except Exception as exc:
+                logger.warning("bsd incidents failed for %s: %s", canonical, exc)
+            return out
 
     if source == "sofa":
-        ev = sofa.event_detail(eid)
-        if not ev:
-            return None
-        out = _from_sofa_event(ev)
-        try:
-            stats = sofa.event_statistics(eid) or {}
-            xg = sofa.find_team_xg(stats)
-            if xg:
-                out["home"]["xg"] = xg[0]
-                out["away"]["xg"] = xg[1]
-            graph = sofa.event_graph(eid) or {}
-            out["momentum"] = graph.get("graphPoints") or []
-            out["shotmap"] = sofa.event_shotmap(eid)
-            out["incidents"] = sofa.event_incidents(eid)
-            # xg_per_minute isn't a direct Sofascore field — derive from shotmap if needed
-            out["xg_per_minute"] = []
-        except Exception as exc:
-            logger.warning("sofa stats failed for %s: %s", canonical, exc)
-        return out
+        # Sofascore — four independent calls; parallelize the same way.
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            f_detail    = pool.submit(sofa.event_detail, eid)
+            f_stats     = pool.submit(sofa.event_statistics, eid)
+            f_graph     = pool.submit(sofa.event_graph, eid)
+            f_shotmap   = pool.submit(sofa.event_shotmap, eid)
+            f_incidents = pool.submit(sofa.event_incidents, eid)
+            ev = f_detail.result()
+            if not ev:
+                return None
+            out = _from_sofa_event(ev)
+            try:
+                stats = f_stats.result() or {}
+                xg = sofa.find_team_xg(stats)
+                if xg:
+                    out["home"]["xg"] = xg[0]
+                    out["away"]["xg"] = xg[1]
+                graph = f_graph.result() or {}
+                out["momentum"]  = graph.get("graphPoints") or []
+                out["shotmap"]   = f_shotmap.result()
+                out["incidents"] = f_incidents.result()
+                out["xg_per_minute"] = []
+            except Exception as exc:
+                logger.warning("sofa stats failed for %s: %s", canonical, exc)
+            return out
 
     return None

@@ -63,8 +63,11 @@ _TTL_SECONDS: dict[str, float] = {
     "live_events":     20.0,
     "league_events":   60.0,    # listings; minute-fresh is plenty
     "event_detail":    30.0,
-    "event_stats":     25.0,
-    "event_incidents": 20.0,
+    # Stats / incidents are the heaviest BSD calls and dominate Match
+    # Summary load time. Bumped to 120s — for live games that's still
+    # fresh enough for the UI; for finished games the data never changes.
+    "event_stats":     120.0,
+    "event_incidents": 120.0,
     "event_lineups":   300.0,   # lineups don't change mid-match
     "event_prediction": 600.0,  # pre-match; ten minutes is fine
     "league_detail":   3600.0,
