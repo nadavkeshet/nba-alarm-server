@@ -1991,15 +1991,21 @@ def _yyyymmdd_to_iso(s: str | None) -> str | None:
 
 
 @app.get("/soccer/games")
-def soccer_games(date: Optional[str] = None, league: str = "premier_league"):
+def soccer_games(
+    date: Optional[str] = None,
+    league: str = "premier_league",
+    tz: Optional[str] = None,
+):
     """Return soccer matches for a given date (YYYYMMDD or YYYY-MM-DD) and league.
     `league` is a slug from competition_map.json (premier_league, ucl, world_cup, etc.).
-    Defaults: today, Premier League.
+    `tz` is an IANA timezone identifier (e.g. "Asia/Jerusalem") used to anchor
+    the calendar-day filter; defaults to UTC. iOS should send the device's
+    current timezone so "today" matches the user's local notion of today.
     """
     import soccer_source as _ss  # late import to avoid heavy startup if soccer deps missing
     iso_date = _yyyymmdd_to_iso(date)
-    matches = _ss.get_soccer_matches(league, date_iso=iso_date)
-    return {"matches": matches, "league": league, "date": iso_date}
+    matches = _ss.get_soccer_matches(league, date_iso=iso_date, tz=tz)
+    return {"matches": matches, "league": league, "date": iso_date, "tz": tz}
 
 
 @app.get("/soccer/match/{canonical_id}")

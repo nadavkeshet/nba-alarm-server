@@ -19,8 +19,9 @@ This is the ID iOS and the alarm engine use everywhere — it's source-agnostic.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import bzzoiro_adapter as bsd
 import sofascore_adapter as sofa
@@ -235,11 +236,15 @@ def _sofa_tournament_to_slug(tournament_id: int | None) -> str | None:
 def get_soccer_matches(
     league_slug: str,
     date_iso: str | None = None,
+    tz: str | None = None,
 ) -> list[dict]:
     """All matches in a league on a given date.
 
     `league_slug` must be one of the keys in PRIMARY_SOURCE.
-    `date_iso` is YYYY-MM-DD; defaults to today (UTC).
+    `date_iso` is YYYY-MM-DD; defaults to today in `tz` (UTC if no tz given).
+    `tz` is an IANA timezone identifier — kickoffs are projected into this TZ
+    before being compared to `date_iso`, so the user's notion of "today"
+    matches what they see in the UI. Falls back to UTC if invalid.
 
     Source chain (cascades on either exception OR empty result):
         1. primary       (from PRIMARY_SOURCE — bsd or sofascore)
@@ -252,8 +257,10 @@ def get_soccer_matches(
         logger.warning("get_soccer_matches: unknown league %r", league_slug)
         return []
 
+    anchor_tz = _resolve_tz(tz)
+
     if date_iso is None:
-        date_iso = datetime.now(timezone.utc).date().isoformat()
+        date_iso = datetime.now(anchor_tz).date().isoformat()
 
     primary = PRIMARY_SOURCE[league_slug]
 
@@ -278,13 +285,82 @@ def get_soccer_matches(
             logger.warning("soccer source %s errored for %s/%s: %s", name, league_slug, date_iso, exc)
             continue
         if matches:
-            logger.info("soccer source %s served %s/%s with %d matches", name, league_slug, date_iso, len(matches))
-            _seed_search_index(matches)
-            return matches
+            before = len(matches)
+            matches = _enforce_date_and_dedupe(matches, date_iso, anchor_tz)
+            if before != len(matches):
+                logger.info(
+                    "soccer source %s for %s/%s: %d → %d after date+dedup filter",
+                    name, league_slug, date_iso, before, len(matches),
+                )
+            if matches:
+                logger.info("soccer source %s served %s/%s with %d matches", name, league_slug, date_iso, len(matches))
+                _seed_search_index(matches)
+                return matches
         logger.info("soccer source %s returned 0 for %s/%s — trying next", name, league_slug, date_iso)
 
     logger.warning("all soccer sources empty for %s/%s", league_slug, date_iso)
     return []
+
+
+# Sources have different day boundaries (Sofa = UTC/CET, BSD = Israel, 365 =
+# its own thing). To keep the user's notion of "today" stable, we project
+# every kickoff into the caller's tz before comparing it to date_iso.
+# Default = UTC when no tz is supplied (e.g. backend cron jobs).
+_DEFAULT_TZ = ZoneInfo("UTC")
+
+
+def _resolve_tz(tz: str | None) -> ZoneInfo:
+    """Return a ZoneInfo for `tz` (IANA identifier) or UTC if unparsable."""
+    if not tz:
+        return _DEFAULT_TZ
+    try:
+        return ZoneInfo(tz)
+    except Exception:
+        logger.warning("invalid tz %r — falling back to UTC", tz)
+        return _DEFAULT_TZ
+
+
+def _kickoff_local_date(kickoff: str | None, tz: ZoneInfo = _DEFAULT_TZ) -> str | None:
+    """Return YYYY-MM-DD of `kickoff` projected into `tz`, or None if unparsable."""
+    if not kickoff:
+        return None
+    try:
+        # Accept both '...Z' and '+00:00' suffixes
+        if kickoff.endswith("Z"):
+            dt = datetime.fromisoformat(kickoff[:-1]).replace(tzinfo=timezone.utc)
+        else:
+            dt = datetime.fromisoformat(kickoff)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(tz).date().isoformat()
+    except Exception:
+        return None
+
+
+def _enforce_date_and_dedupe(
+    matches: list[dict],
+    date_iso: str,
+    tz: ZoneInfo = _DEFAULT_TZ,
+) -> list[dict]:
+    """Strict filter: keep only matches whose kickoff falls on `date_iso` in
+    `tz`. Also dedupe by canonical id so the same match never appears twice
+    in one response.
+
+    Matches without a parseable kickoff are kept (we'd rather show a
+    possibly-misdated match than drop it — the source filtered by date too).
+    """
+    out: list[dict] = []
+    seen: set[str] = set()
+    for m in matches:
+        cid = m.get("id")
+        if not cid or cid in seen:
+            continue
+        local_date = _kickoff_local_date(m.get("kickoff"), tz)
+        if local_date is not None and local_date != date_iso:
+            continue
+        seen.add(cid)
+        out.append(m)
+    return out
 
 
 def _seed_search_index(matches: list[dict]) -> None:
