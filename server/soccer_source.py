@@ -489,12 +489,113 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
                     out["home"]["xg"] = xg[0]
                     out["away"]["xg"] = xg[1]
                 graph = f_graph.result() or {}
-                out["momentum"]  = graph.get("graphPoints") or []
-                out["shotmap"]   = f_shotmap.result()
-                out["incidents"] = f_incidents.result()
+                # Sofascore graphPoints come in as [{minute, value}]; the iOS
+                # decoder and BSD both speak [{m, v}]. Normalize at the
+                # boundary so the API contract stays uniform.
+                out["momentum"]  = [
+                    {"m": p.get("minute"), "v": p.get("value")}
+                    for p in (graph.get("graphPoints") or [])
+                    if p.get("minute") is not None and p.get("value") is not None
+                ]
+                out["shotmap"]   = _normalize_sofa_shotmap(f_shotmap.result() or [])
+                out["incidents"] = _normalize_sofa_incidents(f_incidents.result() or [])
                 out["xg_per_minute"] = []
             except Exception as exc:
                 logger.warning("sofa stats failed for %s: %s", canonical, exc)
             return out
 
     return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sofascore → canonical shape normalizers
+#
+# BSD's per-shot and per-incident shapes are what iOS speaks. Sofascore uses
+# completely different keys (camelCase, nested player objects), so we translate
+# here at the API boundary so the iOS contract stays uniform regardless of
+# which adapter produced the data.
+
+
+def _normalize_sofa_shotmap(raw: list[dict]) -> list[dict]:
+    """Translate Sofascore shotmap entries to the BSD/canonical shape iOS speaks."""
+    out: list[dict] = []
+    for s in raw:
+        if not isinstance(s, dict):
+            continue
+        pos_src = s.get("playerCoordinates") or {}
+        player = s.get("player") or {}
+        out.append({
+            "min":        s.get("time"),
+            "added":      s.get("addedTime"),
+            "home":       bool(s.get("isHome")) if s.get("isHome") is not None else None,
+            "type":       s.get("shotType"),
+            "sit":        s.get("situation"),
+            "body":       s.get("bodyPart"),
+            "xg":         s.get("xg"),
+            "xgot":       s.get("xgot"),
+            "player_id":  player.get("id"),
+            "pos":        {
+                "x": pos_src.get("x"),
+                "y": pos_src.get("y"),
+            },
+            "gml":        s.get("goalMouthLocation"),
+        })
+    return out
+
+
+def _normalize_sofa_incidents(raw: list[dict]) -> list[dict]:
+    """Translate Sofascore incidents to the BSD/canonical shape iOS speaks.
+
+    Handles: goal, card, substitution, period, injuryTime. Unknown
+    `incidentType` values pass through with minimal mapping so they at
+    least decode without crashing.
+    """
+    out: list[dict] = []
+    for inc in raw:
+        if not isinstance(inc, dict):
+            continue
+        itype = (inc.get("incidentType") or "").lower()
+        iclass = (inc.get("incidentClass") or "").lower()
+        minute = inc.get("time")
+        is_home = bool(inc.get("isHome")) if inc.get("isHome") is not None else None
+        player  = inc.get("player") or {}
+        norm: dict[str, Any] = {
+            "type":      itype,
+            "minute":    minute,
+            "is_home":   is_home,
+        }
+        if itype == "goal":
+            # Sofa uses incidentClass = 'regular' | 'penalty' | 'owngoal' | 'header'
+            # Mirror BSD: own goals get type='owngoal'
+            if iclass == "owngoal":
+                norm["type"] = "owngoal"
+            norm["player"]    = player.get("shortName") or player.get("name")
+            norm["player_id"] = player.get("id")
+            # Assist: Sofascore lists it as "assist1" on the incident
+            assist1 = inc.get("assist1") or {}
+            if assist1:
+                norm["assist"] = assist1.get("shortName") or assist1.get("name")
+            norm["home_score"] = inc.get("homeScore")
+            norm["away_score"] = inc.get("awayScore")
+        elif itype == "card":
+            norm["card_type"] = iclass or None
+            norm["player"]    = player.get("shortName") or player.get("name")
+            norm["player_id"] = player.get("id")
+        elif itype == "substitution":
+            p_in  = inc.get("playerIn")  or {}
+            p_out = inc.get("playerOut") or {}
+            norm["player_in"]      = p_in.get("shortName")  or p_in.get("name")
+            norm["player_out"]     = p_out.get("shortName") or p_out.get("name")
+            norm["player_in_id"]   = p_in.get("id")
+            norm["player_out_id"]  = p_out.get("id")
+        elif itype == "period":
+            norm["text"]       = inc.get("text")
+            norm["home_score"] = inc.get("homeScore")
+            norm["away_score"] = inc.get("awayScore")
+        elif itype == "injurytime":
+            # BSD spells this exactly "injuryTime"; keep that vocabulary.
+            norm["type"]   = "injuryTime"
+            norm["length"] = inc.get("length") or inc.get("addedTime")
+        # else: unknown type passes through with just type/minute/is_home
+        out.append(norm)
+    return out
