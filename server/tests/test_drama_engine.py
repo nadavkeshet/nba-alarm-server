@@ -292,9 +292,10 @@ def test_translator_picks_up_recent_red_card():
     assert all(e["minute"] >= 75 for e in ctx["recent_events"])
 
 
-def test_translator_rescales_sofascore_0_100_pressure():
-    """Sofascore graph values are 0–100 with 50 neutral. We expect them
-    rescaled to [-1, +1] when fed through the translator."""
+def test_translator_normalizes_high_signed_pressure():
+    """Both BSD and Sofa emit signed values ~[-80, +80] per minute. The
+    translator must normalize to the engine's [-1, +1] expected range
+    (clamped — sustained dominance ≥30 saturates to ±1)."""
     detail = {
         "minute": 80,
         "status": "live",
@@ -309,7 +310,8 @@ def test_translator_rescales_sofascore_0_100_pressure():
     }
     ctx = context_from_match_detail(detail)
     assert ctx["momentum_pressure"] is not None
-    assert 0.3 < ctx["momentum_pressure"] < 1.0
+    # mean(70,75,80)/30 = 2.5 → clamps to +1.0 (saturated home pressure)
+    assert ctx["momentum_pressure"] == 1.0
 
 
 @pytest.mark.parametrize("round_name,expected_min_multiplier", [

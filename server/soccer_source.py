@@ -279,11 +279,23 @@ def get_soccer_matches(
             continue
         if matches:
             logger.info("soccer source %s served %s/%s with %d matches", name, league_slug, date_iso, len(matches))
+            _seed_search_index(matches)
             return matches
         logger.info("soccer source %s returned 0 for %s/%s — trying next", name, league_slug, date_iso)
 
     logger.warning("all soccer sources empty for %s/%s", league_slug, date_iso)
     return []
+
+
+def _seed_search_index(matches: list[dict]) -> None:
+    """Feed every match's teams into the search index so the iOS search
+    overlay can return them. Best-effort — never raises."""
+    try:
+        from search_index import remember_soccer_teams_from_match
+        for m in matches or []:
+            remember_soccer_teams_from_match(m)
+    except Exception:
+        pass
 
 
 def _fetch_bsd(slug: str, date_iso: str) -> list[dict]:
@@ -415,6 +427,7 @@ def get_live_matches(league_slugs: list[str] | None = None) -> list[dict]:
         except Exception as exc:
             logger.warning("Sofascore live_events failed: %s", exc)
 
+    _seed_search_index(out)
     return out
 
 

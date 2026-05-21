@@ -2636,6 +2636,20 @@ def all_teams_and_players():
     return {"teams": get_all_teams()}
 
 
+@app.get("/search")
+def search_endpoint(q: str = "", limit: int = 10):
+    """Free-text search across teams, leagues, and players.
+
+    Used by the iOS top-bar search overlay. Scores in-process against
+    the basketball roster cache and the soccer team accumulator (which
+    is seeded as soccer matches are fetched). Static league catalog is
+    always searchable regardless of cache state.
+    """
+    import search_index as _si
+    limit = max(1, min(20, int(limit)))
+    return _si.search(q or "", limit=limit)
+
+
 @app.get("/refresh-rosters")
 def refresh_rosters():
     threading.Thread(target=update_all_rosters, daemon=True).start()
