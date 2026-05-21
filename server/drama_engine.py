@@ -150,6 +150,13 @@ def _score_state(ctx: dict) -> float:
     elif diff == 2: base, late_max = 1.0, 0.3
     else:           base, late_max = 0.3, 0.0   # blowout
 
+    # Earliness damper — nothing's happened yet in the opening 25 minutes,
+    # so the scoreline alone shouldn't drive drama past ~1/10. Ramps from
+    # ~0.17 at minute 1 to 1.0 by minute 25. Without this, every match
+    # opened with state=3.0 just because it was 0-0.
+    if minute < 25:
+        base *= max(0.15, (minute + 5) / 30.0)
+
     # Lateness amplifier — kicks in from 60', peaks at 90'+
     if minute >= 60 and late_max > 0:
         late_factor = min(late_max, max(0.0, (minute - 60) / 20.0 * late_max))
@@ -343,12 +350,11 @@ def context_from_match_detail(detail: dict) -> dict:
                 except (TypeError, ValueError):
                     continue
         if recent:
-            pressure = sum(recent) / len(recent)
-            # Sofascore graph runs 0–100 with 50 neutral; rescale to [-1, +1].
-            # BSD is already roughly in that range, so the rescale is a no-op
-            # when the values come in signed.
-            if any(abs(v) > 1.5 for v in recent):
-                pressure = (pressure - 50.0) / 50.0
+            # Both BSD and Sofa emit signed values ~[-80, +80] per minute.
+            # The engine expects pressure in [-1, +1]; divide by 30 (sustained
+            # moderate dominance ≈ 30 over a 15-min mean) and clamp.
+            pressure = sum(recent) / len(recent) / 30.0
+            pressure = max(-1.0, min(1.0, pressure))
 
     # ── Recent events: last 10 minutes of normalized incidents ──────────────
     recent_events = _normalize_recent_incidents(
@@ -493,9 +499,12 @@ def context_at_minute(detail: dict, t: int) -> dict:
                 except (TypeError, ValueError):
                     continue
         if recent:
-            pressure = sum(recent) / len(recent)
-            if any(abs(v) > 1.5 for v in recent):
-                pressure = (pressure - 50.0) / 50.0
+            # Both BSD and Sofa emit signed values roughly in [-80, +80]
+            # per minute; the engine expects pressure in [-1, +1]. Divide
+            # by 30 (sustained moderate dominance ≈ 30 over a 15-min mean)
+            # and clamp.
+            pressure = sum(recent) / len(recent) / 30.0
+            pressure = max(-1.0, min(1.0, pressure))
 
     recent_events = _normalize_recent_incidents(
         incidents, minute_now=t, window_min=10
