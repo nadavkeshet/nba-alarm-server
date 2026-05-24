@@ -64,10 +64,18 @@ def _normalize_status_bsd(raw_status: str | None, period: str | None) -> tuple[s
     p = (period or "").lower()
     if s in ("notstarted", "scheduled", "pre"):
         return "scheduled", "pre"
-    if s == "finished" or s == "ft":
+    if s in ("finished", "ft"):
         return "ft", "ft"
     if s in ("postponed", "cancelled"):
         return s, "pre"
+    # BSD sometimes sends the period name directly as the status (e.g. "1st_half", "2nd_half")
+    # instead of the generic "inprogress" envelope. Handle both shapes.
+    if s in ("halftime", "ht"):
+        return "ht", "ht"
+    if s in ("1st_half",) or (s == "inprogress" and (p in ("1st", "1h", "1t"))):
+        return "live", "1h"
+    if s in ("2nd_half",) or (s == "inprogress" and (p in ("2nd", "2h", "2t"))):
+        return "live", "2h"
     if s in ("inprogress", "live"):
         # Map BSD period codes
         if p in ("ht", "halftime"):
@@ -76,11 +84,11 @@ def _normalize_status_bsd(raw_status: str | None, period: str | None) -> tuple[s
             return "et", "et"
         if "penalty" in p or p in ("pens", "shootout"):
             return "pens", "pens"
-        if p == "1st" or p == "1h":
-            return "live", "1h"
-        if p == "2nd" or p == "2h":
-            return "live", "2h"
         return "live", "1h"
+    if "extra" in s or s in ("et", "et1", "et2", "extra_time"):
+        return "et", "et"
+    if "penalt" in s or s in ("pens", "shootout", "penalty_shootout"):
+        return "pens", "pens"
     return s or "scheduled", p or "pre"
 
 
