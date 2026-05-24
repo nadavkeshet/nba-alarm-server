@@ -2129,6 +2129,25 @@ def basketball_event_summary(canonical_id: str):
         except Exception as exc:
             logger.warning("box-score failed for %s: %s", canonical_id, exc)
 
+    # Stamp 365scores logo URLs onto the team objects in the detail so
+    # the iOS score header pulls from the same source as the schedule
+    # rows. BSD's team images are inconsistent (many NBA crests are 3 KB
+    # placeholders); 365 has a clean, uniform CDN across all leagues we
+    # cover.
+    if isinstance(detail, dict):
+        import bsd_basketball as _bsd
+        import basketball_source as _bb
+        slug_by_id = {v: k for k, v in _bsd.BSD_BASKETBALL_LEAGUE_IDS.items()}
+        league_id  = (detail.get("league") or {}).get("id")
+        slug       = slug_by_id.get(league_id)
+        if slug:
+            for key in ("home_team", "away_team"):
+                team = detail.get(key)
+                if isinstance(team, dict):
+                    team["logo"] = _bb._basketball_logo_url(
+                        slug, team.get("name"), team.get("id")
+                    )
+
     return {
         "id":         canonical_id,
         "detail":     detail,

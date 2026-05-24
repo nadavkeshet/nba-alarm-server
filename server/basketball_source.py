@@ -23,7 +23,9 @@ Canonical id format: 'bsd-7074' (BSD) or 's365-2123' (365scores).
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+import threading
+import time
+from datetime import datetime, timezone, date, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -217,7 +219,7 @@ def _from_bsd_event(event: dict, *, slug: str) -> dict:
             "abbreviation": home_team.get("short_name") or home_team.get("name", "")[:3].upper(),
             "displayName": home_team.get("name", ""),
             "name": home_team.get("short_name", "") or home_team.get("name", ""),
-            "logo": _bsd_team_logo_url(home_team.get("id")),
+            "logo": _basketball_logo_url(slug, home_team.get("name"), home_team.get("id")),
         },
     }
     away_competitor = {
@@ -228,7 +230,7 @@ def _from_bsd_event(event: dict, *, slug: str) -> dict:
             "abbreviation": away_team.get("short_name") or away_team.get("name", "")[:3].upper(),
             "displayName": away_team.get("name", ""),
             "name": away_team.get("short_name", "") or away_team.get("name", ""),
-            "logo": _bsd_team_logo_url(away_team.get("id")),
+            "logo": _basketball_logo_url(slug, away_team.get("name"), away_team.get("id")),
         },
     }
 
@@ -260,6 +262,127 @@ def _bsd_team_logo_url(team_id: int | str | None) -> str:
     if not team_id:
         return ""
     return f"https://sports.bzzoiro.com/img/team/{team_id}/"
+
+
+# ---------------------------------------------------------------------------
+# 365scores logo enrichment for BSD events.
+#
+# Logos across the app come from 365scores. For BSD-served leagues we
+# build a per-league `team_name → 365_team_id` index by scanning a few
+# recent dates of 365 fixtures, then swap the BSD `/img/team/{id}/` URL
+# for `imagecache.365scores.com/.../Competitors/{365_id}` when emitting.
+#
+# Leagues 365 doesn't cover (Liga ACB, Lega A, Germany BBL) keep BSD
+# crests as a fallback so the user still sees an icon.
+
+_365_LOGO_BASE = (
+    "https://imagecache.365scores.com/image/upload/"
+    "d_Competitors:default1.png/Competitors/"
+)
+
+_365_index_lock = threading.Lock()
+_365_team_index: dict[str, dict[str, int]] = {}
+_365_index_fetched_at: dict[str, float] = {}
+_365_INDEX_TTL = 24 * 3600  # 24 h
+
+
+def _normalize_team_name(name: str) -> str:
+    return name.lower().strip().replace(".", "").replace("'", "")
+
+
+def _build_365_team_index_for(league_slug: str) -> dict[str, int]:
+    """Walk a handful of recent dates of 365 fixtures for `league_slug` and
+    collect every (team_name → 365_team_id) we see. Cached per-league.
+
+    365 only covers basketball leagues we've mapped in `score365_adapter.LEAGUES`
+    (NBA, Euroleague, EuroCup, BCL, Winner League). Other slugs short-circuit.
+    """
+    if league_slug not in s365.LEAGUES:
+        return {}
+
+    index: dict[str, int] = {}
+    comp_id = s365.COMPETITION_IDS.get(league_slug)
+    if comp_id is None:
+        return index
+
+    def absorb_team(team: dict | None) -> None:
+        if not team:
+            return
+        try:
+            tid_int = int(team.get("id") or 0)
+        except (TypeError, ValueError):
+            return
+        if not tid_int:
+            return
+        for name_key in (team.get("name"), team.get("shortName"), team.get("longName")):
+            if not name_key:
+                continue
+            index[_normalize_team_name(name_key)] = tid_int
+
+    # Pass 1: standings — gives us every team in the league regardless
+    # of whether they're currently playing. Critical for NBA: eliminated
+    # teams aren't in the rolling games window during playoffs.
+    try:
+        with s365.Client365() as client:
+            data = client.get("/standings/", params={"competitions": str(comp_id)})
+        for stage in data.get("standings", []) or []:
+            for row in stage.get("rows", []) or []:
+                absorb_team(row.get("competitor"))
+    except Exception as exc:
+        logger.debug("365 standings fetch failed for %s: %s", league_slug, exc)
+
+    # Pass 2: rolling games window — fills in any teams missing from
+    # standings (e.g. cup competitions where /standings/ might be sparse).
+    try:
+        raw_games = s365._fetch_competition_window(comp_id)
+        for g in raw_games:
+            absorb_team(g.get("homeCompetitor"))
+            absorb_team(g.get("awayCompetitor"))
+    except Exception as exc:
+        logger.debug("365 window fetch failed for %s: %s", league_slug, exc)
+
+    return index
+
+
+def _get_365_team_index(league_slug: str) -> dict[str, int]:
+    now = time.monotonic()
+    with _365_index_lock:
+        cached = _365_team_index.get(league_slug)
+        fetched_at = _365_index_fetched_at.get(league_slug, 0.0)
+        if cached is not None and (now - fetched_at) < _365_INDEX_TTL:
+            return cached
+    # Build outside the lock; updates are commutative.
+    fresh = _build_365_team_index_for(league_slug)
+    with _365_index_lock:
+        _365_team_index[league_slug] = fresh
+        _365_index_fetched_at[league_slug] = now
+    logger.info("built 365 logo index for %s: %d teams", league_slug, len(fresh))
+    return fresh
+
+
+def _365_team_logo_url(league_slug: str, team_name: str | None) -> str:
+    """365 CDN URL for a team in this league, looked up by name. Empty
+    string when no match — caller should fall back to a BSD URL or skip."""
+    if not team_name:
+        return ""
+    index = _get_365_team_index(league_slug)
+    if not index:
+        return ""
+    tid = index.get(_normalize_team_name(team_name))
+    if not tid:
+        return ""
+    return f"{_365_LOGO_BASE}{tid}"
+
+
+def _basketball_logo_url(league_slug: str, team_name: str | None, bsd_id: int | str | None) -> str:
+    """Resolve the best logo URL for a basketball team. Prefers 365's
+    CDN (all logos come from one source for visual consistency), falls
+    back to BSD's `/img/team/{id}/` for leagues 365 doesn't cover or
+    when name-matching can't find a 365 id (e.g., a newly-promoted club)."""
+    url = _365_team_logo_url(league_slug, team_name)
+    if url:
+        return url
+    return _bsd_team_logo_url(bsd_id)
 
 
 def _bsd_status_to_espn(status: str) -> tuple[str, str, int]:
