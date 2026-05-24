@@ -2282,10 +2282,56 @@ def soccer_league_standings(slug: str):
     if league_id is None:
         raise HTTPException(status_code=404, detail=f"No BSD standings for league '{slug}'")
     import bzzoiro_adapter as _bsd_soccer
-    result = _bsd_soccer.league_standings(league_id)
-    if result is None:
+    try:
+        raw = _bsd_soccer.league_standings(league_id)
+    except Exception as exc:
+        logger.warning("soccer standings error for %s: %s", slug, exc)
         raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
-    return result
+    if raw is None:
+        raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
+    return _normalize_soccer_standings(raw, league_id)
+
+
+def _normalize_soccer_standings(raw: dict, league_id: int) -> dict:
+    season_raw = raw.get("season") or {}
+    rows = raw.get("standings") or raw.get("table") or raw.get("rows") or []
+    out = []
+    for row in rows:
+        team = row.get("team") if isinstance(row.get("team"), dict) else {}
+        tid  = team.get("id") or row.get("team_id") or row.get("id") or 0
+        name = team.get("name") or row.get("team_name") or ""
+        gf   = _i(row, "goals_for",       "gf",  "scored",         "goals_scored")
+        ga   = _i(row, "goals_against",    "ga",  "conceded",       "goals_conceded")
+        gd   = _i(row, "goal_difference",  "gd") or (gf - ga)
+        out.append({
+            "position":   _i(row, "position", "rank"),
+            "team_id":    tid,
+            "team_name":  name,
+            "team_crest": f"https://sports.bzzoiro.com/img/team/{tid}/" if tid else None,
+            "played":     _i(row, "played", "matches", "games_played"),
+            "won":        _i(row, "won",    "wins",    "w"),
+            "drawn":      _i(row, "drawn",  "draws",   "d"),
+            "lost":       _i(row, "lost",   "losses",  "l"),
+            "gf": gf, "ga": ga, "gd": gd,
+            "pts":        _i(row, "points", "pts"),
+            "form":       row.get("form"),
+            "live":       row.get("live"),
+        })
+    return {
+        "league_id": league_id,
+        "season":    {"id": season_raw.get("id") or 0, "name": season_raw.get("name") or ""},
+        "grouped":   bool(raw.get("grouped", False)),
+        "standings": out,
+    }
+
+
+def _i(d: dict, *keys: str) -> int:
+    for k in keys:
+        v = d.get(k)
+        if v is not None:
+            try: return int(v)
+            except (TypeError, ValueError): pass
+    return 0
 
 
 @app.get("/basketball/league/{slug}/standings")
@@ -2295,7 +2341,11 @@ def basketball_league_standings(slug: str):
     league_id = _bsd_bb.slug_to_league_id(slug)
     if league_id is None:
         raise HTTPException(status_code=404, detail=f"No BSD standings for basketball league '{slug}'")
-    result = _bsd_bb.league_standings(league_id)
+    try:
+        result = _bsd_bb.league_standings(league_id)
+    except Exception as exc:
+        logger.warning("basketball standings error for %s: %s", slug, exc)
+        raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
     if result is None:
         raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
     return result
