@@ -56,12 +56,13 @@ BSD_BASKETBALL_LEAGUE_IDS: dict[str, int] = {
 
 
 _TTL_SECONDS: dict[str, float] = {
-    "leagues":         3600.0,
-    "events_list":     60.0,    # listings — minute-fresh is fine
-    "event_detail":    30.0,
-    "event_team_stats": 120.0,  # heavy + stable mid-game
-    "event_box_score":  60.0,   # live games tick more often
-    "event_pregame":   600.0,   # pre-tip data
+    "leagues":          3600.0,
+    "events_list":      60.0,
+    "event_detail":     30.0,
+    "event_team_stats": 120.0,
+    "event_box_score":  60.0,
+    "event_pregame":    600.0,
+    "league_standings": 300.0,
 }
 
 
@@ -229,6 +230,10 @@ def event_pregame(event_id: int) -> dict | None:
 
 # ---------------------------------------------------------------------------
 # Convenience helpers used by basketball_source.py
+
+def league_standings(league_id: int) -> dict | None:
+    return _cached_get("league_standings", f"/leagues/{league_id}/standings/", None, league_id)
+
 
 def slug_to_league_id(slug: str) -> int | None:
     return BSD_BASKETBALL_LEAGUE_IDS.get(slug)

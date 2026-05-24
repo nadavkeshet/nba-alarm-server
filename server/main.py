@@ -2271,7 +2271,45 @@ def soccer_match_lineups(canonical_id: str):
     result = _bsd_soccer.event_lineups(event_id)
     if result is None:
         return {"lineup_status": "unavailable", "lineups": None, "event_id": event_id}
-    return result
+    return _normalize_lineups(result)
+
+
+def _normalize_lineups(raw: dict) -> dict:
+    """Ensure every lineup player has an `ai_score` key that iOS expects.
+    BSD may return the rating as 'rating', 'score', 'ai_score', etc.
+    """
+    def _fix_players(players: list) -> list:
+        out = []
+        for p in (players or []):
+            score = (p.get("ai_score") or p.get("rating") or p.get("score")
+                     or p.get("performance_score") or p.get("match_rating"))
+            try:
+                score = float(score) if score is not None else None
+            except (TypeError, ValueError):
+                score = None
+            out.append({**p, "ai_score": score})
+        return out
+
+    def _fix_side(side: dict) -> dict:
+        if not isinstance(side, dict):
+            return side
+        return {
+            **side,
+            "players":     _fix_players(side.get("players", [])),
+            "substitutes": _fix_players(side.get("substitutes", [])),
+        }
+
+    lineups = raw.get("lineups") or {}
+    if isinstance(lineups, dict) and ("home" in lineups or "away" in lineups):
+        raw = {
+            **raw,
+            "lineups": {
+                **lineups,
+                "home": _fix_side(lineups.get("home", {})),
+                "away": _fix_side(lineups.get("away", {})),
+            }
+        }
+    return raw
 
 
 @app.get("/soccer/league/{slug}/standings")
@@ -2342,13 +2380,56 @@ def basketball_league_standings(slug: str):
     if league_id is None:
         raise HTTPException(status_code=404, detail=f"No BSD standings for basketball league '{slug}'")
     try:
-        result = _bsd_bb.league_standings(league_id)
+        raw = _bsd_bb.league_standings(league_id)
     except Exception as exc:
         logger.warning("basketball standings error for %s: %s", slug, exc)
         raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
-    if result is None:
+    if raw is None:
         raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
-    return result
+    return _normalize_basketball_standings(raw, league_id, slug)
+
+
+def _normalize_basketball_standings(raw: dict, league_id: int, slug: str) -> dict:
+    league_raw  = raw.get("league") or {}
+    season_raw  = raw.get("season") or {}
+    rows = raw.get("standings") or raw.get("results") or raw.get("table") or []
+    if isinstance(rows, dict):
+        rows = rows.get("results") or []
+
+    out = []
+    for i, row in enumerate(rows, start=1):
+        team = row.get("team") if isinstance(row.get("team"), dict) else {}
+        tid  = team.get("id") or row.get("team_id") or 0
+        name = team.get("name") or row.get("team_name") or ""
+        short_name = (team.get("abbreviation") or team.get("short_name")
+                      or team.get("code") or None)
+        wins    = _i(row, "wins",   "win", "w")
+        losses  = _i(row, "losses", "loss", "l")
+        matches = wins + losses or _i(row, "matches", "games", "games_played", "gp")
+        pct_raw = (row.get("win_percentage") or row.get("percentage") or row.get("pct"))
+        try:
+            pct = float(pct_raw) if pct_raw is not None else None
+        except (TypeError, ValueError):
+            pct = None
+        sf  = _i(row, "points_scored",  "points_for",     "pf") or None
+        sa  = _i(row, "points_allowed", "points_against",  "pa") or None
+        out.append({
+            "team": {"id": tid, "name": name, "short_name": short_name},
+            "position":       _i(row, "position", "rank", "standing") or i,
+            "matches":        matches,
+            "wins":           wins,
+            "losses":         losses,
+            "percentage":     pct,
+            "scores_for":     sf,
+            "scores_against": sa,
+        })
+    return {
+        "league":  {"id": league_raw.get("id") or league_id,
+                    "name": league_raw.get("name") or slug.upper().replace("_", " ")},
+        "season":  {"id": season_raw.get("id") or 0,
+                    "name": season_raw.get("name") or ""},
+        "standings": out,
+    }
 
 
 @app.get("/soccer/live")
