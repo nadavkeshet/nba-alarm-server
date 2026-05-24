@@ -619,6 +619,24 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
             out["xg_per_minute"] = []
             return out
 
+    if source == "s365":
+        from score365_soccer_adapter import soccer_game_detail, league_slug_for_competition_id
+        try:
+            raw = soccer_game_detail(int(native))
+            if not raw:
+                return None
+            competition_id = raw.get("competitionId")
+            slug = league_slug_for_competition_id(competition_id) if competition_id else None
+            out = _from_365_game(raw, slug=slug)
+            out["incidents"] = []
+            out["shotmap"] = []
+            out["xg_per_minute"] = []
+            out["momentum"] = []
+            return out
+        except Exception as exc:
+            logger.warning("s365 game_detail failed for %s: %s", canonical, exc)
+            return None
+
     return None
 
 
