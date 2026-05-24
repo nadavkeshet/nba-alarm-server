@@ -78,6 +78,10 @@ def wire(
 
 _thread: threading.Thread | None = None
 _stop = threading.Event()
+# Set whenever the BSD WebSocket pushes a fresh `event` frame for any
+# subscribed match. The radar wait loop watches it so an actual score /
+# state change wakes us within ~1s instead of waiting up to POLL_INTERVAL.
+_wake = threading.Event()
 
 
 def start_soccer_radar() -> None:
@@ -86,9 +90,11 @@ def start_soccer_radar() -> None:
     if _thread is not None and _thread.is_alive():
         return
     _stop.clear()
+    _wake.clear()
     _thread = threading.Thread(target=_radar_loop, name="soccer-radar", daemon=True)
     _thread.start()
-    logger.info("soccer radar thread started (poll=%.1fs)", POLL_INTERVAL)
+    _register_ws_callback()
+    logger.info("soccer radar thread started (poll=%.1fs, ws-wake enabled)", POLL_INTERVAL)
 
 
 def stop_soccer_radar() -> None:
@@ -97,6 +103,28 @@ def stop_soccer_radar() -> None:
 
 def is_radar_running() -> bool:
     return _thread is not None and _thread.is_alive()
+
+
+def _register_ws_callback() -> None:
+    """Wire the BSD WS push stream into the radar so score changes
+    short-circuit the poll interval. Best-effort: if the WS module isn't
+    importable or the singleton hasn't started, the radar just keeps
+    polling on its normal cadence."""
+    try:
+        import bsd_websocket as bw
+        client = bw.client()
+
+        def _on_push(event_id: int, kind: str, payload: dict) -> None:
+            # Only react to score/time updates — livedata frames stream
+            # every ~5s while a match is live and would otherwise wake the
+            # radar constantly with no actionable change.
+            if kind == "event":
+                _wake.set()
+
+        client.add_callback(_on_push)
+        logger.info("soccer radar ↔ BSD WS callback wired")
+    except Exception as exc:
+        logger.warning("soccer radar: WS callback not wired: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +137,11 @@ def _radar_loop() -> None:
             _tick()
         except Exception as exc:
             logger.exception("soccer radar tick failed: %s", exc)
-        _stop.wait(POLL_INTERVAL)
+        # Wait up to POLL_INTERVAL OR until the WS push wakes us. Whichever
+        # fires first, the next tick runs immediately after.
+        woken = _wake.wait(POLL_INTERVAL)
+        if woken:
+            _wake.clear()
 
 
 def _tick() -> None:

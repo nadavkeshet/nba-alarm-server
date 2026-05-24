@@ -1192,6 +1192,63 @@ def _restart_alarm_threads_from_db() -> None:
         log.error("STARTUP: failed to expire stale alarms – %s", exc)
 
 
+def _bsd_ws_sub_manager_loop() -> None:
+    """Keep the BSD WS subscription set in sync with the set of currently-
+    live BSD events. Re-syncs every 30 s.
+
+    Sources of "live" events:
+      - Soccer: `bzzoiro_adapter.live_events()` (football).
+      - Basketball: `bsd_basketball.live_events()`.
+
+    BSD caps subscriptions at 10 per socket, so we prioritize by
+    "is this event referenced by an active alarm?" — those go first, then
+    fill remaining slots with whatever else is live.
+
+    The helper runs in a normal thread (not asyncio) so it can call the
+    sync BSD REST adapters without trampoline overhead.
+    """
+    import bsd_websocket
+    import bzzoiro_adapter as _bsd_soccer
+    import bsd_basketball as _bsd_basketball
+
+    log.info("BSD WS sub-manager started (30s sync cycle)")
+    while True:
+        try:
+            ws = bsd_websocket.client()
+            if ws._fatal_auth_error:
+                # Subscription not active — no work to do
+                time.sleep(60)
+                continue
+
+            desired: set[int] = set()
+            try:
+                for e in _bsd_soccer.live_events() or []:
+                    eid = e.get("id")
+                    if isinstance(eid, int):
+                        desired.add(eid)
+            except Exception as exc:
+                log.debug("BSD soccer live_events failed in sub-manager: %s", exc)
+            try:
+                for e in _bsd_basketball.live_events() or []:
+                    eid = e.get("id")
+                    if isinstance(eid, int):
+                        desired.add(eid)
+            except Exception as exc:
+                log.debug("BSD basketball live_events failed in sub-manager: %s", exc)
+
+            # Cap to BSD's per-socket limit. We could shard later, but
+            # 10 simultaneous live events across our sports is usually
+            # enough — pick a stable order (smallest id first) so the cap
+            # is deterministic.
+            if len(desired) > bsd_websocket.MAX_SUBS_PER_SOCKET:
+                desired = set(sorted(desired)[:bsd_websocket.MAX_SUBS_PER_SOCKET])
+
+            ws.sync_subscriptions(desired)
+        except Exception as exc:
+            log.warning("WS sub-manager iteration crashed: %s", exc)
+        time.sleep(30)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # ── Startup ──
@@ -1221,6 +1278,21 @@ async def lifespan(_app: FastAPI):
         log.info("soccer radar wired and started")
     except Exception as soccer_exc:
         log.warning("soccer radar not started: %s", soccer_exc)
+
+    # BSD live WebSocket client — pushes per-event deltas instead of
+    # forcing monitor.py to poll REST every few seconds. The client itself
+    # exits cleanly if the BSD subscription isn't active; the sub-manager
+    # below keeps the desired subscription set in sync with currently-
+    # live BSD events for both soccer and basketball.
+    try:
+        import bsd_websocket
+        bsd_websocket.client()  # starts the singleton
+        threading.Thread(target=_bsd_ws_sub_manager_loop,
+                         name="bsd-ws-sub-manager", daemon=True).start()
+        log.info("BSD live WS client started")
+    except Exception as ws_exc:
+        log.warning("BSD WS not started: %s", ws_exc)
+
     # Start the async DB poller
     poller_task = asyncio.create_task(_alarm_poller())
 
@@ -1972,9 +2044,97 @@ def leagues():
 
 
 @app.get("/games")
-def games(date: Optional[str] = None, league: str = "nba"):
-    """Return games for a given date (YYYYMMDD) and league. Defaults to today NBA."""
-    return {"games": get_games_for_date(date, league=league)}
+def games(
+    date: Optional[str] = None,
+    league: str = "nba",
+    tz: Optional[str] = None,
+):
+    """Return games for a given date (YYYYMMDD) and league. Defaults to today NBA.
+
+    Routes through the basketball_source cascade (BSD primary, 365scores
+    fallback) for leagues we've migrated. Falls back to the legacy
+    `get_games_for_date` path for anything not yet routed (e.g. ESPN
+    direct calls used by monitor.py).
+    """
+    import basketball_source as _bb
+    iso_date = _yyyymmdd_to_iso(date)
+    try:
+        games = _bb.get_basketball_games(league, date_iso=iso_date, tz=tz)
+        return {"games": games, "league": league, "date": iso_date, "tz": tz}
+    except Exception as exc:
+        # Defensive fallback so the schedule never goes black during
+        # rollout. Removable once BSD basketball is proven in prod.
+        logger.warning("basketball_source failed for %s/%s: %s — falling back to legacy",
+                       league, iso_date, exc)
+        return {"games": get_games_for_date(date, league=league)}
+
+
+@app.get("/basketball/event/{canonical_id}")
+def basketball_event_detail(canonical_id: str):
+    """Single basketball event with score header + per-period scoring +
+    pre-match prediction. BSD-only — 365 fallback IDs return 404."""
+    import basketball_source as _bb
+    detail = _bb.get_basketball_event_detail(canonical_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="event not found or source has no detail endpoint")
+    return detail
+
+
+@app.get("/basketball/event/{canonical_id}/team-stats")
+def basketball_event_team_stats(canonical_id: str):
+    """Quarter-by-quarter team stats. BSD-only."""
+    import basketball_source as _bb
+    stats = _bb.get_basketball_team_stats(canonical_id)
+    if stats is None:
+        raise HTTPException(status_code=404, detail="team stats unavailable for this source")
+    return stats
+
+
+@app.get("/basketball/event/{canonical_id}/box-score")
+def basketball_event_box_score(canonical_id: str):
+    """Per-player stats for both teams. BSD-only."""
+    import basketball_source as _bb
+    box = _bb.get_basketball_box_score(canonical_id)
+    if box is None:
+        raise HTTPException(status_code=404, detail="box score unavailable for this source")
+    return box
+
+
+@app.get("/basketball/event/{canonical_id}/summary")
+def basketball_event_summary(canonical_id: str):
+    """Aggregated payload for the iOS BasketballSummaryView.
+
+    Fans out detail + team-stats + box-score in parallel and returns one
+    merged object. Mirrors `/soccer/match/{id}` so the iOS layer can fetch
+    everything in a single round-trip.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    import basketball_source as _bb
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        f_detail = pool.submit(_bb.get_basketball_event_detail, canonical_id)
+        f_stats  = pool.submit(_bb.get_basketball_team_stats, canonical_id)
+        f_box    = pool.submit(_bb.get_basketball_box_score, canonical_id)
+        detail = f_detail.result()
+        if detail is None:
+            raise HTTPException(status_code=404, detail="event not found")
+        team_stats = None
+        box_score = None
+        try:
+            team_stats = f_stats.result()
+        except Exception as exc:
+            logger.warning("team-stats failed for %s: %s", canonical_id, exc)
+        try:
+            box_score = f_box.result()
+        except Exception as exc:
+            logger.warning("box-score failed for %s: %s", canonical_id, exc)
+
+    return {
+        "id":         canonical_id,
+        "detail":     detail,
+        "team_stats": team_stats,
+        "box_score":  box_score,
+    }
 
 
 # ── Soccer endpoints (v3) ────────────────────────────────────────────────────

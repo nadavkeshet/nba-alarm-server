@@ -390,6 +390,18 @@ def _translate_status(game: dict) -> dict:
 
 # ── Team helper ───────────────────────────────────────────────────────────────
 
+def _365_team_crest_url(team_id: int | str | None) -> str:
+    """Public 365scores CDN URL for a competitor logo. Free, no auth.
+    Works for every competition 365scores covers (Euroleague, EuroCup,
+    BCL, Israeli Winner League, etc.). NBA still comes from ESPN."""
+    if not team_id:
+        return ""
+    return (
+        "https://imagecache.365scores.com/image/upload/"
+        f"d_Competitors:default1.png/Competitors/{team_id}"
+    )
+
+
 def _make_team_obj(comp: dict) -> dict:
     """Build ESPN-format team object from a 365scores competitor dict."""
     tid = comp.get("id", 0)
@@ -405,7 +417,7 @@ def _make_team_obj(comp: dict) -> dict:
         "name":        short_name or comp.get("shortName", ""),
         "displayName": display_name or comp.get("name", ""),
         "abbreviation": abbr,
-        "logo":        "",   # 365scores serves images via CDN but we don't need the URL
+        "logo":        _365_team_crest_url(comp.get("id")),
     }
 
 
