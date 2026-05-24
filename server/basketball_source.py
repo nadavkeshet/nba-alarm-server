@@ -287,7 +287,25 @@ _365_INDEX_TTL = 24 * 3600  # 24 h
 
 
 def _normalize_team_name(name: str) -> str:
-    return name.lower().strip().replace(".", "").replace("'", "")
+    """Best-effort canonicalization so BSD ("Olympiacos BC") and 365
+    ("Olympiacos") line up. Lowercases, strips diacritics + punctuation,
+    then peels off common club-name suffixes/prefixes that differ across
+    sources."""
+    import unicodedata
+    nfkd = unicodedata.normalize("NFKD", name)
+    ascii_only = "".join(c for c in nfkd if not unicodedata.combining(c))
+    s = ascii_only.lower().strip()
+    for ch in ".'’`,":
+        s = s.replace(ch, "")
+    # Trailing club designators
+    for suf in (" bc", " bsa", " baloncesto", " basket", " basketball", " olimpija"):
+        if s.endswith(suf):
+            s = s[: -len(suf)]
+    # Leading club designators ("BC Dubai" → "dubai")
+    for pre in ("bc ", "kk ", "fc ", "cb ", "as "):
+        if s.startswith(pre):
+            s = s[len(pre):]
+    return s.strip()
 
 
 def _build_365_team_index_for(league_slug: str) -> dict[str, int]:
@@ -368,7 +386,19 @@ def _365_team_logo_url(league_slug: str, team_name: str | None) -> str:
     index = _get_365_team_index(league_slug)
     if not index:
         return ""
-    tid = index.get(_normalize_team_name(team_name))
+    target = _normalize_team_name(team_name)
+    tid = index.get(target)
+    if tid is None:
+        # Fuzzy fallback for city/region suffixes that differ between
+        # sources, e.g. BSD "Anadolu Efes Istanbul" vs 365 "Anadolu Efes",
+        # or BSD "AEK" vs 365 "AEK Athens". Pick the longest index key
+        # that's a prefix of the target (or vice versa) — favors the
+        # most specific match.
+        best_len = 0
+        for key, kid in index.items():
+            if (key.startswith(target) or target.startswith(key)) and len(key) > best_len:
+                tid = kid
+                best_len = len(key)
     if not tid:
         return ""
     return f"{_365_LOGO_BASE}{tid}"
