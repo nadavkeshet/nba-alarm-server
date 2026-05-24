@@ -60,6 +60,7 @@ def _headers() -> dict[str, str]:
 # 30s, odds 3min, broadcasts 1hr, social 15min) — our cache layers on top so
 # multiple consumers within the same poll cycle don't double-fetch.
 _TTL_SECONDS: dict[str, float] = {
+    "league_standings": 300.0,
     "live_events":     20.0,
     "league_events":   60.0,    # listings; minute-fresh is plenty
     "event_detail":    30.0,
@@ -252,6 +253,10 @@ def event_prediction(event_id: int) -> dict | None:
 
 def league_detail(league_id: int) -> dict | None:
     return _cached_get("league_detail", f"/leagues/{league_id}/", None, league_id)
+
+
+def league_standings(league_id: int) -> dict | None:
+    return _cached_get("league_standings", f"/leagues/{league_id}/standings/", None, league_id)
 
 
 # ---------------------------------------------------------------------------

@@ -2256,6 +2256,51 @@ def soccer_drama_timeline(canonical_id: str, step: int = 2):
     return {"match_id": detail.get("id"), "timeline": timeline}
 
 
+@app.get("/soccer/match/{canonical_id}/lineups")
+def soccer_match_lineups(canonical_id: str):
+    """Confirmed / predicted lineups for a soccer match.
+    Only BSD-sourced matches have lineups; non-BSD ids return lineup_status=unavailable.
+    """
+    if not canonical_id.startswith("bsd-"):
+        return {"lineup_status": "unavailable", "lineups": None, "event_id": None}
+    try:
+        event_id = int(canonical_id[4:])
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid canonical_id format")
+    import bzzoiro_adapter as _bsd_soccer
+    result = _bsd_soccer.event_lineups(event_id)
+    if result is None:
+        return {"lineup_status": "unavailable", "lineups": None, "event_id": event_id}
+    return result
+
+
+@app.get("/soccer/league/{slug}/standings")
+def soccer_league_standings(slug: str):
+    """Current league table for a soccer league slug (e.g. premier_league)."""
+    from score365_soccer_adapter import BSD_COMPETITION_IDS
+    league_id = BSD_COMPETITION_IDS.get(slug)
+    if league_id is None:
+        raise HTTPException(status_code=404, detail=f"No BSD standings for league '{slug}'")
+    import bzzoiro_adapter as _bsd_soccer
+    result = _bsd_soccer.league_standings(league_id)
+    if result is None:
+        raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
+    return result
+
+
+@app.get("/basketball/league/{slug}/standings")
+def basketball_league_standings(slug: str):
+    """Current standings for a basketball league slug (e.g. nba, euroleague)."""
+    import bsd_basketball as _bsd_bb
+    league_id = _bsd_bb.slug_to_league_id(slug)
+    if league_id is None:
+        raise HTTPException(status_code=404, detail=f"No BSD standings for basketball league '{slug}'")
+    result = _bsd_bb.league_standings(league_id)
+    if result is None:
+        raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
+    return result
+
+
 @app.get("/soccer/live")
 def soccer_live(leagues: Optional[str] = None):
     """All currently-live soccer matches across requested leagues
