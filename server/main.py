@@ -1249,6 +1249,36 @@ def _bsd_ws_sub_manager_loop() -> None:
         time.sleep(30)
 
 
+def _seed_soccer_search_index() -> None:
+    """Seed soccer team search accumulator from league standings on startup.
+
+    Fetches standings for each football league so /search returns teams
+    immediately after boot, without waiting for a user to load the Sports tab.
+    """
+    try:
+        from score365_soccer_adapter import BSD_COMPETITION_IDS
+        import bzzoiro_adapter as _bsd
+        from search_index import remember_soccer_team
+
+        for slug, league_id in BSD_COMPETITION_IDS.items():
+            try:
+                raw = _bsd.league_standings(league_id)
+                if not raw:
+                    continue
+                rows = raw.get("standings") or raw.get("table") or raw.get("rows") or []
+                for row in rows:
+                    team = row.get("team") if isinstance(row.get("team"), dict) else {}
+                    tid  = str(team.get("id") or row.get("team_id") or row.get("id") or "")
+                    name = team.get("name") or row.get("team_name") or ""
+                    if tid and name:
+                        crest = f"https://sports.bzzoiro.com/img/team/{tid}/"
+                        remember_soccer_team(tid, name, crest=crest, competition=slug)
+            except Exception as e:
+                log.debug("soccer seed skipped for %s: %s", slug, e)
+    except Exception as e:
+        log.warning("soccer search index seeding failed: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # ── Startup ──
@@ -1261,6 +1291,8 @@ async def lifespan(_app: FastAPI):
     threading.Thread(target=update_all_rosters, daemon=True).start()
     # Pre-warm games cache so /games is ready immediately after startup
     threading.Thread(target=get_today_games, daemon=True).start()
+    # Seed soccer team search index from standings so /search works on cold start
+    threading.Thread(target=_seed_soccer_search_index, daemon=True).start()
     # Radar reads all users directly from DB — always start it
     threading.Thread(target=start_radar_job, daemon=True).start()
     # v3 soccer radar (event-driven). Wired with our existing FCM helper + dedup.
