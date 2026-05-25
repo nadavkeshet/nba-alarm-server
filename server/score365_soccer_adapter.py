@@ -135,3 +135,28 @@ def is_in_scope(competition_id: int) -> bool:
     """True if this 365scores competition is one of the 10 tracked football
     competitions for v3 launch."""
     return competition_id in COMPETITION_IDS.values()
+
+
+def soccer_league_standings(competition_id: int) -> list[dict]:
+    """Get current standings rows for a competition.
+
+    Returns a flat list of competitor dicts (merged across all groups/stages)
+    with at minimum 'id' and 'name' keys. Useful for seeding the search index
+    when no live games are available from that competition.
+    """
+    with Client365() as c:
+        data = c.get("/standings/", params={"competitions": str(competition_id)})
+    rows: list[dict] = []
+    for standing in data.get("standings", []):
+        for row in standing.get("rows", []):
+            comp = row.get("competitor") or {}
+            if comp.get("id") and comp.get("name"):
+                rows.append(comp)
+    # Dedupe by competitor id (same team may appear in multiple groups)
+    seen: set = set()
+    unique: list[dict] = []
+    for r in rows:
+        if r["id"] not in seen:
+            seen.add(r["id"])
+            unique.append(r)
+    return unique

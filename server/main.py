@@ -1252,16 +1252,20 @@ def _bsd_ws_sub_manager_loop() -> None:
 def _seed_soccer_search_index() -> None:
     """Seed soccer team search accumulator from league standings on startup.
 
-    BSD leagues → standings API (all teams, even off-season).
-    Non-BSD leagues (e.g. ligat_haal via Sofascore/365) → 2-week match
-    window from score365 to extract home/away teams.
+    BSD leagues → BSD standings API (authoritative, available even off-season).
+    All leagues → 365scores standings as a reliable fallback / supplement,
+    since it covers all competitions including playoff rounds.
     """
     try:
-        from score365_soccer_adapter import BSD_COMPETITION_IDS, COMPETITION_IDS
+        from score365_soccer_adapter import (
+            BSD_COMPETITION_IDS,
+            COMPETITION_IDS as S365_IDS,
+            soccer_league_standings,
+        )
         import bzzoiro_adapter as _bsd
         from search_index import remember_soccer_team
 
-        # ── BSD leagues: use standings (most reliable, always has all teams) ──
+        # ── BSD leagues: use BSD standings (authoritative) ──
         for slug, league_id in BSD_COMPETITION_IDS.items():
             try:
                 raw = _bsd.league_standings(league_id)
@@ -1276,33 +1280,23 @@ def _seed_soccer_search_index() -> None:
                         crest = f"https://sports.bzzoiro.com/img/team/{tid}/"
                         remember_soccer_team(tid, name, crest=crest, competition=slug)
             except Exception as e:
-                log.debug("soccer seed (BSD) skipped for %s: %s", slug, e)
+                log.debug("soccer seed (BSD standings) skipped for %s: %s", slug, e)
 
-        # ── Non-BSD leagues: extract teams from a recent match window ──
-        non_bsd_slugs = [s for s in COMPETITION_IDS if s not in BSD_COMPETITION_IDS]
-        if non_bsd_slugs:
+        # ── All leagues: supplement with 365scores standings ──
+        # Covers non-BSD leagues (ligat_haal, euros) and fills any gaps from BSD.
+        # 365scores standings always reflect the current-season roster, including
+        # teams that only appear in playoff rounds not seen in recent game data.
+        for slug, comp_id in S365_IDS.items():
             try:
-                from score365_soccer_adapter import soccer_games_by_date_range, COMPETITION_IDS as S365_IDS
-                from datetime import date, timedelta
-                today = date.today()
-                start = (today - timedelta(days=14)).strftime("%m/%d/%Y")
-                end   = (today + timedelta(days=7)).strftime("%m/%d/%Y")
-                games = soccer_games_by_date_range(start, end)
-                slug_by_comp = {v: k for k, v in S365_IDS.items() if k in non_bsd_slugs}
-                for g in games:
-                    comp_id = g.get("competitionId")
-                    slug = slug_by_comp.get(comp_id)
-                    if not slug:
-                        continue
-                    for side in ("homeCompetitor", "awayCompetitor"):
-                        comp = g.get(side) or {}
-                        tid  = str(comp.get("id") or "")
-                        name = comp.get("name") or comp.get("shortName") or ""
-                        if tid and name:
-                            crest = f"https://cdn.365scores.com/image/upload/t_md/v3/competitors/{tid}"
-                            remember_soccer_team(tid, name, crest=crest, competition=slug)
+                competitors = soccer_league_standings(comp_id)
+                for comp in competitors:
+                    tid  = str(comp.get("id") or "")
+                    name = comp.get("name") or ""
+                    if tid and name:
+                        crest = f"https://imagecache.365scores.com/image/upload/d_Competitors:default1.png/Competitors/{tid}"
+                        remember_soccer_team(tid, name, crest=crest, competition=slug)
             except Exception as e:
-                log.debug("soccer seed (365) failed: %s", e)
+                log.debug("soccer seed (365 standings) skipped for %s: %s", slug, e)
 
     except Exception as e:
         log.warning("soccer search index seeding failed: %s", e)

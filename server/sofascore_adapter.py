@@ -32,6 +32,8 @@ import threading
 import time
 from typing import Any
 
+import os
+
 from curl_cffi import requests as cf_requests
 
 logger = logging.getLogger(__name__)
@@ -46,6 +48,11 @@ _HEADERS = {
 # TLS fingerprints to rotate through on consecutive 403s. Order matters —
 # `chrome120` is the most recent and usually works; the others are fallbacks.
 _IMPERSONATE_ROTATION = ("chrome120", "safari17_0", "chrome", "edge101")
+
+# Optional outbound proxy for Sofascore requests. Set SOFASCORE_PROXY_URL on
+# Railway (e.g. "socks5://user:pass@host:port" or "http://host:port") when
+# Railway's egress IPs are blocked by Sofascore's Cloudflare protection.
+_PROXY_URL: str | None = os.environ.get("SOFASCORE_PROXY_URL")
 
 # Per-method TTL for the in-process cache. Match state changes more often than
 # meta (statistics roll up over the whole match; lineups don't change at all
@@ -126,7 +133,8 @@ def _request_json(path: str, *, max_retries: int = 3) -> dict | list:
             impersonate = _current_impersonate
 
         try:
-            r = cf_requests.get(url, impersonate=impersonate, timeout=20, headers=_HEADERS)
+            proxies = {"https": _PROXY_URL, "http": _PROXY_URL} if _PROXY_URL else None
+            r = cf_requests.get(url, impersonate=impersonate, timeout=20, headers=_HEADERS, proxies=proxies)
         except Exception as e:
             last_error = e
             logger.warning("sofascore network error on %s: %s", path, e)
