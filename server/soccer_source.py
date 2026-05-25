@@ -407,9 +407,9 @@ def _fetch_365(slug: str, date_iso: str) -> list[dict]:
     competition_id = S365_IDS.get(slug)
     if competition_id is None:
         return []
-    # 365scores wants MM/DD/YYYY
+    # 365scores expects DD/MM/YYYY
     y, m, d = date_iso.split("-")
-    mdy = f"{m}/{d}/{y}"
+    mdy = f"{d}/{m}/{y}"
     raw = soccer_games_by_date(mdy)
     matched = [g for g in raw if g.get("competitionId") == competition_id]
     return [_from_365_game(g, slug=slug) for g in matched]

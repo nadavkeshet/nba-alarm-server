@@ -98,7 +98,8 @@ DEFAULT_LEAGUE_ORDER: list[str] = [
 def soccer_games_by_date(start: str, end: str | None = None) -> list[dict]:
     """Get all football games on a date range.
 
-    Dates are MM/DD/YYYY strings (per 365scores convention).
+    Dates are DD/MM/YYYY strings — 365scores football uses day-first format,
+    unlike basketball which uses MM/DD/YYYY. Callers must convert accordingly.
     Returns the `games` list from the response (caller can filter by
     `competitionId` against `COMPETITION_IDS`).
     """
