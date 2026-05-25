@@ -600,9 +600,11 @@ def fetch_player_boxscore(game_id: str) -> dict | None:
         if cached and time.time() - cached[0] < _BOXSCORE_TTL:
             return cached[1]
 
+    # Strip canonical prefix (e.g. "s365-12345" → "12345")
+    numeric_id = game_id.split("-", 1)[-1] if "-" in game_id else game_id
     try:
         with Client365() as client:
-            game = get_game_detail(client, int(game_id))
+            game = get_game_detail(client, int(numeric_id))
     except Exception as exc:
         log.warning("365scores: game detail fetch failed for %s: %s", game_id, exc)
         return None
