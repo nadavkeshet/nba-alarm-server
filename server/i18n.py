@@ -159,6 +159,13 @@ _TITLES = {
         "soccer_hat_trick":    "⚽ Hat-Trick Watch",
         "soccer_big_chance":   "💥 Chances Pouring In",
         "soccer_drama_radar":  "⚡ Drama Brewing",
+        # Soccer player alerts
+        "soccer_player_goal":     "⚽ Goal!",
+        "soccer_player_clutch_goal": "⚽ Clutch Goal!",
+        "soccer_player_brace":    "🔥 Brace Alert!",
+        "soccer_player_hattrick": "🎩 HAT-TRICK!",
+        "soccer_player_yellow":   "⚠️ Booked",
+        "soccer_player_red":      "🟥 Sent Off!",
     },
     "he": {
         "smart_alarm":      "!Smart Alarm! הולך להיות דרמטי",
@@ -183,6 +190,13 @@ _TITLES = {
         "soccer_hat_trick":    "⚽ מעקב האט-טריק",
         "soccer_big_chance":   "💥 הזדמנויות בכמויות",
         "soccer_drama_radar":  "⚡ דרמה בדרך",
+        # Soccer player alerts
+        "soccer_player_goal":     "⚽ שער!",
+        "soccer_player_clutch_goal": "⚽ שער קריטי!",
+        "soccer_player_brace":    "🔥 זוגית!",
+        "soccer_player_hattrick": "🎩 האט-טריק!",
+        "soccer_player_yellow":   "⚠️ כרטיס צהוב",
+        "soccer_player_red":      "🟥 גירוש!",
     },
 }
 
@@ -375,6 +389,46 @@ def t_soccer_body_big_chance(home: str, away: str, competition: str, lang: str) 
     if lang == "he":
         return f"{m}\n{comp} · גל של הזדמנויות"
     return f"{m}\n{comp} · big chances pouring in"
+
+
+def t_soccer_body_player_goal(player_name: str, home_score: int, away_score: int,
+                              minute: int, competition: str, context: str, lang: str) -> str:
+    comp = soccer_competition_name(competition, lang)
+    score = f"{home_score}-{away_score}"
+    if lang == "he":
+        ctx_map = {"equalizer": "השוואה", "go-ahead": "עלייה להובלה", "comeback": "קאמבק"}
+        ctx_str = f" ({ctx_map.get(context, context)})" if context else ""
+        return f"{player_name} עם שער ⚽ · דקה {minute} · {score}{ctx_str}\n{comp}"
+    ctx_str = f" ({context})" if context else ""
+    return f"{player_name} scores ⚽ · {minute}' · {score}{ctx_str}\n{comp}"
+
+
+def t_soccer_body_player_brace(player_name: str, competition: str, lang: str) -> str:
+    comp = soccer_competition_name(competition, lang)
+    if lang == "he":
+        return f"{player_name} עם שני שערים! 🔥\n{comp} · האט-טריק במרחק נגיעה"
+    return f"{player_name} bags a brace! 🔥\n{comp} · hat-trick in reach"
+
+
+def t_soccer_body_player_hattrick(player_name: str, competition: str, lang: str) -> str:
+    comp = soccer_competition_name(competition, lang)
+    if lang == "he":
+        return f"{player_name} משלים האט-טריק! 🎩\n{comp}"
+    return f"{player_name} completes the hat-trick! 🎩\n{comp}"
+
+
+def t_soccer_body_player_yellow(player_name: str, home: str, away: str, minute: int, lang: str) -> str:
+    m = soccer_match_label(home, away, lang)
+    if lang == "he":
+        return f"{player_name} קיבל כרטיס צהוב ⚠️ · דקה {minute}\n{m} · סכנת השעיה"
+    return f"{player_name} booked ⚠️ · {minute}'\n{m} · suspension risk"
+
+
+def t_soccer_body_player_red(player_name: str, home: str, away: str, minute: int, lang: str) -> str:
+    m = soccer_match_label(home, away, lang)
+    if lang == "he":
+        return f"{player_name} גורש מהמגרש 🟥 · דקה {minute}\n{m}"
+    return f"{player_name} sent off 🟥 · {minute}'\n{m}"
 
 
 def t_soccer_body_drama_radar(home: str, away: str, competition: str, drama: float | None = None, lang: str = "en") -> str:

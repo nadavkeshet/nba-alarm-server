@@ -2451,11 +2451,12 @@ _SOCCER_ALARM_TYPES = {
     "late_drama",     # any tracked match, ≥75', score within 1
     "knockout_et",    # any tracked knockout match entering ET or pens
     "comeback",       # favorite team trailing, score brought within 1
-    "hat_trick",      # favorite player has 2 goals (fire on next attempt)
+    "hat_trick",      # legacy — superseded by player_alert with hat_trick_watch=True
     "red_card",       # red card in close match in last 20 min
     "big_chance",     # 3+ big chances in last 10 min, score within 1
     "penalty",        # penalty awarded in any tracked match
-    "drama_radar",    # P3 — Drama Engine threshold
+    "drama_radar",    # Drama Engine threshold
+    "player_alert",   # per-player goal/card/hattrick watch (config carries toggles)
 }
 
 
@@ -2484,8 +2485,8 @@ def soccer_alarm_create(req: SoccerAlarmRequest):
         )
     if req.alarm_type == "match" and not req.match_id:
         raise HTTPException(status_code=400, detail="match_id is required for alarm_type='match'.")
-    if req.alarm_type == "hat_trick" and not req.player_id:
-        raise HTTPException(status_code=400, detail="player_id is required for alarm_type='hat_trick'.")
+    if req.alarm_type in ("hat_trick", "player_alert") and not req.player_id:
+        raise HTTPException(status_code=400, detail=f"player_id is required for alarm_type='{req.alarm_type}'.")
 
     with Session(engine) as session:
         # Idempotency: if an active alarm already exists for the same (user, type, match, player),

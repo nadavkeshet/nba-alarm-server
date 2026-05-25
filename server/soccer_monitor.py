@@ -40,6 +40,11 @@ from i18n import (
     t_soccer_body_penalty,
     t_soccer_body_red_card,
     t_soccer_body_drama_radar,
+    t_soccer_body_player_goal,
+    t_soccer_body_player_brace,
+    t_soccer_body_player_hattrick,
+    t_soccer_body_player_yellow,
+    t_soccer_body_player_red,
 )
 
 logger = logging.getLogger(__name__)
@@ -296,7 +301,146 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
                   signal=f"red_card_{red.get('minute',0)}", one_shot=True)
         return
 
+    if alarm_type == "player_alert":
+        _evaluate_player_alert(alarm, match)
+        return
+
     # Unknown alarm_type → no-op (keeps forward compat for P3 types)
+
+
+# ---------------------------------------------------------------------------
+# Player alert evaluator
+
+
+def _is_clutch_goal(is_home: bool | None, home_score: int, away_score: int, minute: int) -> bool:
+    """True if this goal is match-decisive: equalizer, go-ahead in 70+, or reduces a 2+ deficit."""
+    if is_home is None:
+        return False
+    scorer_score  = home_score if is_home else away_score
+    opponent_score = away_score if is_home else home_score
+    diff_after  = scorer_score - opponent_score
+    diff_before = (scorer_score - 1) - opponent_score
+    if diff_after == 0:                               # equalizer
+        return True
+    if minute >= 70 and diff_after == 1 and diff_before <= 0:  # late go-ahead
+        return True
+    if diff_before <= -2 and diff_after > diff_before:         # reduces 2+ deficit
+        return True
+    return False
+
+
+def _goal_context_str(is_home: bool | None, home_score: int, away_score: int) -> str:
+    if is_home is None:
+        return ""
+    scorer_score  = home_score if is_home else away_score
+    opponent_score = away_score if is_home else home_score
+    diff = scorer_score - opponent_score
+    if diff == 0:
+        return "equalizer"
+    if diff == 1:
+        return "go-ahead"
+    if diff == -1:
+        return "comeback"
+    return ""
+
+
+def _evaluate_player_alert(alarm: dict, match: dict) -> None:
+    """Evaluate a player_alert alarm against current match incidents.
+
+    Config keys (all optional, sensible defaults):
+        goal          bool  Fire on every goal.              default True
+        clutch_only   bool  Only fire on clutch goals.       default False
+        hat_trick_watch bool  Brace + hat-trick escalation.  default True
+        card_yellow   bool  Yellow card alert.               default False
+        card_red      bool  Red card alert.                  default True
+    """
+    player_id = str(alarm.get("player_id") or "")
+    if not player_id:
+        return
+
+    config = alarm.get("config") or {}
+    goal_enabled    = bool(config.get("goal", True))
+    clutch_only     = bool(config.get("clutch_only", False))
+    hat_trick_watch = bool(config.get("hat_trick_watch", True))
+    card_yellow     = bool(config.get("card_yellow", False))
+    card_red        = bool(config.get("card_red", True))
+
+    incidents  = match.get("incidents") or []
+    home_name  = (match.get("home") or {}).get("name", "")
+    away_name  = (match.get("away") or {}).get("name", "")
+    competition = match.get("competition", "")
+
+    # Gather all goals by this player (chronological — incidents are ordered)
+    player_goals = [
+        inc for inc in incidents
+        if (inc.get("type") or "").lower() == "goal"
+        and str(inc.get("player_id") or "") == player_id
+    ]
+    p_name = player_goals[0].get("player", "") if player_goals else ""
+
+    # ── Hat-trick watch ──────────────────────────────────────────────────────
+    if hat_trick_watch and player_goals:
+        count = len(player_goals)
+        if count == 2:
+            _fire(alarm, "soccer_player_brace",
+                  lambda h, a, c, lang, _n=p_name: t_soccer_body_player_brace(_n, c, lang),
+                  home_name, away_name, competition,
+                  signal="brace", one_shot=False)
+        elif count >= 3:
+            _fire(alarm, "soccer_player_hattrick",
+                  lambda h, a, c, lang, _n=p_name: t_soccer_body_player_hattrick(_n, c, lang),
+                  home_name, away_name, competition,
+                  signal="hattrick", one_shot=False)
+
+    # ── Individual goal alerts ───────────────────────────────────────────────
+    if goal_enabled:
+        for inc in player_goals:
+            minute    = inc.get("minute") or 0
+            hs        = inc.get("home_score") or 0
+            as_       = inc.get("away_score") or 0
+            is_home   = inc.get("is_home")
+            is_clutch = _is_clutch_goal(is_home, hs, as_, minute)
+            if clutch_only and not is_clutch:
+                continue
+            ctx      = _goal_context_str(is_home, hs, as_)
+            inc_name = inc.get("player") or p_name
+            title_key = "soccer_player_clutch_goal" if (clutch_only and is_clutch) else "soccer_player_goal"
+            _fire(
+                alarm, title_key,
+                lambda h, a, c, lang, _n=inc_name, _hs=hs, _as=as_, _m=minute, _ctx=ctx:
+                    t_soccer_body_player_goal(_n, _hs, _as, _m, c, _ctx, lang),
+                home_name, away_name, competition,
+                signal=f"goal_m{minute}", one_shot=False,
+            )
+
+    # ── Card watch ───────────────────────────────────────────────────────────
+    if card_yellow or card_red:
+        for inc in incidents:
+            if (inc.get("type") or "").lower() != "card":
+                continue
+            if str(inc.get("player_id") or "") != player_id:
+                continue
+            card_type  = (inc.get("card_type") or "").lower()
+            is_yellow  = "yellow" in card_type and "red" not in card_type
+            is_red     = "red" in card_type
+            minute     = inc.get("minute") or 0
+            card_name  = inc.get("player") or p_name
+            if card_yellow and is_yellow:
+                _fire(
+                    alarm, "soccer_player_yellow",
+                    lambda h, a, c, lang, _n=card_name, _m=minute:
+                        t_soccer_body_player_yellow(_n, h, a, _m, lang),
+                    home_name, away_name, competition,
+                    signal=f"yellow_m{minute}", one_shot=False,
+                )
+            if card_red and is_red:
+                _fire(
+                    alarm, "soccer_player_red",
+                    lambda h, a, c, lang, _n=card_name, _m=minute:
+                        t_soccer_body_player_red(_n, h, a, _m, lang),
+                    home_name, away_name, competition,
+                    signal=f"red_m{minute}", one_shot=False,
+                )
 
 
 # ---------------------------------------------------------------------------
