@@ -243,6 +243,8 @@ class SoccerFavoriteTeamDB(_Base):
     team_id           = Column(String,  primary_key=True)
     team_name         = Column(String,  nullable=True)
     competition_id    = Column(String,  nullable=True)
+    alt_team_ids      = Column(String,  nullable=True)   # comma-sep other provider ids
+    competitions      = Column(String,  nullable=True)   # comma-sep all leagues
     drama_threshold   = Column(Float,   nullable=False, default=7.0)
     alert_type        = Column(String,  nullable=False, default="alarm")
     paused            = Column(Boolean, nullable=False, default=False)
@@ -304,6 +306,8 @@ def _init_db() -> None:
         "ALTER TABLE alarms         ADD COLUMN league VARCHAR DEFAULT 'nba'",
         "ALTER TABLE favorites      ADD COLUMN skip_euroleague_evening BOOLEAN DEFAULT FALSE NOT NULL",
         "ALTER TABLE favorite_teams ADD COLUMN skip_euroleague_evening BOOLEAN DEFAULT FALSE NOT NULL",
+        "ALTER TABLE soccer_favorite_teams ADD COLUMN alt_team_ids VARCHAR",
+        "ALTER TABLE soccer_favorite_teams ADD COLUMN competitions VARCHAR",
     ]
     for sql in migrations:
         try:
