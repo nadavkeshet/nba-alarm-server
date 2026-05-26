@@ -12,7 +12,9 @@ accumulator — the next batch of /soccer/games fetches re-seeds it.
 
 from __future__ import annotations
 
+import re
 import threading
+import unicodedata
 from typing import Any
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -87,6 +89,30 @@ def _score(query_lower: str, target: str) -> float:
     if query_lower in t:
         return 0.5
     return 0.0
+
+
+# Common club-name suffix tokens that don't distinguish one club from another.
+# Prefixes like "maccabi"/"hapoel" are deliberately absent — they ARE the
+# distinguishing part of Israeli/European club names.
+_CLUB_SUFFIX_TOKENS = {
+    "fc", "cf", "sc", "bc", "afc", "ac", "cd", "ssc", "ud", "if", "bk",
+}
+
+
+def _normalize_team_name(name: str) -> str:
+    """Normalize a team name for cross-provider identity matching.
+
+    lowercase → strip diacritics → strip punctuation → drop common club
+    suffix tokens → collapse whitespace. Falls back to the un-filtered tokens
+    if suffix-stripping would empty the name.
+    """
+    decomposed = unicodedata.normalize("NFKD", name or "")
+    ascii_only = "".join(c for c in decomposed if not unicodedata.combining(c))
+    lowered = ascii_only.lower()
+    no_punct = re.sub(r"[^\w\s]", " ", lowered)
+    tokens = [t for t in no_punct.split() if t]
+    filtered = [t for t in tokens if t not in _CLUB_SUFFIX_TOKENS]
+    return " ".join(filtered or tokens)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
