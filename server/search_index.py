@@ -115,6 +115,71 @@ def _normalize_team_name(name: str) -> str:
     return " ".join(filtered or tokens)
 
 
+def _is_bsd_sourced(team: dict) -> bool:
+    """BSD/bzzoiro crests are hosted on sports.bzzoiro.com."""
+    return "bzzoiro" in (team.get("logo") or "")
+
+
+def _primary_sort_key(team: dict):
+    """Numeric ids sort ascending; non-numeric ids sort last by string."""
+    tid = str(team.get("id") or "")
+    try:
+        return (0, int(tid), "")
+    except ValueError:
+        return (1, 0, tid)
+
+
+def _pick_primary(group: list[dict]) -> dict:
+    """Prefer a BSD-sourced row; otherwise the lowest numeric id. Deterministic."""
+    bsd = [t for t in group if _is_bsd_sourced(t)]
+    pool = bsd or group
+    return sorted(pool, key=_primary_sort_key)[0]
+
+
+def _dedupe_preserve_order(values, *, drop_falsy: bool = False) -> list:
+    seen: set = set()
+    out: list = []
+    for v in values:
+        if drop_falsy and not v:
+            continue
+        if v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
+def _merge_duplicate_teams(teams: list[dict]) -> list[dict]:
+    """Collapse rows that are the same club (same sport + normalized name) into
+    one row carrying all provider ids and all leagues. Order preserved by first
+    appearance so the later score-sort is stable.
+    """
+    groups: dict[tuple[str, str], list[dict]] = {}
+    order: list[tuple[str, str]] = []
+    for t in teams:
+        key = (t.get("sport") or "", _normalize_team_name(t.get("name") or ""))
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(t)
+
+    merged: list[dict] = []
+    for key in order:
+        group = groups[key]
+        primary = _pick_primary(group)
+        ids = _dedupe_preserve_order([primary["id"]] + [t["id"] for t in group])
+        leagues = _dedupe_preserve_order(
+            [primary.get("league")] + [t.get("league") for t in group],
+            drop_falsy=True,
+        )
+        merged.append({
+            **primary,
+            "ids":     ids,
+            "leagues": leagues,
+            "score":   max(t["score"] for t in group),
+        })
+    return merged
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Static league catalog — mirrors the iOS LeagueCatalog so search results can
 # return the same slugs the rest of the app uses.
@@ -215,6 +280,10 @@ def search(query: str, limit: int = 10) -> dict[str, list[dict]]:
             score_t = _score(q, lg["id"].replace("_", " "))
         if score_t > 0:
             leagues.append({**lg, "score": score_t})
+
+    # Collapse clubs that split across providers (different id per competition)
+    # into a single row carrying all ids + leagues, BEFORE the limit cap.
+    teams = _merge_duplicate_teams(teams)
 
     # Sort by score desc, then name asc; cap each section at `limit`
     teams.sort(   key=lambda r: (-r["score"], r["name"].lower()))
