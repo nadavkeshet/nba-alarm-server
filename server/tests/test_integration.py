@@ -388,3 +388,25 @@ def test_zzz_cleanup():
     player_ids = [p["player_id"] for p in d["players"]]
     assert TEAM_ID   not in team_ids
     assert PLAYER_ID not in player_ids
+
+
+def test_soccer_favorite_team_multi_id_roundtrip():
+    """A merged team (multiple provider ids + competitions) round-trips intact."""
+    d = ok(post(
+        "/soccer/favorites/teams",
+        user_token=TOKEN,
+        team_id="130",
+        team_name="Maccabi Tel Aviv",
+        competition_id="europa_league",
+        team_ids=["130", "566"],
+        competitions=["europa_league", "ligat_haal"],
+    ))
+    assert d["status"] == "ok"
+
+    teams = ok(get("/soccer/favorites/teams", user_token=TOKEN))["teams"]
+    row = next(t for t in teams if t["team_id"] == "130")
+    assert sorted(row["team_ids"]) == ["130", "566"]
+    assert sorted(row["competitions"]) == ["europa_league", "ligat_haal"]
+
+    # cleanup
+    ok(delete("/soccer/favorites/teams/130", user_token=TOKEN))

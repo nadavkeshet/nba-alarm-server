@@ -2658,6 +2658,8 @@ class SoccerFavoriteTeamRequest(BaseModel):
     team_id: str
     team_name: Optional[str] = None
     competition_id: Optional[str] = None
+    team_ids: list[str] = []          # all provider ids for this club (incl. primary)
+    competitions: list[str] = []      # all leagues this club plays in
     drama_threshold: float = 7.0
     alert_type: str = "alarm"
     paused: bool = False
@@ -2735,6 +2737,10 @@ def soccer_fav_players_list(user_token: str = ""):
 @app.post("/soccer/favorites/teams")
 def soccer_fav_team_upsert(req: SoccerFavoriteTeamRequest):
     _require_token(req.user_token)
+    alt_ids = [tid for tid in dict.fromkeys(req.team_ids) if tid and tid != req.team_id]
+    comps   = [c for c in dict.fromkeys(req.competitions) if c]
+    if not comps and req.competition_id:
+        comps = [req.competition_id]
     with Session(engine) as session:
         row = session.get(SoccerFavoriteTeamDB, (req.user_token, req.team_id))
         if row is None:
@@ -2745,6 +2751,8 @@ def soccer_fav_team_upsert(req: SoccerFavoriteTeamRequest):
             session.add(row)
         row.team_name         = req.team_name
         row.competition_id    = req.competition_id
+        row.alt_team_ids      = ",".join(alt_ids) or None
+        row.competitions      = ",".join(comps) or None
         row.drama_threshold   = req.drama_threshold
         row.alert_type        = req.alert_type
         row.paused            = req.paused
@@ -2772,16 +2780,24 @@ def soccer_fav_teams_list(user_token: str = ""):
         rows = session.query(SoccerFavoriteTeamDB).filter(
             SoccerFavoriteTeamDB.user_token == user_token,
         ).order_by(SoccerFavoriteTeamDB.created_at.desc()).all()
-        out = [{
-            "team_id":           r.team_id,
-            "team_name":         r.team_name,
-            "competition_id":    r.competition_id,
-            "drama_threshold":   r.drama_threshold,
-            "alert_type":        r.alert_type,
-            "paused":            r.paused,
-            "notify_at_kickoff": r.notify_at_kickoff,
-            "created_at":        r.created_at.isoformat() if r.created_at else None,
-        } for r in rows]
+        out = []
+        for r in rows:
+            alt_ids = [t for t in (r.alt_team_ids or "").split(",") if t]
+            comps   = [c for c in (r.competitions or "").split(",") if c]
+            if not comps and r.competition_id:
+                comps = [r.competition_id]
+            out.append({
+                "team_id":           r.team_id,
+                "team_ids":          [r.team_id] + alt_ids,
+                "team_name":         r.team_name,
+                "competition_id":    r.competition_id,
+                "competitions":      comps,
+                "drama_threshold":   r.drama_threshold,
+                "alert_type":        r.alert_type,
+                "paused":            r.paused,
+                "notify_at_kickoff": r.notify_at_kickoff,
+                "created_at":        r.created_at.isoformat() if r.created_at else None,
+            })
     return {"teams": out}
 
 
