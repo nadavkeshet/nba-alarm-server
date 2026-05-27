@@ -584,13 +584,25 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
             if not ev:
                 return None
             out = _from_sofa_event(ev)
-            # Stats
+            # Stats — normalize the full per-team table (this was missing, so
+            # the iOS Statistics tab was empty for every Sofascore match) and
+            # pull xG out of either the event detail or the stats block.
             try:
                 stats = f_stats.result() or {}
                 xg = sofa.find_team_xg(stats)
                 if xg:
                     out["home"]["xg"] = xg[0]
                     out["away"]["xg"] = xg[1]
+                norm_stats = _normalize_sofa_statistics(stats)
+                if norm_stats:
+                    out["stats"] = norm_stats
+                    if not xg:
+                        hxg = (norm_stats.get("home") or {}).get("expected_goals")
+                        axg = (norm_stats.get("away") or {}).get("expected_goals")
+                        if hxg is not None:
+                            out["home"]["xg"] = hxg
+                        if axg is not None:
+                            out["away"]["xg"] = axg
             except Exception as exc:
                 logger.warning("sofa stats failed for %s: %s", canonical, exc)
             # Momentum (Sofa key shape {minute, value} → canonical {m, v})
@@ -732,3 +744,97 @@ def _normalize_sofa_incidents(raw: list[dict]) -> list[dict]:
         # else: unknown type passes through with just type/minute/is_home
         out.append(norm)
     return out
+
+
+# Sofascore statistics item `key` → canonical TeamStats field. Sofascore keys
+# are quirky ("totalShotsOnGoal" actually means *total* shots). Mapped from a
+# real Ligat ha'Al payload — these are the fields the iOS Statistics tab reads.
+_SOFA_STAT_INT_KEYS = {
+    "totalShotsOnGoal":      "total_shots",
+    "shotsOnGoal":           "shots_on_target",
+    "blockedScoringAttempt": "blocked_shots",
+    "bigChanceCreated":      "big_chances",
+    "bigChanceScored":       "big_chances_scored",
+    "bigChanceMissed":       "big_chances_missed",
+    "cornerKicks":           "corner_kicks",
+    "fouls":                 "fouls",
+    "offsides":              "offsides",
+    "accuratePasses":        "accurate_passes",
+    "passes":                "total_passes",
+    "yellowCards":           "yellow_cards",
+    "redCards":              "red_cards",
+}
+
+
+def _sofa_stat_int(value: Any) -> int | None:
+    """Parse a Sofascore stat to int. Handles '21', '467', '149/178 (84%)'
+    (takes the numerator) and '68%'."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    if "/" in s:                       # "149/178 (84%)" → numerator
+        s = s.split("/", 1)[0]
+    s = s.replace("%", "").strip()
+    try:
+        return int(float(s))
+    except (ValueError, TypeError):
+        return None
+
+
+def _sofa_stat_pct(value: Any) -> float | None:
+    """Parse '68%' → 68.0."""
+    if value is None:
+        return None
+    s = str(value).replace("%", "").strip()
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return None
+
+
+def _sofa_stat_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(str(value).strip())
+    except (ValueError, TypeError):
+        return None
+
+
+def _normalize_sofa_statistics(raw: dict | None) -> dict | None:
+    """Translate a Sofascore /statistics response into the canonical
+    `{home, away}` TeamStats shape iOS expects (uses the ALL-period group).
+    Returns None when there's nothing usable so the caller can omit the key."""
+    if not isinstance(raw, dict):
+        return None
+    home: dict[str, Any] = {}
+    away: dict[str, Any] = {}
+    found = False
+    for period_group in raw.get("statistics", []):
+        if period_group.get("period") != "ALL":
+            continue
+        for group in period_group.get("groups", []):
+            for item in group.get("statisticsItems", []):
+                key = item.get("key")
+                if key == "ballPossession":
+                    home["ball_possession"] = _sofa_stat_pct(item.get("home"))
+                    away["ball_possession"] = _sofa_stat_pct(item.get("away"))
+                    found = True
+                elif key in ("expectedGoals", "xg"):
+                    home["expected_goals"] = _sofa_stat_float(item.get("home"))
+                    away["expected_goals"] = _sofa_stat_float(item.get("away"))
+                    found = True
+                elif key in _SOFA_STAT_INT_KEYS:
+                    field = _SOFA_STAT_INT_KEYS[key]
+                    home[field] = _sofa_stat_int(item.get("home"))
+                    away[field] = _sofa_stat_int(item.get("away"))
+                    found = True
+    if not found:
+        return None
+    for side in (home, away):
+        acc, tot = side.get("accurate_passes"), side.get("total_passes")
+        if acc is not None and tot:
+            side["pass_accuracy_pct"] = round(acc / tot * 100, 1)
+    return {"home": home, "away": away}

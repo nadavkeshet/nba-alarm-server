@@ -128,11 +128,25 @@ def get_basketball_team_stats(canonical: str) -> dict | None:
 
 
 def get_basketball_box_score(canonical: str) -> dict | None:
-    """Per-player stats for both teams. BSD only."""
+    """Per-player stats for both teams. BSD only.
+
+    BSD has no player images, so we stamp a best-effort 365scores headshot
+    onto each player (resolved by team-scoped name match). Nil photos are
+    fine — iOS falls back to initials.
+    """
     source, native = parse_canonical_id(canonical)
-    if source == "bsd":
-        return bsd.event_box_score(int(native))
-    return None
+    if source != "bsd":
+        return None
+    box = bsd.event_box_score(int(native))
+    if not isinstance(box, dict):
+        return box
+    for team_key, box_key in (("home_team", "home_box"), ("away_team", "away_box")):
+        team = box.get(team_key) or {}
+        team_name = team.get("name") if isinstance(team, dict) else None
+        for player in box.get(box_key) or []:
+            if isinstance(player, dict) and not player.get("photo"):
+                player["photo"] = athlete_365_photo_url(team_name, player.get("name"))
+    return box
 
 
 # ---------------------------------------------------------------------------
