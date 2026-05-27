@@ -1737,6 +1737,7 @@ def get_settings(user_token: str = ""):
                 p.target_id: {
                     "name":          p.target_name or "",
                     "team_id":       p.team_id,
+                    "team_ids":      ([p.team_id] if p.team_id else []) + (p.alt_team_ids.split(",") if getattr(p, "alt_team_ids", None) else []),
                     "league":        (p.league or "nba"),
                     "total_pts":     p.total_pts,
                     "early_pts_q":   p.early_pts_q,
@@ -1928,6 +1929,7 @@ class FavoritePlayer(BaseModel):
     player_id:      str
     name:           str
     team_id:        Optional[str]  = None
+    team_ids:       list[str] = []
     league:         str = "nba"
     total_pts:      Optional[int]  = None
     early_pts_q:    Optional[int]  = None
@@ -1948,8 +1950,10 @@ def upsert_player(req: FavoritePlayer):
                     user_token=req.user_token, target_id=req.player_id
                 ).first()
                 if existing:
+                    alt_ids = [tid for tid in dict.fromkeys(req.team_ids) if tid and tid != req.team_id]
                     existing.target_name    = req.name
                     existing.team_id        = req.team_id
+                    existing.alt_team_ids   = ",".join(alt_ids) or None
                     existing.league         = league
                     existing.total_pts      = req.total_pts
                     existing.early_pts_q    = req.early_pts_q
@@ -1959,9 +1963,11 @@ def upsert_player(req: FavoritePlayer):
                     existing.broadcast_only = req.broadcast_only
                     existing.skip_euroleague_evening = req.skip_euroleague_evening
                 else:
+                    alt_ids = [tid for tid in dict.fromkeys(req.team_ids) if tid and tid != req.team_id]
                     session.add(FavoritePlayerDB(
                         user_token=req.user_token, target_id=req.player_id,
-                        target_name=req.name, team_id=req.team_id, league=league,
+                        target_name=req.name, team_id=req.team_id, 
+                        alt_team_ids=",".join(alt_ids) or None, league=league,
                         total_pts=req.total_pts,
                         early_pts_q=req.early_pts_q, early_pts=req.early_pts,
                         td_watch=req.td_watch, alert_type=req.alert_type,
@@ -2724,7 +2730,9 @@ def soccer_fav_player_upsert(req: SoccerFavoritePlayerRequest):
             )
             session.add(row)
         row.player_name = req.player_name
+        alt_ids = [tid for tid in dict.fromkeys(req.team_ids) if tid and tid != req.team_id]
         row.team_id     = req.team_id
+        row.alt_team_ids = ",".join(alt_ids) or None
         row.config      = req.config or {}
         row.alert_type  = req.alert_type
         row.paused      = req.paused
@@ -2755,6 +2763,7 @@ def soccer_fav_players_list(user_token: str = ""):
             "player_id":   r.player_id,
             "player_name": r.player_name,
             "team_id":     r.team_id,
+            "team_ids":    ([r.team_id] if r.team_id else []) + (r.alt_team_ids.split(",") if getattr(r, "alt_team_ids", None) else []),
             "config":      r.config or {},
             "alert_type":  r.alert_type,
             "paused":      r.paused,
