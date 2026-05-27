@@ -107,34 +107,38 @@ def get_basketball_games(
 
 
 def get_basketball_event_detail(canonical: str) -> dict | None:
-    """Full event payload (score header + quarter-by-quarter + prediction)."""
+    """Full event payload (score header + quarter-by-quarter + prediction).
+    BSD natively; 365scores (Winner League / BCL) built to the same shape."""
     source, native = parse_canonical_id(canonical)
     if source == "bsd":
         return bsd.event_detail(int(native))
     if source == "s365":
-        # 365scores doesn't expose a parallel detail endpoint we use; the
-        # game shape from fetch_games already carries score + status.
-        # Caller can resolve via /games and pull what they need.
-        return None
+        return _s365_event_detail(native)
     return None
 
 
 def get_basketball_team_stats(canonical: str) -> dict | None:
-    """Comprehensive team stats grouped by category. BSD only."""
+    """Comprehensive team stats grouped by category. BSD natively; for
+    365scores we aggregate the box score into the same shape so the Team Stats
+    tab is populated for Winner League / BCL too."""
     source, native = parse_canonical_id(canonical)
     if source == "bsd":
         return bsd.event_team_stats(int(native))
+    if source == "s365":
+        return _s365_team_stats(native)
     return None
 
 
 def get_basketball_box_score(canonical: str) -> dict | None:
-    """Per-player stats for both teams. BSD only.
+    """Per-player stats for both teams (BSD + 365scores).
 
     BSD has no player images, so we stamp a best-effort 365scores headshot
-    onto each player (resolved by team-scoped name match). Nil photos are
-    fine — iOS falls back to initials.
+    onto each player (resolved by team-scoped name match). 365-sourced games
+    use the athlete id directly. Nil photos are fine — iOS shows initials.
     """
     source, native = parse_canonical_id(canonical)
+    if source == "s365":
+        return _s365_box_score(native)
     if source != "bsd":
         return None
     box = bsd.event_box_score(int(native))
@@ -147,6 +151,269 @@ def get_basketball_box_score(canonical: str) -> dict | None:
             if isinstance(player, dict) and not player.get("photo"):
                 player["photo"] = athlete_365_photo_url(team_name, player.get("name"))
     return box
+
+
+# ---------------------------------------------------------------------------
+# 365scores basketball detail + box score (Winner League, BCL — leagues BSD
+# doesn't cover). Built to the same shape as the BSD endpoints so the iOS
+# BasketballSummaryView renders them 1:1.
+
+_s365_game_cache: dict[str, tuple[float, dict]] = {}
+_s365_game_lock = threading.Lock()
+_S365_GAME_TTL = 30.0
+
+
+def _s365_game_detail(native: str) -> dict | None:
+    """Fetch (and briefly cache) a raw 365scores game detail so the /summary
+    fan-out (detail + box score) shares a single upstream call."""
+    with _s365_game_lock:
+        hit = _s365_game_cache.get(native)
+        if hit and time.time() - hit[0] < _S365_GAME_TTL:
+            return hit[1]
+    try:
+        from score365.client import Client365
+        from score365.scraper import get_game_detail
+        with Client365() as client:
+            game = get_game_detail(client, int(native))
+    except Exception as exc:
+        logger.warning("s365 game detail failed for %s: %s", native, exc)
+        return None
+    if game:
+        with _s365_game_lock:
+            _s365_game_cache[native] = (time.time(), game)
+    return game
+
+
+def _s365_made_att(value: Any) -> tuple[int | None, int | None]:
+    if not value or "/" not in str(value):
+        return None, None
+    a, b = str(value).split("/", 1)
+    try:
+        return int(a), int(b)
+    except ValueError:
+        return None, None
+
+
+def _s365_minutes(value: Any) -> float | None:
+    """'21:22' → 21.37 minutes."""
+    if not value:
+        return None
+    s = str(value)
+    if ":" in s:
+        m, sec = s.split(":", 1)
+        try:
+            return round(int(m) + int(sec) / 60.0, 2)
+        except ValueError:
+            return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _s365_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(float(str(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _s365_team_obj(comp: dict) -> dict:
+    tid = comp.get("id")
+    return {
+        "id": tid,
+        "name": comp.get("name"),
+        "short_name": comp.get("symbolicName") or comp.get("shortName"),
+        "country_code": None,
+        "logo": s365._365_team_crest_url(tid) if tid else None,
+    }
+
+
+def _s365_event_detail(native: str) -> dict | None:
+    game = _s365_game_detail(native)
+    if not game:
+        return None
+    home = game.get("homeCompetitor", {}) or {}
+    away = game.get("awayCompetitor", {}) or {}
+    # `stages` carries the quarters (Q1..Q4, plus OT) and a trailing aggregate
+    # stage named "Current Score"/"Score" — keep only the real periods.
+    periods: dict[str, list[int]] = {}
+    period_idx = 0
+    for st in game.get("stages", []) or []:
+        label = (st.get("shortName") or st.get("name") or "").strip().upper()
+        if not (label.startswith("Q") or label.startswith("OT") or label.startswith("P")):
+            continue
+        h = _s365_int(st.get("homeCompetitorScore"))
+        a = _s365_int(st.get("awayCompetitorScore"))
+        if h is None and a is None:
+            continue
+        period_idx += 1
+        periods[f"period{period_idx}"] = [h or 0, a or 0]
+    return {
+        "id":          _s365_int(game.get("id")),
+        "league":      {"id": game.get("competitionId"),
+                        "name": game.get("competitionDisplayName"),
+                        "country": None},
+        "home_team":   _s365_team_obj(home),
+        "away_team":   _s365_team_obj(away),
+        "event_date":  game.get("startTime"),
+        "status":      game.get("statusText") or game.get("shortStatusText") or "",
+        "home_score":  _s365_int(home.get("score")),
+        "away_score":  _s365_int(away.get("score")),
+        "round_number": game.get("roundNum"),
+        "periods_score": periods or None,
+        "prediction":  None,
+    }
+
+
+def _s365_box_player(p: dict, athlete_id: str | None) -> dict:
+    stats = p.get("stats", {}) or {}
+    fgm, fga = _s365_made_att(stats.get("FG"))
+    tpm, tpa = _s365_made_att(stats.get("3PT"))
+    ftm, fta = _s365_made_att(stats.get("FT"))
+    pid = athlete_id or p.get("id")
+    return {
+        "player_id":             _s365_int(pid),
+        "name":                  p.get("name"),
+        "photo":                 f"{_365_ATHLETE_BASE}{pid}" if pid else None,
+        "position":              p.get("position") or None,
+        "jersey_number":         None,
+        "is_starter":            (p.get("status") or "").lower() == "starting",
+        "minutes":               _s365_minutes(stats.get("Min")),
+        "points":                _s365_int(stats.get("Pts")),
+        "rebounds":              _s365_int(stats.get("Reb")),
+        "assists":               _s365_int(stats.get("Ast")),
+        "offensive_rebounds":    _s365_int(stats.get("OR")),
+        "defensive_rebounds":    _s365_int(stats.get("DR")),
+        "steals":                _s365_int(stats.get("Stl")),
+        "blocks":                _s365_int(stats.get("Blk")),
+        "turnovers":             _s365_int(stats.get("TO")),
+        "personal_fouls":        _s365_int(stats.get("PF")),
+        "field_goals_made":      fgm,
+        "field_goals_attempted": fga,
+        "three_pointers_made":      tpm,
+        "three_pointers_attempted": tpa,
+        "free_throws_made":      ftm,
+        "free_throws_attempted": fta,
+        "field_goal_pct":   round(fgm / fga, 3) if fgm is not None and fga else None,
+        "three_point_pct":  round(tpm / tpa, 3) if tpm is not None and tpa else None,
+        "plus_minus":            _s365_int(stats.get("+/-")),
+    }
+
+
+def _s365_box_score(native: str) -> dict | None:
+    game = _s365_game_detail(native)
+    if not game:
+        return None
+    try:
+        from score365.scraper import extract_box_score
+        box = extract_box_score(game)
+    except Exception as exc:
+        logger.warning("s365 box score failed for %s: %s", native, exc)
+        return None
+    member_to_athlete: dict = {}
+    for m in game.get("members", []) or []:
+        mid = m.get("id")
+        if mid is not None:
+            member_to_athlete[mid] = m.get("athleteId") or mid
+
+    def side_box(side_key: str) -> list[dict]:
+        out = []
+        for p in box.get(side_key, {}).get("players", []) or []:
+            if not p.get("stats"):
+                continue
+            aid = member_to_athlete.get(p.get("id"))
+            out.append(_s365_box_player(p, str(aid) if aid is not None else None))
+        return out
+
+    return {
+        "event_id":  _s365_int(game.get("id")),
+        "home_team": _s365_team_obj(game.get("homeCompetitor", {}) or {}),
+        "away_team": _s365_team_obj(game.get("awayCompetitor", {}) or {}),
+        "home_box":  side_box("home"),
+        "away_box":  side_box("away"),
+    }
+
+
+def _s365_team_stats(native: str) -> dict | None:
+    """Aggregate the 365 box score into team totals, shaped like BSD's
+    team-stats payload. Nested group/item keys are camelCase to match the
+    iOS contract (the BSD source emits them that way)."""
+    game = _s365_game_detail(native)
+    if not game:
+        return None
+    try:
+        from score365.scraper import extract_box_score
+        box = extract_box_score(game)
+    except Exception as exc:
+        logger.warning("s365 team stats failed for %s: %s", native, exc)
+        return None
+
+    def agg(side_key: str) -> dict:
+        t = {k: 0 for k in ("pts", "reb", "orb", "drb", "ast", "stl", "blk", "to", "pf",
+                            "fgm", "fga", "tpm", "tpa", "ftm", "fta")}
+        for p in box.get(side_key, {}).get("players", []) or []:
+            s = p.get("stats", {}) or {}
+            if not s:
+                continue
+            t["pts"] += _s365_int(s.get("Pts")) or 0
+            t["reb"] += _s365_int(s.get("Reb")) or 0
+            t["orb"] += _s365_int(s.get("OR")) or 0
+            t["drb"] += _s365_int(s.get("DR")) or 0
+            t["ast"] += _s365_int(s.get("Ast")) or 0
+            t["stl"] += _s365_int(s.get("Stl")) or 0
+            t["blk"] += _s365_int(s.get("Blk")) or 0
+            t["to"]  += _s365_int(s.get("TO")) or 0
+            t["pf"]  += _s365_int(s.get("PF")) or 0
+            fgm, fga = _s365_made_att(s.get("FG")); t["fgm"] += fgm or 0; t["fga"] += fga or 0
+            tpm, tpa = _s365_made_att(s.get("3PT")); t["tpm"] += tpm or 0; t["tpa"] += tpa or 0
+            ftm, fta = _s365_made_att(s.get("FT")); t["ftm"] += ftm or 0; t["fta"] += fta or 0
+        return t
+
+    h, a = agg("home"), agg("away")
+
+    def _cmp(hv: float, av: float, positive: bool) -> int:
+        if hv == av:
+            return 0
+        better_home = hv > av if positive else hv < av
+        return 1 if better_home else 2
+
+    def item(key: str, name: str, hv: int, av: int, positive: bool = True) -> dict:
+        return {"key": key, "name": name, "home": str(hv), "away": str(av),
+                "homeValue": float(hv), "awayValue": float(av),
+                "statisticsType": "positive" if positive else "negative",
+                "compareCode": _cmp(hv, av, positive)}
+
+    def pct_item(key: str, name: str, hm: int, ha: int, am: int, aa: int) -> dict:
+        hp = round(hm / ha * 100, 1) if ha else 0.0
+        ap = round(am / aa * 100, 1) if aa else 0.0
+        return {"key": key, "name": name,
+                "home": f"{hm}/{ha} ({hp:g}%)", "away": f"{am}/{aa} ({ap:g}%)",
+                "homeValue": hp, "awayValue": ap,
+                "statisticsType": "positive", "compareCode": _cmp(hp, ap, True)}
+
+    items = [
+        item("points", "Points", h["pts"], a["pts"]),
+        pct_item("fieldGoals", "Field Goals", h["fgm"], h["fga"], a["fgm"], a["fga"]),
+        pct_item("threePointers", "3-Pointers", h["tpm"], h["tpa"], a["tpm"], a["tpa"]),
+        pct_item("freeThrows", "Free Throws", h["ftm"], h["fta"], a["ftm"], a["fta"]),
+        item("rebounds", "Rebounds", h["reb"], a["reb"]),
+        item("offRebounds", "Offensive Rebounds", h["orb"], a["orb"]),
+        item("defRebounds", "Defensive Rebounds", h["drb"], a["drb"]),
+        item("assists", "Assists", h["ast"], a["ast"]),
+        item("steals", "Steals", h["stl"], a["stl"]),
+        item("blocks", "Blocks", h["blk"], a["blk"]),
+        item("turnovers", "Turnovers", h["to"], a["to"], positive=False),
+        item("fouls", "Personal Fouls", h["pf"], a["pf"], positive=False),
+    ]
+    return {
+        "event_id":  _s365_int(game.get("id")),
+        "home_team": _s365_team_obj(game.get("homeCompetitor", {}) or {}),
+        "away_team": _s365_team_obj(game.get("awayCompetitor", {}) or {}),
+        "statistics": [{"groups": [{"groupName": "Team Stats", "statisticsItems": items}]}],
+    }
 
 
 # ---------------------------------------------------------------------------
