@@ -2352,6 +2352,16 @@ def soccer_drama_timeline(canonical_id: str, step: int = 2):
     return {"match_id": detail.get("id"), "timeline": timeline}
 
 
+@app.get("/soccer/team/{team_id}/matches")
+def soccer_team_matches(team_id: str, league: str = "", name: str = ""):
+    """All of a team's matches this season across competitions (one call).
+    BSD for its leagues; Sofascore for sofa-primary leagues. `league` is the
+    team's primary league slug (used to pick the source); `name` helps resolve
+    a Sofascore id when needed."""
+    import soccer_source as _ss
+    return _ss.get_team_season(team_id, league or None, name or None)
+
+
 @app.get("/soccer/match/{canonical_id}/lineups")
 def soccer_match_lineups(canonical_id: str):
     """Confirmed / predicted lineups for a soccer match. Supports both BSD- and

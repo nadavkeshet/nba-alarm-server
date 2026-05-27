@@ -961,3 +961,98 @@ def get_sofa_standings(slug: str) -> dict | None:
         "grouped":   len(groups) > 1,
         "standings": rows_out,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Team full-season matches. One call yields a team's whole season across all
+# competitions. BSD for the leagues it covers (the app already holds BSD team
+# ids there); Sofascore only for sofa-primary leagues (e.g. Israeli) where BSD
+# coverage is thin.
+
+
+def get_team_season(team_id: str, league_slug: str | None = None, name: str | None = None) -> list[dict]:
+    source = PRIMARY_SOURCE.get(league_slug or "", "bsd")
+    if source == "sofascore":
+        return _sofa_team_season(team_id, name)
+    return _bsd_team_season(team_id)
+
+
+def _season_window() -> tuple[str, str]:
+    """A rolling window that always spans the current season (Aug–Jun) plus a
+    little slack for early/late fixtures, regardless of when it's called."""
+    from datetime import date, timedelta
+    today = date.today()
+    return (today - timedelta(days=330)).isoformat(), (today + timedelta(days=75)).isoformat()
+
+
+def _bsd_team_season(team_id: str) -> list[dict]:
+    try:
+        tid = int(team_id)
+    except (TypeError, ValueError):
+        return []
+    date_from, date_to = _season_window()
+    try:
+        events = bsd.team_events(tid, date_from=date_from, date_to=date_to, limit=200)
+    except Exception as exc:
+        logger.warning("bsd team season failed for %s: %s", team_id, exc)
+        return []
+    return _finalize_team_matches([_from_bsd_event(e) for e in events])
+
+
+def _sofa_team_season(team_id: str, name: str | None) -> list[dict]:
+    sofa_id = _resolve_sofa_team_id(team_id, name)
+    if not sofa_id:
+        return []
+    raw: list[dict] = []
+    for page in range(0, 2):       # upcoming
+        evs = sofa.team_events(sofa_id, upcoming=True, page=page)
+        if not evs:
+            break
+        raw += evs
+    for page in range(0, 4):       # played — ~120 matches covers a full season
+        evs = sofa.team_events(sofa_id, upcoming=False, page=page)
+        if not evs:
+            break
+        raw += evs
+    season_start, _ = _season_window()   # keep this season only (team-events pages back further)
+    out = []
+    for e in raw:
+        m = _from_sofa_event(e)
+        if not m.get("competition"):
+            tour = e.get("tournament", {}) or {}
+            m["competition"] = (tour.get("uniqueTournament", {}) or {}).get("name") or tour.get("name") or "other"
+        ko = m.get("kickoff")
+        if ko and ko[:10] < season_start:   # ISO date prefix compares lexically
+            continue
+        out.append(m)
+    return _finalize_team_matches(out)
+
+
+def _resolve_sofa_team_id(team_id: str, name: str | None):
+    if team_id and str(team_id).isdigit():
+        try:
+            if sofa.team_events(int(team_id), upcoming=False, page=0):
+                return int(team_id)
+        except Exception:
+            pass
+    if name:
+        teams = sofa.search_teams(name, sport="football")
+        if teams:
+            return teams[0].get("id")
+    return None
+
+
+def _finalize_team_matches(matches: list[dict]) -> list[dict]:
+    """Dedupe, guarantee a non-empty competition (iOS requires it), sort by kickoff."""
+    seen: set = set()
+    out: list[dict] = []
+    for m in matches:
+        if not m.get("competition"):
+            m["competition"] = "other"
+        mid = m.get("id")
+        if mid in seen:
+            continue
+        seen.add(mid)
+        out.append(m)
+    out.sort(key=lambda m: m.get("kickoff") or "")
+    return out

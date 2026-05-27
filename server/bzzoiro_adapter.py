@@ -78,6 +78,7 @@ _TTL_SECONDS: dict[str, float] = {
     "player_match_stats": 300.0,
     "event":              120.0,
     "team":               86400.0,
+    "team_events":        600.0,   # a team's season fixtures move at most daily
 }
 
 
@@ -201,6 +202,27 @@ def league_events(
     if date_to:   params["date_to"]   = date_to
     if status:    params["status"]    = status
     data = _cached_get("league_events", "/events/", params)
+    if isinstance(data, dict):
+        return data.get("results", []) or []
+    return data or []
+
+
+def team_events(
+    team_id: int | str,
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    status: str | None = None,
+    limit: int = 200,
+) -> list[dict]:
+    """A team's matches (home or away) across all competitions in a date range.
+    Returns the same flat event shape as `league_events`, so the existing
+    normalizer consumes it unchanged — one call yields a full season."""
+    params: dict[str, Any] = {"team_id": team_id, "limit": limit}
+    if date_from: params["date_from"] = date_from
+    if date_to:   params["date_to"]   = date_to
+    if status:    params["status"]    = status
+    data = _cached_get("team_events", "/events/", params, "team_events", team_id, date_from, date_to)
     if isinstance(data, dict):
         return data.get("results", []) or []
     return data or []

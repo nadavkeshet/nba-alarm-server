@@ -69,6 +69,8 @@ _TTL_SECONDS: dict[str, float] = {
     "event_lineups": 120.0,           # set ~1h pre-kickoff, frozen after
     "seasons": 86400.0,               # season list effectively static
     "standings": 600.0,               # table moves at most once per matchday
+    "team_events": 600.0,             # a team's fixtures move at most daily
+    "search_teams": 86400.0,          # name → id mapping is static
 }
 
 
@@ -279,6 +281,32 @@ def standings(unique_tournament_id: int, season_id: int) -> dict:
         f"/unique-tournament/{unique_tournament_id}/season/{season_id}/standings/total",
         unique_tournament_id, season_id,
     )
+
+
+def team_events(team_id: int, *, upcoming: bool = False, page: int = 0) -> list[dict]:
+    """A team's events (30 per page). `last` = played, `next` = upcoming.
+    Pages cover all competitions the team plays in."""
+    kind = "next" if upcoming else "last"
+    data = _cached_get("team_events", f"/team/{team_id}/events/{kind}/{page}", team_id, kind, page)
+    return data.get("events", []) if isinstance(data, dict) else []
+
+
+def search_teams(query: str, *, sport: str = "football") -> list[dict]:
+    """Resolve a team name → Sofascore team entities (id, name, sport, country),
+    ranked by popularity. Filtered to the requested sport."""
+    import urllib.parse
+    q = urllib.parse.quote(query)
+    data = _cached_get("search_teams", f"/search/all?q={q}&page=0", query, sport)
+    results = data.get("results", []) if isinstance(data, dict) else []
+    out = []
+    for r in results:
+        if r.get("type") != "team":
+            continue
+        ent = r.get("entity", {}) or {}
+        if sport and ((ent.get("sport", {}) or {}).get("name", "").lower() != sport.lower()):
+            continue
+        out.append(ent)
+    return out
 
 
 # ---------------------------------------------------------------------------
