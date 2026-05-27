@@ -12,7 +12,7 @@
   <meta name="description" content="Privacy Policy for Clutch Alarm — the NBA alarm clock app.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Heebo:wght@400;500;600;700;800;900&family=Rubik:wght@700;800;900&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -39,7 +39,8 @@
       -webkit-font-smoothing: antialiased;
     }
 
-    [dir="rtl"] { direction: rtl; text-align: right; }
+    [dir="rtl"] { direction: rtl; text-align: right; font-family: 'Heebo', -apple-system, sans-serif; }
+    [dir="rtl"] .policy h1, [dir="rtl"] .policy h2 { font-family: 'Rubik', 'Heebo', sans-serif; }
 
     /* ─── NOISE OVERLAY ─── */
     body::before {
@@ -251,22 +252,23 @@
 
 <div class="policy" id="policy-en">
   <h1>PRIVACY POLICY</h1>
-  <span class="updated">Last updated: March 20, 2026</span>
+  <span class="updated">Last updated: April 21, 2026</span>
 
   <div class="summary">
-    <strong>Short version:</strong> Clutch Alarm does not collect your name, email address, or any personally identifiable information. The only data stored on our server is an anonymous device token used to send push notifications, and the in-app preferences you configure (favorite teams, players, and alert settings).
+    <strong>Short version:</strong> Clutch Alarm does not collect your name, email address, or any personally identifiable information. The only data stored on our server is an anonymous device token used to send push notifications, and the in-app preferences you configure (favorite teams, players, and alert settings). We use a privacy-first analytics service (TelemetryDeck) to understand how features are used, in aggregate and with no personal identifiers.
   </div>
 
   <h2>1. WHO WE ARE</h2>
   <p>Clutch Alarm is developed by Itamar Kenan and Nadav Keshet. The idea and Android app were created by Nadav Keshet, and the iOS app was developed by Itamar Kenan. If you have any questions about this policy, you can reach us at <a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a>.</p>
 
   <h2>2. INFORMATION WE COLLECT</h2>
-  <p>We collect only what is strictly necessary to deliver the app's core functionality:</p>
+  <p>We collect only what is strictly necessary to deliver the app's core functionality and to improve it:</p>
   <ul>
     <li><strong>Device Push Token (FCM Token):</strong> A randomly generated, anonymous identifier provided by Google Firebase that allows us to send push notifications to your device. This token is not linked to your name, email, or any other personal data.</li>
-    <li><strong>In-App Preferences:</strong> Settings you configure inside the app — including your favorite NBA teams, favorite players, alert thresholds, and global radar preferences. These are stored on our server solely to restore your preferences across sessions and to power alerts.</li>
+    <li><strong>In-App Preferences:</strong> Settings you configure inside the app — including your favorite teams, favorite players, alert thresholds, global radar preferences, and language. These are stored on our server solely to restore your preferences across sessions and to power alerts.</li>
+    <li><strong>Anonymous Usage Signals (TelemetryDeck):</strong> Coarse, non-identifying events such as "app launched", "alarm created", "favorite added", "box score viewed", together with generic context like app version, iOS version, device model family, and country. Signals never contain your name, email, push token, team selections, or any other personal data. They are hashed and batched by TelemetryDeck and used by us only to understand which features are useful in aggregate.</li>
   </ul>
-  <p>We do not collect or store your name, email address, phone number, location, payment information, contacts, or any other personally identifiable information.</p>
+  <p>We do not collect or store your name, email address, phone number, precise location, payment information, contacts, advertising identifier (IDFA), or any other personally identifiable information.</p>
 
   <h2>3. HOW WE USE YOUR INFORMATION</h2>
   <ul>
@@ -276,13 +278,15 @@
   <p>We do not use your information for advertising, profiling, or any purpose other than operating the app's features.</p>
 
   <h2>4. TRACKING, ANALYTICS & COOKIES</h2>
-  <p>Clutch Alarm does not use any analytics SDKs, tracking pixels, advertising identifiers, or cookies. We do not track your activity across apps or websites. The app does not participate in Apple's App Tracking Transparency framework because there is nothing to track.</p>
+  <p>Clutch Alarm uses <strong>TelemetryDeck</strong>, a privacy-first analytics service designed specifically to not track individual users. TelemetryDeck does not use advertising identifiers, tracking pixels, cookies, or cross-app/website profiling. No IDFA is accessed. Signals are anonymous aggregate counters — for example, "an iOS 17 device in Israel opened the app" — and are not tied back to any user account or push token. Because no identifier that persists across apps is ever used, the app does not participate in Apple's App Tracking Transparency prompt.</p>
+  <p>If you use a DNS-level privacy tool (such as NextDNS, Pi-hole, or AdGuard) that blocks <code>*.telemetrydeck.com</code>, analytics signals simply never leave your device. The app continues to work normally.</p>
 
   <h2>5. DATA SHARING AND THIRD PARTIES</h2>
-  <p>We do not sell, trade, or rent your information to any third party. The following third-party services are used to operate the app:</p>
+  <p>We do not sell, trade, or rent your information to any third party. The following third-party services are used to operate and improve the app:</p>
   <ul>
     <li><strong>Google Firebase (Cloud Messaging):</strong> Used to deliver push notifications. Google may process device identifiers as part of this service. <a href="https://firebase.google.com/support/privacy" target="_blank">Firebase Privacy Policy</a></li>
-    <li><strong>ESPN (Public API):</strong> We fetch publicly available NBA game data from ESPN's API. No user data is sent to ESPN.</li>
+    <li><strong>365scores (Public API):</strong> We fetch publicly available basketball game data, rosters, and live scores from 365scores for NBA, Euroleague, EuroCup, FIBA Basketball Champions League, and the Israeli Winner League. No user data is sent to 365scores. <a href="https://www.365scores.com/privacy-policy" target="_blank">365scores Privacy Policy</a></li>
+    <li><strong>TelemetryDeck (Privacy-First Analytics):</strong> Processes anonymous feature-usage signals. TelemetryDeck is a European service (Germany-based), GDPR-compliant by design, and collects no personal identifiers. <a href="https://telemetrydeck.com/privacy-policy/" target="_blank">TelemetryDeck Privacy Policy</a></li>
     <li><strong>Railway (Server Hosting):</strong> Our backend server is hosted on Railway.app. Preference data stored on our server resides in Railway's infrastructure. <a href="https://railway.com/legal/privacy" target="_blank">Railway Privacy Policy</a></li>
   </ul>
 
@@ -314,26 +318,52 @@
     <li><strong>Access:</strong> Request a copy of the data we hold about your device token.</li>
     <li><strong>Deletion:</strong> Request that we delete all data associated with your device token.</li>
     <li><strong>Portability:</strong> Receive your stored preferences in a machine-readable format.</li>
+    <li><strong>Objection:</strong> Object to the processing of your data.</li>
+    <li><strong>Rectification:</strong> Request correction of inaccurate data.</li>
   </ul>
-  <p>Since we identify users only by anonymous push token, we may ask you to provide your token (available in the app's Settings screen) to locate your data. To exercise any of these rights, email <a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a>.</p>
+  <p>Since we identify users only by anonymous push token, we may ask you to provide your token (available in the app's Settings screen) to locate your data. To exercise any of these rights, email <a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a>. We will respond within 30 days.</p>
 
-  <h2>10. CHILDREN'S PRIVACY</h2>
+  <h2>10. GDPR (EUROPEAN USERS)</h2>
+  <p>If you are located in the European Economic Area (EEA), the United Kingdom, or Switzerland:</p>
+  <ul>
+    <li><strong>Lawful Basis:</strong> We process your anonymous device token and preferences based on <strong>legitimate interest</strong> — specifically, to deliver the core functionality of the app (push notifications for game alerts). No consent is required because no personally identifiable information is collected.</li>
+    <li><strong>Data Controller:</strong> Itamar Kenan and Nadav Keshet are the joint data controllers. Contact: <a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a>.</li>
+    <li><strong>Automated Decision-Making:</strong> The app uses automated logic to determine when to send alerts (e.g., score gap thresholds, player stat conditions). These decisions are based solely on publicly available game data and your configured preferences — no profiling of personal data is involved.</li>
+    <li><strong>Right to Lodge a Complaint:</strong> You have the right to lodge a complaint with your local data protection authority.</li>
+  </ul>
+
+  <h2>11. CCPA (CALIFORNIA USERS)</h2>
+  <p>If you are a California resident:</p>
+  <ul>
+    <li>We do <strong>not sell</strong> your personal information.</li>
+    <li>We do <strong>not share</strong> your personal information for cross-context behavioral advertising.</li>
+    <li>We do <strong>not</strong> use or disclose sensitive personal information for purposes beyond what is needed to provide the app.</li>
+    <li>You have the right to know what data we collect, request deletion, and opt out of sale (though we do not sell data). We will not discriminate against you for exercising these rights.</li>
+  </ul>
+
+  <h2>12. CHILDREN'S PRIVACY</h2>
   <p>Clutch Alarm is not directed at children under the age of 13. We do not knowingly collect personal information from children. If you believe a child has provided information through the app, please contact us and we will delete it promptly.</p>
 
-  <h2>11. SECURITY</h2>
+  <h2>13. SECURITY</h2>
   <p>We take reasonable technical measures to protect the data stored on our server. The anonymous nature of our data (no names, emails, or passwords) significantly limits the risk of a data breach affecting your personal information.</p>
 
-  <h2>12. CHANGES TO THIS POLICY</h2>
+  <h2>14. DATA BREACH NOTIFICATION</h2>
+  <p>In the unlikely event of a data breach affecting your information, we will notify affected users through the app or our website within 72 hours of becoming aware of the breach, as required by applicable law.</p>
+
+  <h2>15. CHANGES TO THIS POLICY</h2>
   <p>We may update this Privacy Policy from time to time. When we do, we will update the "Last updated" date at the top of this page. Continued use of the app after changes are posted constitutes your acceptance of the updated policy.</p>
 
-  <h2>13. CONTACT US</h2>
+  <h2>16. GOVERNING LAW</h2>
+  <p>This Privacy Policy is governed by the laws of the State of Israel. Any disputes arising from this policy shall be subject to the exclusive jurisdiction of the courts in Israel.</p>
+
+  <h2>17. CONTACT US</h2>
   <p>If you have any questions, concerns, or data deletion requests, please contact us:</p>
   <p><a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a></p>
 </div>
 
 <div class="policy" id="policy-he" style="display:none;">
   <h1>מדיניות פרטיות</h1>
-  <span class="updated">עדכון אחרון: 20 במרץ 2026</span>
+  <span class="updated">עדכון אחרון: 29 במרץ 2026</span>
 
   <div class="summary">
     <strong>בקצרה:</strong> Clutch Alarm לא אוספת את שמך, כתובת האימייל שלך או כל מידע מזהה אישית. המידע היחיד שנשמר בשרת שלנו הוא טוקן מכשיר אנונימי המשמש לשליחת התראות, וההעדפות שאתה מגדיר באפליקציה (קבוצות מועדפות, שחקנים והגדרות התראה).
@@ -376,16 +406,16 @@
   <p><strong>אנדרואיד:</strong></p>
   <ul>
     <li><strong>POST_NOTIFICATIONS:</strong> נדרשת לשליחת התראות.</li>
-    <li><strong>WAKE_LOCK / DISABLE_KEYGUARD:</strong> מאפשרת לאזעקה להעיר את המסך כשמגיעה התראה.</li>
-    <li><strong>VIBRATE:</strong> מאפשרת רטט עם התראות אזעקה.</li>
-    <li><strong>USE_FULL_SCREEN_INTENT:</strong> מאפשרת להתראות להופיע על מסך הנעילה בסגנון אזעקת מסך מלא.</li>
+    <li><strong>WAKE_LOCK / DISABLE_KEYGUARD:</strong> מאפשרת להתראה להעיר את המסך כשמגיעה התראה.</li>
+    <li><strong>VIBRATE:</strong> מאפשרת רטט עם התראות.</li>
+    <li><strong>USE_FULL_SCREEN_INTENT:</strong> מאפשרת להתראות להופיע על מסך הנעילה בסגנון התראת מסך מלא.</li>
   </ul>
   <p><strong>iOS:</strong></p>
   <ul>
     <li><strong>התראות Push:</strong> נדרשות למשלוח התראות על משחקים ושחקנים.</li>
     <li><strong>התראות רקע מרוחקות:</strong> מאפשרות לאפליקציה לעבד התראות נכנסות ברקע.</li>
   </ul>
-  <p>כל ההרשאות בשתי הפלטפורמות משמשות אך ורק למשלוח התראות אזעקה. שום הרשאה אינה משמשת לאיסוף מידע אישי.</p>
+  <p>כל ההרשאות בשתי הפלטפורמות משמשות אך ורק למשלוח התראות. שום הרשאה אינה משמשת לאיסוף מידע אישי.</p>
 
   <h2>8. העברת מידע בינלאומית</h2>
   <p>השרת שלנו מתארח ב-Railway.app ועשוי להיות ממוקם מחוץ למדינת מגוריך. השימוש באפליקציה מהווה הסכמה להעברה ועיבוד של טוקן המכשיר האנונימי וההעדפות שלך בשרתים שעשויים להיות בתחום שיפוט אחר. מכיוון שלא נאסף מידע מזהה אישית, הסיכון הקשור להעברה זו מינימלי.</p>
@@ -396,19 +426,45 @@
     <li><strong>גישה:</strong> לבקש עותק של המידע שאנו מחזיקים על טוקן המכשיר שלך.</li>
     <li><strong>מחיקה:</strong> לבקש שנמחק את כל המידע המשויך לטוקן המכשיר שלך.</li>
     <li><strong>ניידות:</strong> לקבל את ההעדפות השמורות שלך בפורמט קריא למכונה.</li>
+    <li><strong>התנגדות:</strong> להתנגד לעיבוד המידע שלך.</li>
+    <li><strong>תיקון:</strong> לבקש תיקון של מידע לא מדויק.</li>
   </ul>
-  <p>מכיוון שאנו מזהים משתמשים רק לפי טוקן Push אנונימי, ייתכן שנבקש ממך לספק את הטוקן שלך (זמין במסך ההגדרות של האפליקציה) כדי לאתר את המידע שלך. למימוש זכויות אלו, שלח אימייל ל-<a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a>.</p>
+  <p>מכיוון שאנו מזהים משתמשים רק לפי טוקן Push אנונימי, ייתכן שנבקש ממך לספק את הטוקן שלך (זמין במסך ההגדרות של האפליקציה) כדי לאתר את המידע שלך. למימוש זכויות אלו, שלח אימייל ל-<a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a>. נשיב תוך 30 יום.</p>
 
-  <h2>10. פרטיות ילדים</h2>
+  <h2>10. GDPR (משתמשים אירופיים)</h2>
+  <p>אם אתה נמצא באזור הכלכלי האירופי (EEA), בריטניה או שוויץ:</p>
+  <ul>
+    <li><strong>בסיס חוקי:</strong> אנו מעבדים את טוקן המכשיר האנונימי וההעדפות שלך על בסיס <strong>אינטרס לגיטימי</strong> — במיוחד, כדי לספק את הפונקציונליות המרכזית של האפליקציה (התראות Push למשחקים). אין צורך בהסכמה מכיוון שלא נאסף מידע מזהה אישית.</li>
+    <li><strong>בעל שליטה במידע:</strong> איתמר קינן ונדב קשת הם בעלי השליטה המשותפים במידע. צור קשר: <a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a>.</li>
+    <li><strong>קבלת החלטות אוטומטית:</strong> האפליקציה משתמשת בלוגיקה אוטומטית כדי לקבוע מתי לשלוח התראות (למשל, ספי הפרש ניקוד, תנאי סטטיסטיקות שחקנים). החלטות אלו מבוססות אך ורק על נתוני משחקים ציבוריים וההעדפות שהגדרת — אין פרופיילינג של מידע אישי.</li>
+    <li><strong>זכות להגיש תלונה:</strong> יש לך זכות להגיש תלונה לרשות הגנת המידע המקומית שלך.</li>
+  </ul>
+
+  <h2>11. CCPA (תושבי קליפורניה)</h2>
+  <p>אם אתה תושב קליפורניה:</p>
+  <ul>
+    <li>אנחנו <strong>לא מוכרים</strong> את המידע האישי שלך.</li>
+    <li>אנחנו <strong>לא משתפים</strong> את המידע האישי שלך לפרסום התנהגותי חוצה-הקשרים.</li>
+    <li>אנחנו <strong>לא</strong> משתמשים או חושפים מידע אישי רגיש למטרות מעבר למה שנדרש לספק את האפליקציה.</li>
+    <li>יש לך זכות לדעת אילו נתונים אנו אוספים, לבקש מחיקה, ולבטל הסכמה למכירה (אם כי אנו לא מוכרים נתונים). לא נפלה כלפיך לרעה בגין מימוש זכויות אלו.</li>
+  </ul>
+
+  <h2>12. פרטיות ילדים</h2>
   <p>Clutch Alarm אינה מיועדת לילדים מתחת לגיל 13. איננו אוספים ביודעין מידע אישי מילדים. אם אתה מאמין שילד סיפק מידע דרך האפליקציה, אנא צור איתנו קשר ונמחק אותו באופן מיידי.</p>
 
   <h2>11. אבטחה</h2>
   <p>אנו נוקטים באמצעים טכניים סבירים להגנה על המידע המאוחסן בשרת שלנו. האופי האנונימי של המידע שלנו (ללא שמות, אימיילים או סיסמאות) מפחית משמעותית את הסיכון שפריצת נתונים תשפיע על המידע האישי שלך.</p>
 
-  <h2>12. שינויים במדיניות זו</h2>
+  <h2>14. הודעה על פרצת מידע</h2>
+  <p>במקרה הלא סביר של פרצת מידע המשפיעה על המידע שלך, נודיע למשתמשים המושפעים דרך האפליקציה או האתר שלנו תוך 72 שעות מרגע שנודע לנו על הפרצה, כנדרש בחוק.</p>
+
+  <h2>15. שינויים במדיניות זו</h2>
   <p>אנו עשויים לעדכן מדיניות פרטיות זו מעת לעת. כאשר נעשה זאת, נעדכן את תאריך "עדכון אחרון" בראש עמוד זה. המשך השימוש באפליקציה לאחר פרסום שינויים מהווה את הסכמתך למדיניות המעודכנת.</p>
 
-  <h2>13. צור קשר</h2>
+  <h2>16. דין חל</h2>
+  <p>מדיניות פרטיות זו כפופה לחוקי מדינת ישראל. כל מחלוקת הנובעת ממדיניות זו תהיה כפופה לסמכות השיפוט הבלעדית של בתי המשפט בישראל.</p>
+
+  <h2>17. צור קשר</h2>
   <p>לשאלות, חששות או בקשות מחיקת מידע, אנא פנה אלינו:</p>
   <p><a href="mailto:feedback@clutchalarm.com">feedback@clutchalarm.com</a></p>
 </div>
