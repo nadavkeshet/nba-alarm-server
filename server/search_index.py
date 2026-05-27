@@ -180,6 +180,46 @@ def _merge_duplicate_teams(teams: list[dict]) -> list[dict]:
     return merged
 
 
+def _bsd_players(query: str, limit: int) -> list[dict]:
+    """Live BSD player search for both sports → wire rows with BSD ids.
+
+    Network call; tightly time-boxed by the clients. Returns [] on any
+    failure so search degrades to teams/leagues only.
+    """
+    import player_source as ps
+    out: list[dict] = []
+    try:
+        import bzzoiro_adapter as bz
+        for p in bz.player_search(query, limit=limit):
+            out.append({
+                "id": str(p.get("id") or ""),
+                "name": p.get("name") or "",
+                "team_id": str(p.get("current_team_id") or "") or None,
+                "team_name": None,
+                "sport": "football",
+                "photo": ps.football_photo_url(p.get("id")),
+                "score": 0.9,
+            })
+    except Exception:
+        pass
+    try:
+        import bsd_basketball as bb
+        for p in bb.player_search(query, limit=limit):
+            team = p.get("team") or {}
+            out.append({
+                "id": str(p.get("id") or ""),
+                "name": p.get("name") or "",
+                "team_id": str(team.get("id") or "") or None,
+                "team_name": team.get("name"),
+                "sport": "basketball",
+                "photo": ps.basketball_photo_url(p.get("id")),
+                "score": 0.9,
+            })
+    except Exception:
+        pass
+    return out
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Static league catalog — mirrors the iOS LeagueCatalog so search results can
 # return the same slugs the rest of the app uses.
@@ -243,19 +283,6 @@ def search(query: str, limit: int = 10) -> dict[str, list[dict]]:
                     "logo":   t.get("logo") or None,
                     "score":  score_t,
                 })
-            # Players in this team
-            for p in (t.get("players") or []):
-                pname = p.get("name") or ""
-                ps = _score(q, pname)
-                if ps > 0:
-                    players.append({
-                        "id":        str(p.get("id") or p.get("player_id") or ""),
-                        "name":      pname,
-                        "team_id":   str(t.get("id") or ""),
-                        "team_name": t.get("name") or "",
-                        "sport":     "basketball",
-                        "score":     ps,
-                    })
     except Exception:
         # Roster cache may not be ready on cold start — search degrades gracefully
         pass
@@ -272,6 +299,9 @@ def search(query: str, limit: int = 10) -> dict[str, list[dict]]:
                 "logo":   t.get("crest"),
                 "score":  score_t,
             })
+
+    # ── Players (live BSD proxy, both sports) ───────────────────────────────
+    players = _bsd_players(q, limit)
 
     # ── Leagues (static) ────────────────────────────────────────────────────
     for lg in _LEAGUES:
