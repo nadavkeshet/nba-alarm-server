@@ -2215,6 +2215,26 @@ def basketball_event_summary(canonical_id: str):
     }
 
 
+@app.get("/basketball/player/{player_id}")
+def basketball_player(player_id: str):
+    """Normalized basketball player detail (bio + season averages)."""
+    import bsd_basketball as bb
+    import player_source as ps
+    raw = bb.player_detail(player_id)
+    if not raw:
+        raise HTTPException(status_code=404, detail="player not found")
+    return ps.normalize_basketball_detail(raw, player_id=player_id)
+
+
+@app.get("/basketball/player/{player_id}/games")
+def basketball_player_games(player_id: str, limit: int = 10):
+    """Recent basketball box-score lines (opponent + date + per-game stats)."""
+    import bsd_basketball as bb
+    import player_source as ps
+    rows = bb.player_games(player_id, limit=limit)
+    return {"games": ps.normalize_basketball_games({"results": rows}, limit=limit)}
+
+
 # ── Soccer endpoints (v3) ────────────────────────────────────────────────────
 
 
@@ -2856,6 +2876,39 @@ def soccer_favorites_all(user_token: str = ""):
         "teams":        soccer_fav_teams_list(user_token=user_token)["teams"],
         "competitions": soccer_fav_competitions_list(user_token=user_token)["competitions"],
     }
+
+
+@app.get("/soccer/player/{player_id}")
+def soccer_player(player_id: str):
+    """Normalized football player detail (bio + latest-season summary)."""
+    import bzzoiro_adapter as bz
+    import player_source as ps
+    detail = bz.player_detail(player_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="player not found")
+    career = bz.player_career(player_id)
+    team_name = None
+    team_id = detail.get("current_team_id")
+    if team_id:
+        t = bz.team(team_id)
+        team_name = (t or {}).get("name")
+    return ps.normalize_soccer_detail(detail, career, player_id=player_id, team_name=team_name)
+
+
+@app.get("/soccer/player/{player_id}/stats")
+def soccer_player_stats(player_id: str, limit: int = 10):
+    """Recent football matches: minutes, goals, assists, rating, opponent."""
+    import bzzoiro_adapter as bz
+    import player_source as ps
+    rows = bz.player_match_stats(player_id, limit=limit)
+    events: dict = {}
+    for s in rows:
+        eid = s.get("event_id")
+        if eid and eid not in events:
+            ev = bz.event(eid)
+            if ev:
+                events[eid] = ev
+    return {"games": ps.normalize_soccer_stats({"results": rows}, events, limit=limit)}
 
 
 # ── EPG (TV Broadcast Guide) ─────────────────────────────────────────────────
