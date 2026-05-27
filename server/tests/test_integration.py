@@ -410,3 +410,35 @@ def test_soccer_favorite_team_multi_id_roundtrip():
 
     # cleanup
     ok(delete("/soccer/favorites/teams/130", user_token=TOKEN))
+
+
+def test_search_returns_players_both_sports():
+    d = ok(get("/search", q="messi", limit=10))
+    names = [p["name"] for p in d["players"]]
+    assert any("Messi" in n for n in names)
+    sports = {p["sport"] for p in d["players"]}
+    assert "football" in sports
+
+
+def test_basketball_player_detail_and_games():
+    # 521 = Bronny James (BSD id)
+    detail = ok(get("/basketball/player/521"))
+    assert detail["sport"] == "basketball"
+    assert detail["season"]["ppg"] is not None
+    assert detail["photo"]
+    games = ok(get("/basketball/player/521/games", limit=5))["games"]
+    assert isinstance(games, list)
+    if games:
+        assert "opponent" in games[0] and "date" in games[0]
+
+
+def test_soccer_player_detail_and_stats():
+    # 9063 = Lionel Messi (BSD id)
+    detail = ok(get("/soccer/player/9063"))
+    assert detail["sport"] == "football"
+    assert detail["name"].startswith("Lionel")
+    assert detail["season"]["avg_rating"] is not None
+    stats = ok(get("/soccer/player/9063/stats", limit=5))["games"]
+    assert isinstance(stats, list)
+    if stats:
+        assert "opponent" in stats[0] and "rating" in stats[0]
