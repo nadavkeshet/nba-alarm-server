@@ -120,6 +120,7 @@ class FavoritePlayerDB(_Base):
     target_id     = Column(String,  nullable=False)   # player id
     target_name   = Column(String,  nullable=True)
     team_name     = Column(String,  nullable=True)
+    team_id       = Column(String,  nullable=True)
     league        = Column(String,  nullable=True, default='nba')   # nba|euroleague|eurocup|bcl|winner_league
     total_pts     = Column(Integer, nullable=True)    # None = condition disabled
     early_pts     = Column(Integer, nullable=True)
@@ -1735,7 +1736,8 @@ def get_settings(user_token: str = ""):
             fav_players = {
                 p.target_id: {
                     "name":          p.target_name or "",
-                    "league":         (p.league or "nba"),
+                    "team_id":       p.team_id,
+                    "league":        (p.league or "nba"),
                     "total_pts":     p.total_pts,
                     "early_pts_q":   p.early_pts_q,
                     "early_pts":     p.early_pts,
@@ -1925,6 +1927,7 @@ class FavoritePlayer(BaseModel):
     user_token:     str = ""
     player_id:      str
     name:           str
+    team_id:        Optional[str]  = None
     league:         str = "nba"
     total_pts:      Optional[int]  = None
     early_pts_q:    Optional[int]  = None
@@ -1946,6 +1949,7 @@ def upsert_player(req: FavoritePlayer):
                 ).first()
                 if existing:
                     existing.target_name    = req.name
+                    existing.team_id        = req.team_id
                     existing.league         = league
                     existing.total_pts      = req.total_pts
                     existing.early_pts_q    = req.early_pts_q
@@ -1957,7 +1961,7 @@ def upsert_player(req: FavoritePlayer):
                 else:
                     session.add(FavoritePlayerDB(
                         user_token=req.user_token, target_id=req.player_id,
-                        target_name=req.name, league=league,
+                        target_name=req.name, team_id=req.team_id, league=league,
                         total_pts=req.total_pts,
                         early_pts_q=req.early_pts_q, early_pts=req.early_pts,
                         td_watch=req.td_watch, alert_type=req.alert_type,
