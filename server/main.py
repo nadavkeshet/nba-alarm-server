@@ -2354,20 +2354,31 @@ def soccer_drama_timeline(canonical_id: str, step: int = 2):
 
 @app.get("/soccer/match/{canonical_id}/lineups")
 def soccer_match_lineups(canonical_id: str):
-    """Confirmed / predicted lineups for a soccer match.
-    Only BSD-sourced matches have lineups; non-BSD ids return lineup_status=unavailable.
-    """
-    if not canonical_id.startswith("bsd-"):
-        return {"lineup_status": "unavailable", "lineups": None, "event_id": None}
-    try:
-        event_id = int(canonical_id[4:])
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid canonical_id format")
-    import bzzoiro_adapter as _bsd_soccer
-    result = _bsd_soccer.event_lineups(event_id)
-    if result is None:
-        return {"lineup_status": "unavailable", "lineups": None, "event_id": event_id}
-    return _normalize_lineups(result)
+    """Confirmed / predicted lineups for a soccer match. Supports both BSD- and
+    Sofascore-sourced ids; unknown sources return lineup_status=unavailable."""
+    if canonical_id.startswith("bsd-"):
+        try:
+            event_id = int(canonical_id[4:])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid canonical_id format")
+        import bzzoiro_adapter as _bsd_soccer
+        result = _bsd_soccer.event_lineups(event_id)
+        if result is None:
+            return {"lineup_status": "unavailable", "lineups": None, "event_id": event_id}
+        return _normalize_lineups(result)
+
+    if canonical_id.startswith("sofa-"):
+        try:
+            event_id = int(canonical_id[5:])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid canonical_id format")
+        import soccer_source as _ss
+        result = _ss.get_sofa_lineups(event_id)
+        if result is None:
+            return {"lineup_status": "unavailable", "lineups": None, "event_id": event_id}
+        return result
+
+    return {"lineup_status": "unavailable", "lineups": None, "event_id": None}
 
 
 def _normalize_lineups(raw: dict) -> dict:
@@ -2413,17 +2424,24 @@ def soccer_league_standings(slug: str):
     """Current league table for a soccer league slug (e.g. premier_league)."""
     from score365_soccer_adapter import BSD_COMPETITION_IDS
     league_id = BSD_COMPETITION_IDS.get(slug)
-    if league_id is None:
-        raise HTTPException(status_code=404, detail=f"No BSD standings for league '{slug}'")
-    import bzzoiro_adapter as _bsd_soccer
-    try:
-        raw = _bsd_soccer.league_standings(league_id)
-    except Exception as exc:
-        logger.warning("soccer standings error for %s: %s", slug, exc)
-        raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
-    if raw is None:
-        raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
-    return _normalize_soccer_standings(raw, league_id)
+    if league_id is not None:
+        import bzzoiro_adapter as _bsd_soccer
+        try:
+            raw = _bsd_soccer.league_standings(league_id)
+        except Exception as exc:
+            logger.warning("soccer standings error for %s: %s", slug, exc)
+            raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
+        if raw is None:
+            raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
+        return _normalize_soccer_standings(raw, league_id)
+
+    # Sofascore-primary leagues (e.g. the Israeli Premier League) have no BSD
+    # competition id — fall back to Sofascore's table.
+    import soccer_source as _ss
+    result = _ss.get_sofa_standings(slug)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No standings for league '{slug}'")
+    return result
 
 
 def _normalize_soccer_standings(raw: dict, league_id: int) -> dict:

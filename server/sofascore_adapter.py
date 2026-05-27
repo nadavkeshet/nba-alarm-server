@@ -66,6 +66,9 @@ _TTL_SECONDS: dict[str, float] = {
     "event_shotmap": 25.0,
     "event_incidents": 20.0,
     "unique_tournament": 86400.0,     # competition metadata effectively static
+    "event_lineups": 120.0,           # set ~1h pre-kickoff, frozen after
+    "seasons": 86400.0,               # season list effectively static
+    "standings": 600.0,               # table moves at most once per matchday
 }
 
 
@@ -253,6 +256,29 @@ def unique_tournament(tournament_id: int) -> dict:
     """Tournament metadata (name, category/country, current season)."""
     data = _cached_get("unique_tournament", f"/unique-tournament/{tournament_id}", tournament_id)
     return data.get("uniqueTournament", {}) if isinstance(data, dict) else {}
+
+
+def event_lineups(event_id: int) -> dict:
+    """Confirmed/predicted lineups: { confirmed, home:{players, formation, ...}, away:{...} }.
+    Each player entry: { player:{id,name,shortName,...}, shirtNumber, position,
+    substitute, statistics:{rating} }."""
+    return _cached_get("event_lineups", f"/event/{event_id}/lineups", event_id)
+
+
+def seasons(unique_tournament_id: int) -> list[dict]:
+    """Season list for a tournament, newest first. seasons[0] is the current one."""
+    data = _cached_get("seasons", f"/unique-tournament/{unique_tournament_id}/seasons", unique_tournament_id)
+    return data.get("seasons", []) if isinstance(data, dict) else []
+
+
+def standings(unique_tournament_id: int, season_id: int) -> dict:
+    """Total standings for a season. Shape: { standings: [ {rows: [...]} ] }.
+    Multiple groups when the league splits (e.g. Israeli championship/relegation rounds)."""
+    return _cached_get(
+        "standings",
+        f"/unique-tournament/{unique_tournament_id}/season/{season_id}/standings/total",
+        unique_tournament_id, season_id,
+    )
 
 
 # ---------------------------------------------------------------------------

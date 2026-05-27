@@ -838,3 +838,126 @@ def _normalize_sofa_statistics(raw: dict | None) -> dict | None:
         if acc is not None and tot:
             side["pass_accuracy_pct"] = round(acc / tot * 100, 1)
     return {"home": home, "away": away}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sofascore lineups + standings (the BSD-only endpoints 404'd / returned
+# "unavailable" for Sofascore-primary leagues like the Israeli Premier League).
+
+
+def _to_int(v: Any) -> int | None:
+    if v is None:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_sofa_lineup_side(side: dict) -> dict:
+    """Sofascore lineup side → canonical iOS LineupTeam shape. Splits starters
+    from substitutes via each entry's `substitute` flag."""
+    entries = side.get("players") or []
+    starters: list[dict] = []
+    subs: list[dict] = []
+    team_id = 0
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        p = e.get("player") or {}
+        if not team_id and e.get("teamId"):
+            team_id = e.get("teamId")
+        rating = (e.get("statistics") or {}).get("rating")
+        try:
+            rating = float(rating) if rating is not None else None
+        except (TypeError, ValueError):
+            rating = None
+        norm = {
+            "id":            p.get("id") or 0,
+            "name":          p.get("name") or "",
+            "short_name":    p.get("shortName"),
+            "position":      e.get("position") or p.get("position"),
+            "jersey_number": _to_int(e.get("shirtNumber") or e.get("jerseyNumber") or p.get("jerseyNumber")),
+            "ai_score":      rating,
+        }
+        (subs if e.get("substitute") else starters).append(norm)
+    return {
+        "team_id":     team_id,
+        "team_name":   "",                  # iOS reads team names from match detail
+        "formation":   side.get("formation"),
+        "confidence":  None,
+        "players":     starters,
+        "substitutes": subs,
+    }
+
+
+def get_sofa_lineups(event_id: int) -> dict | None:
+    """Confirmed/predicted lineups for a Sofascore match, in the canonical
+    `{lineup_status, lineups:{home,away}, event_id}` shape iOS expects."""
+    try:
+        raw = sofa.event_lineups(event_id)
+    except Exception as exc:
+        logger.warning("sofa lineups failed for %s: %s", event_id, exc)
+        return None
+    if not isinstance(raw, dict) or not (raw.get("home") or raw.get("away")):
+        return None
+    return {
+        "event_id":      event_id,
+        "lineup_status": "confirmed" if raw.get("confirmed") else "predicted",
+        "beta":          False,
+        "lineups": {
+            "home": _normalize_sofa_lineup_side(raw.get("home") or {}),
+            "away": _normalize_sofa_lineup_side(raw.get("away") or {}),
+        },
+    }
+
+
+def get_sofa_standings(slug: str) -> dict | None:
+    """League table for a Sofascore-primary competition slug, in the canonical
+    LeagueStandings shape. Flattens grouped tables (e.g. the Israeli league's
+    championship/relegation split) and flags `grouped`."""
+    utid = SOFASCORE_COMPETITION_IDS.get(slug)
+    if not utid:
+        return None
+    try:
+        season_list = sofa.seasons(utid)
+        if not season_list:
+            return None
+        season_id = season_list[0].get("id")
+        season_name = season_list[0].get("name") or ""
+        raw = sofa.standings(utid, season_id)
+    except Exception as exc:
+        logger.warning("sofa standings failed for %s: %s", slug, exc)
+        return None
+    groups = raw.get("standings") if isinstance(raw, dict) else None
+    if not groups:
+        return None
+    rows_out: list[dict] = []
+    for grp in groups:
+        for row in (grp.get("rows") or []):
+            team = row.get("team") or {}
+            tid = team.get("id") or 0
+            gf = _to_int(row.get("scoresFor")) or 0
+            ga = _to_int(row.get("scoresAgainst")) or 0
+            rows_out.append({
+                "position":   _to_int(row.get("position")) or 0,
+                "team_id":    tid,
+                "team_name":  team.get("name") or "",
+                "team_crest": f"https://api.sofascore.app/api/v1/team/{tid}/image" if tid else None,
+                "played":     _to_int(row.get("matches")) or 0,
+                "won":        _to_int(row.get("wins")) or 0,
+                "drawn":      _to_int(row.get("draws")) or 0,
+                "lost":       _to_int(row.get("losses")) or 0,
+                "gf": gf, "ga": ga, "gd": gf - ga,
+                "pts":        _to_int(row.get("points")) or 0,
+                "form":       None,
+                "live":       None,
+            })
+    if not rows_out:
+        return None
+    return {
+        "league_id": utid,
+        "season":    {"id": season_id or 0, "name": season_name},
+        "grouped":   len(groups) > 1,
+        "standings": rows_out,
+    }
