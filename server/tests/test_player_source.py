@@ -19,7 +19,7 @@ def test_basketball_detail_maps_season_avg():
     assert out["jersey"] == "9"
     assert out["season"]["ppg"] == 2.6
     assert out["season"]["fg_pct"] == 37.7
-    assert out["photo"].endswith("/img/player/521/")
+    assert out["photo"].endswith("/basketball/img/player/521/")
 
 
 def test_basketball_games_maps_rows_and_caps_limit():

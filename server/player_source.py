@@ -8,7 +8,7 @@ client falls back to an initials avatar if the image 404s.
 from __future__ import annotations
 
 _FOOTBALL_PHOTO = "https://sports.bzzoiro.com/img/player/{}/"
-_BASKETBALL_PHOTO = "https://sports.bzzoiro.com/img/player/{}/"
+_BASKETBALL_PHOTO = "https://sports.bzzoiro.com/basketball/img/player/{}/"
 
 
 def football_photo_url(player_id) -> str:

@@ -689,29 +689,47 @@ def fetch_player_boxscore(game_id: str) -> dict | None:
 
 def fetch_all_teams(league: str = "nba") -> list[dict]:
     """
-    Fetch all teams for a league by walking the combined-window endpoints.
+    Fetch all teams for a league by walking the combined-window endpoints and standings.
     Returns list of dicts: {id, name, abbreviation, logo, players: []}
-    Uses the same /current + /results + /fixtures combination as the games
-    fetcher so leagues on a multi-week break (e.g. Winner League playoffs)
-    still surface their full team list.
+    Uses the /standings endpoint first (to ensure all teams in the league are included,
+    especially in playoffs/offseason) and falls back to walking the rolling games window.
     """
     comp_id = COMPETITION_IDS.get(league, COMPETITION_IDS["nba"])
-    raw_games = _fetch_competition_window(comp_id)
-
     seen: dict[str, dict] = {}
-    for raw in raw_games:
-        for side in ("homeCompetitor", "awayCompetitor"):
-            comp = raw.get(side, {}) or {}
-            team_obj = _make_team_obj(comp)
-            tid = team_obj["id"]
-            if tid and tid not in seen:
-                seen[tid] = {
-                    "id":           tid,
-                    "name":         team_obj["displayName"],
-                    "abbreviation": team_obj["abbreviation"],
-                    "logo":         team_obj["logo"],
-                    "players":      [],
-                }
+
+    def absorb(comp: dict | None) -> None:
+        if not comp:
+            return
+        team_obj = _make_team_obj(comp)
+        tid = team_obj["id"]
+        if tid and tid not in seen:
+            seen[tid] = {
+                "id":           tid,
+                "name":         team_obj["displayName"],
+                "abbreviation": team_obj["abbreviation"],
+                "logo":         team_obj["logo"],
+                "players":      [],
+            }
+
+    # Pass 1: Standings (critical for all teams in the league)
+    try:
+        with Client365() as client:
+            data = client.get("/standings/", params={"competitions": str(comp_id)})
+        for stage in data.get("standings", []) or []:
+            for row in stage.get("rows", []) or []:
+                absorb(row.get("competitor"))
+    except Exception as exc:
+        logger.debug("365 standings fetch failed in fetch_all_teams for %s: %s", league, exc)
+
+    # Pass 2: Rolling games window (as fallback/enrichment)
+    try:
+        raw_games = _fetch_competition_window(comp_id)
+        for raw in raw_games:
+            absorb(raw.get("homeCompetitor"))
+            absorb(raw.get("awayCompetitor"))
+    except Exception as exc:
+        logger.debug("365 window fetch failed in fetch_all_teams for %s: %s", league, exc)
+
     return list(seen.values())
 
 
