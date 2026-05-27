@@ -187,18 +187,18 @@ def _bsd_players(query: str, limit: int) -> list[dict]:
     failure so search degrades to teams/leagues only.
     """
     import player_source as ps
-    out: list[dict] = []
+    football: list[dict] = []
+    basketball: list[dict] = []
     try:
         import bzzoiro_adapter as bz
         for p in bz.player_search(query, limit=limit):
-            out.append({
+            football.append({
                 "id": str(p.get("id") or ""),
                 "name": p.get("name") or "",
                 "team_id": str(p.get("current_team_id") or "") or None,
                 "team_name": None,
                 "sport": "football",
                 "photo": ps.football_photo_url(p.get("id")),
-                "score": 0.9,
             })
     except Exception:
         pass
@@ -206,17 +206,28 @@ def _bsd_players(query: str, limit: int) -> list[dict]:
         import bsd_basketball as bb
         for p in bb.player_search(query, limit=limit):
             team = p.get("team") or {}
-            out.append({
+            basketball.append({
                 "id": str(p.get("id") or ""),
                 "name": p.get("name") or "",
                 "team_id": str(team.get("id") or "") or None,
                 "team_name": team.get("name"),
                 "sport": "basketball",
                 "photo": ps.basketball_photo_url(p.get("id")),
-                "score": 0.9,
             })
     except Exception:
         pass
+    # Round-robin interleave so BOTH sports survive the caller's `[:limit]`
+    # cap, then stamp descending scores so search()'s score-sort preserves
+    # this balanced order (all rows would otherwise tie and re-sort by name,
+    # letting one sport crowd the other out).
+    out: list[dict] = []
+    while football or basketball:
+        if football:
+            out.append(football.pop(0))
+        if basketball:
+            out.append(basketball.pop(0))
+    for idx, row in enumerate(out):
+        row["score"] = 1.0 - idx * 0.0001
     return out
 
 
