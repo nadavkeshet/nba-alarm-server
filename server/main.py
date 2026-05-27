@@ -2219,11 +2219,18 @@ def basketball_event_summary(canonical_id: str):
 def basketball_player(player_id: str):
     """Normalized basketball player detail (bio + season averages)."""
     import bsd_basketball as bb
+    import basketball_source as bbsrc
     import player_source as ps
     raw = bb.player_detail(player_id)
     if not raw:
         raise HTTPException(status_code=404, detail="player not found")
-    return ps.normalize_basketball_detail(raw, player_id=player_id)
+    detail = ps.normalize_basketball_detail(raw, player_id=player_id)
+    # BSD has no basketball headshots; resolve a 365 athlete photo by
+    # team-scoped name match (falls back to the BSD URL → iOS initials).
+    photo_365 = bbsrc.athlete_365_photo_url(detail.get("team_name"), detail.get("name"))
+    if photo_365:
+        detail["photo"] = photo_365
+    return detail
 
 
 @app.get("/basketball/player/{player_id}/games")

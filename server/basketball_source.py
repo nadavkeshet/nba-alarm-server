@@ -415,6 +415,39 @@ def _basketball_logo_url(league_slug: str, team_name: str | None, bsd_id: int | 
     return _bsd_team_logo_url(bsd_id)
 
 
+_365_ATHLETE_BASE = "https://imagecache.365scores.com/image/upload/Athletes/"
+
+
+def athlete_365_photo_url(team_name: str | None, player_name: str | None) -> str | None:
+    """Best-effort 365scores headshot for a basketball player.
+
+    BSD has no player photos, so we map a BSD player → 365 athlete id by
+    name. Matching is **team-scoped**: we only look inside the roster of the
+    365 team whose name matches `team_name`, so common names (five "James")
+    can't resolve to the wrong face. Uses the in-memory 365 roster cache
+    (`monitor.get_all_teams`) — no extra network. Returns None when there's
+    no confident match (caller keeps the BSD URL / iOS shows initials).
+    """
+    if not player_name:
+        return None
+    try:
+        from monitor import get_all_teams as _teams
+        teams = _teams() or []
+    except Exception:
+        return None
+    target_team = _normalize_team_name(team_name or "")
+    target_player = _normalize_team_name(player_name)
+    for t in teams:
+        if target_team and _normalize_team_name(t.get("name") or "") != target_team:
+            continue
+        for p in (t.get("players") or []):
+            if _normalize_team_name(p.get("name") or "") == target_player:
+                pid = p.get("id") or p.get("player_id")
+                if pid:
+                    return f"{_365_ATHLETE_BASE}{pid}"
+    return None
+
+
 def _bsd_status_to_espn(status: str) -> tuple[str, str, int]:
     """BSD basketball status → ESPN's (state, detail, period) tuple.
 
