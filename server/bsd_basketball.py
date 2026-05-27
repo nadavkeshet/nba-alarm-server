@@ -63,6 +63,9 @@ _TTL_SECONDS: dict[str, float] = {
     "event_box_score":  60.0,
     "event_pregame":    600.0,
     "league_standings": 300.0,
+    "player_search": 60.0,
+    "player_detail": 3600.0,
+    "player_games":  300.0,
 }
 
 
@@ -200,6 +203,24 @@ def live_events(league_id: int | None = None) -> list[dict]:
 def event_detail(event_id: int) -> dict | None:
     """Single event with score, periods_score (quarter-by-quarter), prediction."""
     return _cached_get("event_detail", f"/events/{event_id}/")
+
+
+def player_search(query: str, *, limit: int = 10) -> list[dict]:
+    data = _cached_get("player_search", "/players/", {"search": query, "limit": limit})
+    if isinstance(data, dict):
+        return data.get("results") or []
+    return data or []
+
+
+def player_detail(player_id: int | str) -> dict | None:
+    return _cached_get("player_detail", f"/players/{player_id}/")
+
+
+def player_games(player_id: int | str, *, limit: int = 10) -> list[dict]:
+    data = _cached_get("player_games", f"/players/{player_id}/games/", {"limit": limit})
+    if isinstance(data, dict):
+        return data.get("results") or []
+    return data or []
 
 
 def event_team_stats(event_id: int) -> dict | None:

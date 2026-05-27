@@ -72,6 +72,12 @@ _TTL_SECONDS: dict[str, float] = {
     "event_lineups":   300.0,   # lineups don't change mid-match
     "event_prediction": 600.0,  # pre-match; ten minutes is fine
     "league_detail":   3600.0,
+    "player_search":      60.0,
+    "player_detail":      3600.0,
+    "player_career":      3600.0,
+    "player_match_stats": 300.0,
+    "event":              120.0,
+    "team":               86400.0,
 }
 
 
@@ -204,6 +210,36 @@ def event_detail(event_id: int) -> dict | None:
     """Full event payload (teams, score, status, league, season, venue, weather,
     pitch condition, attendance, derby flag, etc.)."""
     return _cached_get("event_detail", f"/events/{event_id}/", None, event_id)
+
+
+def player_search(name: str, *, limit: int = 10) -> list[dict]:
+    data = _cached_get("player_search", "/players/", {"name": name, "limit": limit})
+    if isinstance(data, dict):
+        return data.get("results") or []
+    return data or []
+
+
+def player_detail(player_id: int | str) -> dict | None:
+    return _cached_get("player_detail", f"/players/{player_id}/")
+
+
+def player_career(player_id: int | str) -> dict | None:
+    return _cached_get("player_career", f"/players/{player_id}/career/")
+
+
+def player_match_stats(player_id: int | str, *, limit: int = 10) -> list[dict]:
+    data = _cached_get("player_match_stats", f"/players/{player_id}/stats/", {"limit": limit})
+    if isinstance(data, dict):
+        return data.get("results") or []
+    return data or []
+
+
+def event(event_id: int | str) -> dict | None:
+    return _cached_get("event", f"/events/{event_id}/")
+
+
+def team(team_id: int | str) -> dict | None:
+    return _cached_get("team", f"/teams/{team_id}/")
 
 
 def event_stats(event_id: int) -> dict | None:
