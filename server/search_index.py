@@ -36,11 +36,16 @@ def remember_soccer_team(team_id: str | int, name: str, *, crest: str | None = N
     key = str(team_id)
     with _SOCCER_TEAMS_LOCK:
         existing = _SOCCER_TEAMS.get(key) or {}
+        comps = existing.get("competitions") or []
+        if competition and competition not in comps:
+            comps.append(competition)
+
         _SOCCER_TEAMS[key] = {
             "id":          key,
             "name":        name,
             "crest":       crest or existing.get("crest"),
-            "competition": competition or existing.get("competition"),
+            "competition": comps[0] if comps else None,
+            "competitions": comps,
             "sport":       "football",
         }
 
@@ -168,7 +173,7 @@ def _merge_duplicate_teams(teams: list[dict]) -> list[dict]:
         primary = _pick_primary(group)
         ids = _dedupe_preserve_order([primary["id"]] + [t["id"] for t in group])
         leagues = _dedupe_preserve_order(
-            [primary.get("league")] + [t.get("league") for t in group],
+            [primary.get("league")] + [t.get("league") for t in group] + [lg for t in group for lg in (t.get("leagues") or [])],
             drop_falsy=True,
         )
         merged.append({
@@ -307,6 +312,7 @@ def search(query: str, limit: int = 10) -> dict[str, list[dict]]:
                 "name":   t["name"],
                 "sport":  "football",
                 "league": t.get("competition"),
+                "leagues": t.get("competitions"),
                 "logo":   t.get("crest"),
                 "score":  score_t,
             })
