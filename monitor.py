@@ -459,10 +459,21 @@ def _fetch_nba_game(game_id: str) -> dict | None:
     Return the raw event dict for game_id from the shared 60-second cache.
     All monitoring threads (game + player) share one API request per minute
     instead of each making their own — prevents rate-limiting at scale.
+
+    Handles canonical bsd-*/s365-* IDs as well as legacy numeric IDs by
+    trying both the full canonical ID and the stripped numeric native ID.
     """
-    for event in get_today_games():
+    games = get_today_games()
+    # Exact match (covers legacy numeric IDs and any future canonical games)
+    for event in games:
         if str(event.get("id")) == str(game_id):
             return event
+    # Strip canonical prefix and retry with the native numeric part
+    if "-" in str(game_id):
+        native_id = str(game_id).split("-", 1)[1]
+        for event in games:
+            if str(event.get("id")) == native_id:
+                return event
     return None
 
 
@@ -549,44 +560,88 @@ def _fetch_player_stats(game_id: str, player_id: str) -> dict | None:
     return None
 
 
+def _roster_by_name(name: str) -> dict | None:
+    """Look up a team in _ROSTER_CACHE by display name (case-insensitive)."""
+    if not name:
+        return None
+    needle = name.lower().strip()
+    with _CACHE_LOCK:
+        for entry in _ROSTER_CACHE.values():
+            if entry.get("name", "").lower().strip() == needle:
+                return entry
+    return None
+
+
 def fetch_game_summary_roster(game_id: str, date: str | None = None, league: str | None = None) -> dict:
     """
     Return cached rosters for both teams in game_id.
 
-    Step 1 – identify the two teams from scoreboard (tries all leagues + dates).
-    Step 2 – serve each team from _ROSTER_CACHE.
-      Cache miss → live fetch from API-Basketball + populate cache.
+    Handles canonical bsd-*/s365-* IDs as well as legacy numeric IDs.
+    Step 1 – identify the two teams from scoreboard.
+    Step 2 – serve each team from _ROSTER_CACHE (name-based fallback for BSD games).
     """
     from score365_adapter import LEAGUES
+
+    # Strip canonical prefix so 365scores cache lookups use the numeric ID.
+    # For bsd-* IDs the native part is a BSD event id, not a 365 id, so we
+    # also keep the original for the basketball_source fallback path.
+    native_id = game_id
+    source_prefix = None
+    if "-" in game_id:
+        parts = game_id.split("-", 1)
+        source_prefix = parts[0]   # "bsd" or "s365"
+        native_id = parts[1]
+
     # ── Step 1: collect raw team stubs ─────────────────────────────────────────
     team_stubs: list[dict] = []
 
-    # Try today's NBA cache first (fast path for live NBA games)
-    if not league or league == "nba":
-        event = _fetch_nba_game(game_id)
-        if event is not None:
-            for comp in event.get("competitions", [{}])[0].get("competitors", []):
-                team_stubs.append(comp.get("team", {}))
+    # For BSD canonical IDs use basketball_source to get the event (fast path).
+    if source_prefix == "bsd":
+        try:
+            import basketball_source as _bb
+            detail = _bb.get_basketball_event_detail(game_id)
+            if detail:
+                # BSD raw format: home_team / away_team at top level (not ESPN competitions[])
+                home = detail.get("home_team") or {}
+                away = detail.get("away_team") or {}
+                for side in (home, away):
+                    if side:
+                        team_stubs.append({
+                            "id":          str(side.get("id", "")),
+                            "name":        side.get("name", ""),
+                            "displayName": side.get("name", ""),
+                            "abbreviation": (side.get("short_name") or side.get("name", ""))[:3].upper(),
+                        })
+        except Exception as exc:
+            log.warning("Game summary (BSD): detail fetch failed for %s: %s", game_id, exc)
 
-    # If not found, search the relevant league(s) for the given date
-    if not team_stubs:
-        search_date = date or _eastern_today()
-        # If a specific league was provided, only search that league
-        leagues_to_search = [league] if league and league in LEAGUES else list(LEAGUES.keys())
-        for lg in leagues_to_search:
-            if lg == "nba" and not date and not league:
-                continue  # already checked via NBA cache above
-            try:
-                games = api_fetch_games(search_date, league=lg)
-                for g in games:
-                    if str(g.get("id")) == str(game_id):
-                        for comp in g.get("competitions", [{}])[0].get("competitors", []):
-                            team_stubs.append(comp.get("team", {}))
-                        break
-            except Exception:
-                pass
-            if team_stubs:
-                break
+    # For 365scores IDs (s365-* or legacy numeric) try today's NBA cache.
+    if not team_stubs and (not source_prefix or source_prefix == "s365"):
+        lookup_id = native_id  # numeric 365scores id
+        if not league or league == "nba":
+            event = _fetch_nba_game(lookup_id)
+            if event is not None:
+                for comp in event.get("competitions", [{}])[0].get("competitors", []):
+                    team_stubs.append(comp.get("team", {}))
+
+        # Broader league/date search
+        if not team_stubs:
+            search_date = date or _eastern_today()
+            leagues_to_search = [league] if league and league in LEAGUES else list(LEAGUES.keys())
+            for lg in leagues_to_search:
+                if lg == "nba" and not date and not league:
+                    continue
+                try:
+                    games = api_fetch_games(search_date, league=lg)
+                    for g in games:
+                        if str(g.get("id")) == lookup_id:
+                            for comp in g.get("competitions", [{}])[0].get("competitors", []):
+                                team_stubs.append(comp.get("team", {}))
+                            break
+                except Exception:
+                    pass
+                if team_stubs:
+                    break
 
     if not team_stubs:
         log.warning("Game summary: could not identify teams for game %s.", game_id)
@@ -597,14 +652,23 @@ def fetch_game_summary_roster(game_id: str, date: str | None = None, league: str
 
     for team in team_stubs:
         team_id = str(team.get("id", ""))
-        if not team_id:
-            continue
 
-        with _CACHE_LOCK:
-            cached = _ROSTER_CACHE.get(team_id)
+        # Try numeric team_id first (works for 365scores games)
+        cached = None
+        if team_id:
+            with _CACHE_LOCK:
+                cached = _ROSTER_CACHE.get(team_id)
+
+        # Name-based fallback for BSD games whose team IDs differ from 365scores
+        if not cached:
+            team_name = team.get("displayName") or team.get("name") or ""
+            cached = _roster_by_name(team_name)
 
         if cached:
             teams_out.append(cached)
+            continue
+
+        if not team_id:
             continue
 
         # Cache miss — live fetch from API-Basketball
