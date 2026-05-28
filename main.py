@@ -5,6 +5,7 @@ import threading
 import requests
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
 log = logging.getLogger("nba_monitor")
@@ -195,6 +196,72 @@ class UserPreferenceDB(_Base):
     created_at              = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
+# ── v3 Soccer ORM ──────────────────────────────────────────────────────────────
+
+from sqlalchemy import Float, JSON as _SA_JSON  # noqa: E402
+from sqlalchemy.dialects.postgresql import JSONB as _PG_JSONB  # noqa: E402
+_JSONB = _PG_JSONB if engine is not None and "postgres" in str(engine.url).lower() else _SA_JSON
+
+
+class SoccerAlarmDB(_Base):
+    """Soccer alarm. Most types are event-driven; drama_radar is Drama-Engine-driven (P3)."""
+    __tablename__ = "soccer_alarms"
+
+    id              = Column(Integer, primary_key=True, index=True)
+    user_token      = Column(String,  nullable=False, index=True)
+    alarm_type      = Column(String,  nullable=False)   # match | late_drama | knockout_et | comeback | hat_trick | red_card | big_chance | penalty | drama_radar
+    match_id        = Column(String,  nullable=True)    # canonical id ('bsd-372'); nullable for radar-type
+    competition_id  = Column(String,  nullable=True)    # slug
+    player_id       = Column(String,  nullable=True)
+    threshold       = Column(Float,   nullable=True)    # SQL column type is REAL (see migrations/001_soccer_schema.sql)
+    config          = Column(_JSONB,  nullable=False, default=dict)
+    alert_type      = Column(String,  nullable=False, default="alarm")
+    is_active       = Column(Boolean, nullable=False, default=True)
+    created_at      = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    fired_at        = Column(DateTime(timezone=True), nullable=True)
+
+
+class SoccerFavoritePlayerDB(_Base):
+    """Persistent soccer favorite player (e.g. hat-trick watch)."""
+    __tablename__ = "soccer_favorites"
+
+    user_token  = Column(String, primary_key=True)
+    player_id   = Column(String, primary_key=True)
+    player_name = Column(String, nullable=True)
+    team_id     = Column(String, nullable=True)
+    config      = Column(_JSONB, nullable=False, default=dict)
+    alert_type  = Column(String, nullable=False, default="alarm")
+    paused      = Column(Boolean, nullable=False, default=False)
+    created_at  = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class SoccerFavoriteTeamDB(_Base):
+    """Persistent soccer favorite team (drives team-scoped drama alerts)."""
+    __tablename__ = "soccer_favorite_teams"
+
+    user_token        = Column(String,  primary_key=True)
+    team_id           = Column(String,  primary_key=True)
+    team_name         = Column(String,  nullable=True)
+    competition_id    = Column(String,  nullable=True)
+    alt_team_ids      = Column(String,  nullable=True)   # comma-sep other provider ids
+    competitions      = Column(String,  nullable=True)   # comma-sep all leagues
+    drama_threshold   = Column(Float,   nullable=False, default=7.0)
+    alert_type        = Column(String,  nullable=False, default="alarm")
+    paused            = Column(Boolean, nullable=False, default=False)
+    notify_at_kickoff = Column(Boolean, nullable=False, default=False)
+    created_at        = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class SoccerFavoriteCompetitionDB(_Base):
+    """Persistent soccer favorite competition (drives Drama Radar scope per user)."""
+    __tablename__ = "soccer_favorite_competitions"
+
+    user_token      = Column(String,  primary_key=True)
+    competition_id  = Column(String,  primary_key=True)
+    drama_threshold = Column(Float,   nullable=False, default=7.0)
+    created_at      = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 def _init_db() -> None:
     """Create tables if they don't already exist, and run lightweight migrations."""
     if engine is None:
@@ -239,6 +306,8 @@ def _init_db() -> None:
         "ALTER TABLE alarms         ADD COLUMN league VARCHAR DEFAULT 'nba'",
         "ALTER TABLE favorites      ADD COLUMN skip_euroleague_evening BOOLEAN DEFAULT FALSE NOT NULL",
         "ALTER TABLE favorite_teams ADD COLUMN skip_euroleague_evening BOOLEAN DEFAULT FALSE NOT NULL",
+        "ALTER TABLE soccer_favorite_teams ADD COLUMN alt_team_ids VARCHAR",
+        "ALTER TABLE soccer_favorite_teams ADD COLUMN competitions VARCHAR",
     ]
     for sql in migrations:
         try:
@@ -247,6 +316,20 @@ def _init_db() -> None:
                 conn.commit()
         except Exception:
             pass  # column already exists – safe to ignore
+
+    # ── v3 (soccer) — load multi-statement SQL file ───────────────────────
+    soccer_schema_path = Path(__file__).resolve().parent / "migrations" / "001_soccer_schema.sql"
+    if soccer_schema_path.exists():
+        soccer_sql = soccer_schema_path.read_text()
+        # Statements separated by `;\n` (semicolons inside JSONB defaults won't trip
+        # this because we keep them quoted on one line)
+        for stmt in [s.strip() for s in soccer_sql.split(";\n") if s.strip()]:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(stmt))
+                    conn.commit()
+            except Exception as exc:
+                log.warning("DB: soccer migration skipped (%s): %s", exc, stmt[:80])
 
 
 def _migrate_team_ids_to_365() -> None:
@@ -670,7 +753,7 @@ register_db_get_all_users(_get_all_users_for_radar)
 
 # ── Background Async Poller ────────────────────────────────────────────────────
 
-from score365_adapter import fetch_player_boxscore as api_fetch_boxscore
+from score365_adapter import fetch_player_boxscore as api_fetch_boxscore, next_game_start
 
 
 def _get_event_state(event: dict) -> str:
@@ -882,17 +965,23 @@ def _check_and_fire(alarm: Alarm, events: list[dict], summary: dict | None = Non
 
 async def _alarm_poller() -> None:
     """
-    Every 10 s:
+    Dynamic poll interval:
+      • No active alarms            → sleep 5 min  (nothing to watch)
+      • Alarms exist, no live games → sleep 2 min  (games might start soon)
+      • Live games present          → sleep 60 s   (active monitoring)
+
+    Per cycle:
       1. Load all is_active alarms from DB.
       2. Group by (game_date, league) and fetch the right scoreboard once per group.
       3. Run _check_and_fire against each alarm with its proper event list.
-      4. Auto-expire alarms whose game_date is more than 1 day in the past
-         (the game is over and we still couldn't satisfy the condition).
+      4. Auto-expire alarms whose game_date is more than 1 day in the past.
     """
     while True:
-        await asyncio.sleep(10)
         if engine is None:
+            await asyncio.sleep(60)
             continue
+        alarms: list = []
+        events_by_group: dict[tuple[str, str], list[dict]] = {}
         try:
             with Session(engine) as session:
                 alarms = (
@@ -911,11 +1000,15 @@ async def _alarm_poller() -> None:
                 # Skip alarms scheduled for a future date — wait for their day
                 if alarm.game_date and alarm.game_date > today_str:
                     continue
+                # Alarms with no game_date are pre-migration orphans — expire them all.
+                if not alarm.game_date:
+                    stale.append(alarm)
+                    continue
                 # Auto-expire alarms whose game day is in the past — the game is
                 # over and we either missed the window or the condition was
                 # never met. Without this, the user's "active alarms" list grows
                 # forever after they set an alarm on a finished game.
-                if alarm.game_date and alarm.game_date < yesterday_str:
+                if alarm.game_date < yesterday_str:
                     stale.append(alarm)
                     continue
 
@@ -936,7 +1029,6 @@ async def _alarm_poller() -> None:
                              a.id, a.target_name or a.target_id, a.game_date, a.user_token[-8:])
 
             # ── Fetch scoreboards once per (date, league) ──
-            events_by_group: dict[tuple[str, str], list[dict]] = {}
             for key in groups:
                 date_str, league = key
                 try:
@@ -957,10 +1049,34 @@ async def _alarm_poller() -> None:
 
             for (date_str, league), group_alarms in groups.items():
                 events = events_by_group.get((date_str, league), [])
+                # Build a set of game IDs that are still in the scoreboard feed
+                live_game_ids = {str(e.get("id")) for e in events}
                 for alarm in group_alarms:
                     try:
                         summary = summaries.get(alarm.game_id) if alarm.game_id else None
                         alarm_lang = _get_user_language_from_db(alarm.user_token)
+
+                        # If the game is from a past date, or is no longer in the
+                        # scoreboard feed for today — it has ended, expire it.
+                        # NULL game_date uses today_str (via date_key fallback above),
+                        # so past-date NULL alarms are already grouped under today_str.
+                        # Additionally expire NULL-date alarms that are no longer in feed.
+                        # At this point alarm.game_date is always set (NULL-date alarms
+                        # are caught above as stale). Expire if the game is no longer in feed.
+                        alarm_game_id = str(alarm.game_id or alarm.target_id)
+                        past_date = date_str < today_str
+                        today_gone = date_str == today_str and events and alarm_game_id not in live_game_ids
+                        game_is_gone = past_date or today_gone
+                        if game_is_gone:
+                            log.info("ALARM EXPIRED   | alarm_id=%d | %s | game ended | ...%s",
+                                     alarm.id, alarm.target_name or alarm.target_id, alarm.user_token[-8:])
+                            with Session(engine) as session:
+                                db_row = session.get(Alarm, alarm.id)
+                                if db_row:
+                                    db_row.is_active = False
+                                    session.commit()
+                            continue
+
                         result = _check_and_fire(alarm, events, summary, language=alarm_lang)
                         if isinstance(result, dict):
                             # Build dedup key using the same format as the radar
@@ -1023,6 +1139,23 @@ async def _alarm_poller() -> None:
         except Exception as exc:
             log.error("Poller: cycle error – %s", exc)
 
+        # Dynamic sleep: back off when there is nothing live to watch.
+        # When no live games are detected, sleep until 2 min before the next
+        # scheduled game (across all leagues the active alarms care about).
+        # Fall back to 5-min polling if no upcoming game is found in the feed.
+        if any(events_by_group.values()):
+            await asyncio.sleep(60)    # live games → 1 min
+        else:
+            alarm_leagues = list({alarm.league or "nba" for alarm in alarms}) if alarms else None
+            nxt = await asyncio.to_thread(next_game_start, alarm_leagues)
+            if nxt is not None:
+                secs = (nxt - datetime.now(timezone.utc)).total_seconds() - 120
+                secs = max(60.0, min(secs, 3600.0))  # clamp: 1 min – 1 hour
+                log.info("Poller: next game at %s — sleeping %.0f s", nxt.isoformat(), secs)
+                await asyncio.sleep(secs)
+            else:
+                await asyncio.sleep(6 * 3600)  # no upcoming games in feed → 6 h (off-season / schedule not yet published)
+
 
 # ── App Lifespan ───────────────────────────────────────────────────────────────
 
@@ -1063,6 +1196,116 @@ def _restart_alarm_threads_from_db() -> None:
         log.error("STARTUP: failed to expire stale alarms – %s", exc)
 
 
+def _bsd_ws_sub_manager_loop() -> None:
+    """Keep the BSD WS subscription set in sync with the set of currently-
+    live BSD events. Re-syncs every 30 s.
+
+    Sources of "live" events:
+      - Soccer: `bzzoiro_adapter.live_events()` (football).
+      - Basketball: `bsd_basketball.live_events()`.
+
+    BSD caps subscriptions at 10 per socket, so we prioritize by
+    "is this event referenced by an active alarm?" — those go first, then
+    fill remaining slots with whatever else is live.
+
+    The helper runs in a normal thread (not asyncio) so it can call the
+    sync BSD REST adapters without trampoline overhead.
+    """
+    import bsd_websocket
+    import bzzoiro_adapter as _bsd_soccer
+    import bsd_basketball as _bsd_basketball
+
+    log.info("BSD WS sub-manager started (30s sync cycle)")
+    while True:
+        try:
+            ws = bsd_websocket.client()
+            if ws._fatal_auth_error:
+                # Subscription not active — no work to do
+                time.sleep(60)
+                continue
+
+            desired: set[int] = set()
+            try:
+                for e in _bsd_soccer.live_events() or []:
+                    eid = e.get("id")
+                    if isinstance(eid, int):
+                        desired.add(eid)
+            except Exception as exc:
+                log.debug("BSD soccer live_events failed in sub-manager: %s", exc)
+            try:
+                for e in _bsd_basketball.live_events() or []:
+                    eid = e.get("id")
+                    if isinstance(eid, int):
+                        desired.add(eid)
+            except Exception as exc:
+                log.debug("BSD basketball live_events failed in sub-manager: %s", exc)
+
+            # Cap to BSD's per-socket limit. We could shard later, but
+            # 10 simultaneous live events across our sports is usually
+            # enough — pick a stable order (smallest id first) so the cap
+            # is deterministic.
+            if len(desired) > bsd_websocket.MAX_SUBS_PER_SOCKET:
+                desired = set(sorted(desired)[:bsd_websocket.MAX_SUBS_PER_SOCKET])
+
+            ws.sync_subscriptions(desired)
+        except Exception as exc:
+            log.warning("WS sub-manager iteration crashed: %s", exc)
+        time.sleep(30)
+
+
+def _seed_soccer_search_index() -> None:
+    """Seed soccer team search accumulator from league standings on startup.
+
+    BSD leagues → BSD standings API (authoritative, available even off-season).
+    All leagues → 365scores standings as a reliable fallback / supplement,
+    since it covers all competitions including playoff rounds.
+    """
+    try:
+        from score365_soccer_adapter import (
+            BSD_COMPETITION_IDS,
+            COMPETITION_IDS as S365_IDS,
+            soccer_league_standings,
+        )
+        import bzzoiro_adapter as _bsd
+        from search_index import remember_soccer_team
+
+        # ── BSD leagues: use BSD standings (authoritative) ──
+        for slug, league_id in BSD_COMPETITION_IDS.items():
+            try:
+                raw = _bsd.league_standings(league_id)
+                if not raw:
+                    continue
+                rows = raw.get("standings") or raw.get("table") or raw.get("rows") or []
+                for row in rows:
+                    team = row.get("team") if isinstance(row.get("team"), dict) else {}
+                    tid  = str(team.get("id") or row.get("team_id") or row.get("id") or "")
+                    name = team.get("name") or row.get("team_name") or ""
+                    if tid and name:
+                        crest = f"https://sports.bzzoiro.com/img/team/{tid}/"
+                        remember_soccer_team(tid, name, crest=crest, competition=slug)
+            except Exception as e:
+                log.debug("soccer seed (BSD standings) skipped for %s: %s", slug, e)
+
+        # ── All leagues: supplement with 365scores standings ──
+        # Covers non-BSD leagues (ligat_haal, euros) and fills any gaps from BSD.
+        # 365scores standings always reflect the current-season roster, including
+        # teams that only appear in playoff rounds not seen in recent game data.
+        for slug, comp_id in S365_IDS.items():
+            try:
+                competitors = soccer_league_standings(comp_id)
+                for comp in competitors:
+                    tid  = str(comp.get("id") or "")
+                    name = comp.get("name") or ""
+                    if tid and name:
+                        crest = f"https://imagecache.365scores.com/image/upload/d_Competitors:default1.png/Competitors/{tid}"
+                        remember_soccer_team(tid, name, crest=crest, competition=slug)
+            except Exception as e:
+                log.debug("soccer seed (365 standings) skipped for %s: %s", slug, e)
+
+    except Exception as e:
+        log.warning("soccer search index seeding failed: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # ── Startup ──
@@ -1075,8 +1318,40 @@ async def lifespan(_app: FastAPI):
     threading.Thread(target=update_all_rosters, daemon=True).start()
     # Pre-warm games cache so /games is ready immediately after startup
     threading.Thread(target=get_today_games, daemon=True).start()
+    # Seed soccer team search index from standings so /search works on cold start
+    threading.Thread(target=_seed_soccer_search_index, daemon=True).start()
     # Radar reads all users directly from DB — always start it
     threading.Thread(target=start_radar_job, daemon=True).start()
+    # v3 soccer radar (event-driven). Wired with our existing FCM helper + dedup.
+    try:
+        import soccer_monitor
+        from monitor import _send_push_notification
+        soccer_monitor.wire(
+            send_push=_send_push_notification,
+            get_user_language=_get_user_language_from_db,
+            fire_once=_fire_once,
+            db_engine=engine,
+            alarm_model=SoccerAlarmDB,
+        )
+        soccer_monitor.start_soccer_radar()
+        log.info("soccer radar wired and started")
+    except Exception as soccer_exc:
+        log.warning("soccer radar not started: %s", soccer_exc)
+
+    # BSD live WebSocket client — pushes per-event deltas instead of
+    # forcing monitor.py to poll REST every few seconds. The client itself
+    # exits cleanly if the BSD subscription isn't active; the sub-manager
+    # below keeps the desired subscription set in sync with currently-
+    # live BSD events for both soccer and basketball.
+    try:
+        import bsd_websocket
+        bsd_websocket.client()  # starts the singleton
+        threading.Thread(target=_bsd_ws_sub_manager_loop,
+                         name="bsd-ws-sub-manager", daemon=True).start()
+        log.info("BSD live WS client started")
+    except Exception as ws_exc:
+        log.warning("BSD WS not started: %s", ws_exc)
+
     # Start the async DB poller
     poller_task = asyncio.create_task(_alarm_poller())
 
@@ -1116,7 +1391,26 @@ def health():
             db_msg = "connected"
         except Exception as exc:
             db_msg = str(exc)
-    return {"status": "ok", "version": "ios-v5", "db": {"connected": db_ok, "detail": db_msg}}
+    # v3 soccer readiness: confirms the new modules and competition map loaded.
+    soccer_status = {"ready": False, "competitions": 0, "bsd_token": False, "radar_running": False}
+    try:
+        from score365_soccer_adapter import _COMPETITION_MAP, PRIMARY_SOURCE
+        soccer_status["competitions"] = len(_COMPETITION_MAP)
+        soccer_status["ready"] = len(PRIMARY_SOURCE) >= 10
+        soccer_status["bsd_token"] = bool(os.environ.get("BZZOIRO_API_TOKEN", "").strip())
+        try:
+            import soccer_monitor
+            soccer_status["radar_running"] = soccer_monitor.is_radar_running()
+        except Exception:
+            pass
+    except Exception as exc:
+        soccer_status["error"] = str(exc)[:120]
+    return {
+        "status": "ok",
+        "version": "v3-p3.0",
+        "db": {"connected": db_ok, "detail": db_msg},
+        "soccer": soccer_status,
+    }
 
 
 # ── DB Alarm Endpoint ──────────────────────────────────────────────────────────
@@ -1809,9 +2103,817 @@ def leagues():
 
 
 @app.get("/games")
-def games(date: Optional[str] = None, league: str = "nba"):
-    """Return games for a given date (YYYYMMDD) and league. Defaults to today NBA."""
-    return {"games": get_games_for_date(date, league=league)}
+def games(
+    date: Optional[str] = None,
+    league: str = "nba",
+    tz: Optional[str] = None,
+):
+    """Return games for a given date (YYYYMMDD) and league. Defaults to today NBA.
+
+    Routes through the basketball_source cascade (BSD primary, 365scores
+    fallback) for leagues we've migrated. Falls back to the legacy
+    `get_games_for_date` path for anything not yet routed (e.g. ESPN
+    direct calls used by monitor.py).
+    """
+    import basketball_source as _bb
+    iso_date = _yyyymmdd_to_iso(date)
+    try:
+        games = _bb.get_basketball_games(league, date_iso=iso_date, tz=tz)
+        return {"games": games, "league": league, "date": iso_date, "tz": tz}
+    except Exception as exc:
+        # Defensive fallback so the schedule never goes black during
+        # rollout. Removable once BSD basketball is proven in prod.
+        logger.warning("basketball_source failed for %s/%s: %s — falling back to legacy",
+                       league, iso_date, exc)
+        return {"games": get_games_for_date(date, league=league)}
+
+
+@app.get("/basketball/event/{canonical_id}")
+def basketball_event_detail(canonical_id: str):
+    """Single basketball event with score header + per-period scoring +
+    pre-match prediction. BSD-only — 365 fallback IDs return 404."""
+    import basketball_source as _bb
+    detail = _bb.get_basketball_event_detail(canonical_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="event not found or source has no detail endpoint")
+    return detail
+
+
+@app.get("/basketball/event/{canonical_id}/team-stats")
+def basketball_event_team_stats(canonical_id: str):
+    """Quarter-by-quarter team stats. BSD-only."""
+    import basketball_source as _bb
+    stats = _bb.get_basketball_team_stats(canonical_id)
+    if stats is None:
+        raise HTTPException(status_code=404, detail="team stats unavailable for this source")
+    return stats
+
+
+@app.get("/basketball/event/{canonical_id}/box-score")
+def basketball_event_box_score(canonical_id: str):
+    """Per-player stats for both teams. BSD-only."""
+    import basketball_source as _bb
+    box = _bb.get_basketball_box_score(canonical_id)
+    if box is None:
+        raise HTTPException(status_code=404, detail="box score unavailable for this source")
+    return box
+
+
+@app.get("/basketball/event/{canonical_id}/summary")
+def basketball_event_summary(canonical_id: str):
+    """Aggregated payload for the iOS BasketballSummaryView.
+
+    Fans out detail + team-stats + box-score in parallel and returns one
+    merged object. Mirrors `/soccer/match/{id}` so the iOS layer can fetch
+    everything in a single round-trip.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    import basketball_source as _bb
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        f_detail = pool.submit(_bb.get_basketball_event_detail, canonical_id)
+        f_stats  = pool.submit(_bb.get_basketball_team_stats, canonical_id)
+        f_box    = pool.submit(_bb.get_basketball_box_score, canonical_id)
+        detail = f_detail.result()
+        if detail is None:
+            raise HTTPException(status_code=404, detail="event not found")
+        team_stats = None
+        box_score = None
+        try:
+            team_stats = f_stats.result()
+        except Exception as exc:
+            logger.warning("team-stats failed for %s: %s", canonical_id, exc)
+        try:
+            box_score = f_box.result()
+        except Exception as exc:
+            logger.warning("box-score failed for %s: %s", canonical_id, exc)
+
+    # Stamp 365scores logo URLs onto the team objects in the detail so
+    # the iOS score header pulls from the same source as the schedule
+    # rows. BSD's team images are inconsistent (many NBA crests are 3 KB
+    # placeholders); 365 has a clean, uniform CDN across all leagues we
+    # cover.
+    if isinstance(detail, dict):
+        import bsd_basketball as _bsd
+        import basketball_source as _bb
+        slug_by_id = {v: k for k, v in _bsd.BSD_BASKETBALL_LEAGUE_IDS.items()}
+        league_id  = (detail.get("league") or {}).get("id")
+        slug       = slug_by_id.get(league_id)
+        if slug:
+            for key in ("home_team", "away_team"):
+                team = detail.get(key)
+                if isinstance(team, dict):
+                    team["logo"] = _bb._basketball_logo_url(
+                        slug, team.get("name"), team.get("id")
+                    )
+
+    # Normalize BSD player objects to a predictable schema so the mobile
+    # app doesn't need to guess BSD's internal field names.
+    if isinstance(box_score, dict):
+        for side in ("home_box", "away_box"):
+            raw_list = box_score.get(side)
+            if isinstance(raw_list, list):
+                box_score[side] = [_normalize_bsd_player(p) for p in raw_list]
+
+    return {
+        "id":         canonical_id,
+        "detail":     detail,
+        "team_stats": team_stats,
+        "box_score":  box_score,
+    }
+
+
+def _normalize_bsd_player(p: dict) -> dict:
+    """Normalize a raw BSD basketball player object to a stable schema.
+
+    BSD's box-score endpoint returns stats under various shapes across
+    league versions.  We probe all known variants so the mobile app can
+    always read `p.PTS`, `p.REB`, `p.minutes`, etc. without guessing.
+    """
+    def _v(*keys):
+        """Return the first non-None value found among `keys`.
+        Checks both top-level and nested under `stats`/`statistics`."""
+        stats_obj = p.get("stats") or p.get("statistics") or {}
+        for k in keys:
+            v = p.get(k)
+            if v is None:
+                v = stats_obj.get(k)
+            if v is not None:
+                return v
+        return None
+
+    def _num(*keys):
+        v = _v(*keys)
+        if v is None:
+            return None
+        try:
+            return int(float(v))
+        except (ValueError, TypeError):
+            return None
+
+    name = (_v("player_name", "name", "full_name") or
+            (p.get("athlete") or {}).get("display_name") or "")
+    pid  = str(_v("player_id", "id", "athlete_id") or "")
+    mins = str(_v("minutes", "min", "MIN", "time_played") or "0")
+
+    return {
+        "player_id":   pid,
+        "player_name": name,
+        "jersey":      str(_v("jersey_number", "jersey", "shirt_number") or ""),
+        "position":    str(_v("position", "pos") or ""),
+        "starter":     bool(_v("starter", "is_starter", "starting")),
+        "minutes":     mins,
+        "PTS": _num("PTS", "pts", "points"),
+        "REB": _num("REB", "reb", "rebounds", "total_rebounds", "totalRebounds"),
+        "AST": _num("AST", "ast", "assists"),
+        "STL": _num("STL", "stl", "steals"),
+        "BLK": _num("BLK", "blk", "blocks"),
+        "TO":  _num("TO",  "to",  "turnovers"),
+        "PF":  _num("PF",  "pf",  "fouls", "personal_fouls"),
+    }
+
+
+# ── Soccer endpoints (v3) ────────────────────────────────────────────────────
+
+
+def _yyyymmdd_to_iso(s: str | None) -> str | None:
+    """'20260517' → '2026-05-17'. Pass-through for already-ISO strings."""
+    if not s:
+        return None
+    s = s.strip()
+    if len(s) == 8 and s.isdigit():
+        return f"{s[0:4]}-{s[4:6]}-{s[6:8]}"
+    return s
+
+
+@app.get("/soccer/games")
+def soccer_games(
+    date: Optional[str] = None,
+    league: str = "premier_league",
+    tz: Optional[str] = None,
+):
+    """Return soccer matches for a given date (YYYYMMDD or YYYY-MM-DD) and league.
+    `league` is a slug from competition_map.json (premier_league, ucl, world_cup, etc.).
+    `tz` is an IANA timezone identifier (e.g. "Asia/Jerusalem") used to anchor
+    the calendar-day filter; defaults to UTC. iOS should send the device's
+    current timezone so "today" matches the user's local notion of today.
+    """
+    import soccer_source as _ss  # late import to avoid heavy startup if soccer deps missing
+    iso_date = _yyyymmdd_to_iso(date)
+    matches = _ss.get_soccer_matches(league, date_iso=iso_date, tz=tz)
+    return {"matches": matches, "league": league, "date": iso_date, "tz": tz}
+
+
+@app.get("/soccer/match/{canonical_id}")
+def soccer_match_detail(canonical_id: str):
+    """Full match payload including xG, momentum, shotmap, incidents.
+    `canonical_id` is the source-tagged id ('bsd-372' or 'sofa-14023956')
+    returned by /soccer/games.
+    """
+    import soccer_source as _ss
+    detail = _ss.get_soccer_match_detail(canonical_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="match not found")
+    return detail
+
+
+@app.get("/soccer/drama/{canonical_id}")
+def soccer_drama(canonical_id: str):
+    """Return the Drama Engine breakdown for a match. Debug + iOS Drama Meter.
+
+    Response shape:
+        {
+          "match_id": "bsd-372",
+          "minute": 78,
+          "drama": {"total": 7.4, "state": 3.6, "momentum": 2.83, "events": 0.0, "stakes": 1.15},
+          "match": {...slim match payload...}
+        }
+    """
+    import soccer_source as _ss
+    import drama_engine as _de
+    detail = _ss.get_soccer_match_detail(canonical_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="match not found")
+    ctx = _de.context_from_match_detail(detail)
+    score = _de.compute_drama(ctx)
+    return {
+        "match_id": detail.get("id"),
+        "minute":   detail.get("minute"),
+        "status":   detail.get("status"),
+        "drama":    score.as_dict(),
+        "match":    {
+            "home":        detail.get("home"),
+            "away":        detail.get("away"),
+            "competition": detail.get("competition"),
+            "round_name":  detail.get("round_name"),
+        },
+    }
+
+
+@app.get("/soccer/drama/{canonical_id}/timeline")
+def soccer_drama_timeline(canonical_id: str, step: int = 2):
+    """Retroactive per-minute Drama Engine timeline.
+
+    Reconstructs the match state at each minute (score, xG window,
+    momentum window, recent events) by replaying the immutable arrays
+    BSD returns (xg_per_minute, momentum, incidents) and runs the engine
+    over each rebuilt context. No DB persistence — recomputed on demand.
+
+    `step` controls minute granularity (default 2, max 5).
+
+    Response: { match_id, timeline: [{m, drama, state, momentum, events, stakes}] }
+    """
+    import soccer_source as _ss
+    import drama_engine as _de
+    detail = _ss.get_soccer_match_detail(canonical_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="match not found")
+    step = max(1, min(5, step))
+    timeline = _de.compute_drama_timeline(detail, step=step)
+    return {"match_id": detail.get("id"), "timeline": timeline}
+
+
+@app.get("/soccer/match/{canonical_id}/lineups")
+def soccer_match_lineups(canonical_id: str):
+    """Confirmed / predicted lineups for a soccer match.
+    Only BSD-sourced matches have lineups; non-BSD ids return lineup_status=unavailable.
+    """
+    if not canonical_id.startswith("bsd-"):
+        return {"lineup_status": "unavailable", "lineups": None, "event_id": None}
+    try:
+        event_id = int(canonical_id[4:])
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid canonical_id format")
+    import bzzoiro_adapter as _bsd_soccer
+    result = _bsd_soccer.event_lineups(event_id)
+    if result is None:
+        return {"lineup_status": "unavailable", "lineups": None, "event_id": event_id}
+    return _normalize_lineups(result)
+
+
+def _normalize_lineups(raw: dict) -> dict:
+    """Ensure every lineup player has an `ai_score` key that iOS expects.
+    BSD may return the rating as 'rating', 'score', 'ai_score', etc.
+    """
+    def _fix_players(players: list) -> list:
+        out = []
+        for p in (players or []):
+            score = (p.get("ai_score") or p.get("rating") or p.get("score")
+                     or p.get("performance_score") or p.get("match_rating"))
+            try:
+                score = float(score) if score is not None else None
+            except (TypeError, ValueError):
+                score = None
+            out.append({**p, "ai_score": score})
+        return out
+
+    def _fix_side(side: dict) -> dict:
+        if not isinstance(side, dict):
+            return side
+        return {
+            **side,
+            "players":     _fix_players(side.get("players", [])),
+            "substitutes": _fix_players(side.get("substitutes", [])),
+        }
+
+    lineups = raw.get("lineups") or {}
+    if isinstance(lineups, dict) and ("home" in lineups or "away" in lineups):
+        raw = {
+            **raw,
+            "lineups": {
+                **lineups,
+                "home": _fix_side(lineups.get("home", {})),
+                "away": _fix_side(lineups.get("away", {})),
+            }
+        }
+    return raw
+
+
+@app.get("/soccer/league/{slug}/standings")
+def soccer_league_standings(slug: str):
+    """Current league table for a soccer league slug (e.g. premier_league)."""
+    from score365_soccer_adapter import BSD_COMPETITION_IDS
+    league_id = BSD_COMPETITION_IDS.get(slug)
+    if league_id is None:
+        raise HTTPException(status_code=404, detail=f"No BSD standings for league '{slug}'")
+    import bzzoiro_adapter as _bsd_soccer
+    try:
+        raw = _bsd_soccer.league_standings(league_id)
+    except Exception as exc:
+        logger.warning("soccer standings error for %s: %s", slug, exc)
+        raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
+    if raw is None:
+        raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
+    return _normalize_soccer_standings(raw, league_id)
+
+
+def _normalize_soccer_standings(raw: dict, league_id: int) -> dict:
+    season_raw = raw.get("season") or {}
+    rows = raw.get("standings") or raw.get("table") or raw.get("rows") or []
+    out = []
+    for row in rows:
+        team = row.get("team") if isinstance(row.get("team"), dict) else {}
+        tid  = team.get("id") or row.get("team_id") or row.get("id") or 0
+        name = team.get("name") or row.get("team_name") or ""
+        gf   = _i(row, "goals_for",       "gf",  "scored",         "goals_scored")
+        ga   = _i(row, "goals_against",    "ga",  "conceded",       "goals_conceded")
+        gd   = _i(row, "goal_difference",  "gd") or (gf - ga)
+        out.append({
+            "position":   _i(row, "position", "rank"),
+            "team_id":    tid,
+            "team_name":  name,
+            "team_crest": f"https://sports.bzzoiro.com/img/team/{tid}/" if tid else None,
+            "played":     _i(row, "played", "matches", "games_played"),
+            "won":        _i(row, "won",    "wins",    "w"),
+            "drawn":      _i(row, "drawn",  "draws",   "d"),
+            "lost":       _i(row, "lost",   "losses",  "l"),
+            "gf": gf, "ga": ga, "gd": gd,
+            "pts":        _i(row, "points", "pts"),
+            "form":       row.get("form"),
+            "live":       row.get("live"),
+        })
+    return {
+        "league_id": league_id,
+        "season":    {"id": season_raw.get("id") or 0, "name": season_raw.get("name") or ""},
+        "grouped":   bool(raw.get("grouped", False)),
+        "standings": out,
+    }
+
+
+def _i(d: dict, *keys: str) -> int:
+    for k in keys:
+        v = d.get(k)
+        if v is not None:
+            try: return int(v)
+            except (TypeError, ValueError): pass
+    return 0
+
+
+@app.get("/basketball/league/{slug}/standings")
+def basketball_league_standings(slug: str):
+    """Current standings for a basketball league slug (e.g. nba, euroleague)."""
+    import bsd_basketball as _bsd_bb
+    league_id = _bsd_bb.slug_to_league_id(slug)
+    if league_id is None:
+        raise HTTPException(status_code=404, detail=f"No BSD standings for basketball league '{slug}'")
+    try:
+        raw = _bsd_bb.league_standings(league_id)
+    except Exception as exc:
+        logger.warning("basketball standings error for %s: %s", slug, exc)
+        raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
+    if raw is None:
+        raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
+    return _normalize_basketball_standings(raw, league_id, slug)
+
+
+def _normalize_basketball_standings(raw: dict, league_id: int, slug: str) -> dict:
+    league_raw  = raw.get("league") or {}
+    season_raw  = raw.get("season") or {}
+    rows = raw.get("standings") or raw.get("results") or raw.get("table") or []
+    if isinstance(rows, dict):
+        rows = rows.get("results") or []
+
+    out = []
+    for i, row in enumerate(rows, start=1):
+        team = row.get("team") if isinstance(row.get("team"), dict) else {}
+        tid  = team.get("id") or row.get("team_id") or 0
+        name = team.get("name") or row.get("team_name") or ""
+        short_name = (team.get("abbreviation") or team.get("short_name")
+                      or team.get("code") or None)
+        wins    = _i(row, "wins",   "win", "w")
+        losses  = _i(row, "losses", "loss", "l")
+        matches = wins + losses or _i(row, "matches", "games", "games_played", "gp")
+        pct_raw = (row.get("win_percentage") or row.get("percentage") or row.get("pct"))
+        try:
+            pct = float(pct_raw) if pct_raw is not None else None
+        except (TypeError, ValueError):
+            pct = None
+        sf  = _i(row, "points_scored",  "points_for",     "pf") or None
+        sa  = _i(row, "points_allowed", "points_against",  "pa") or None
+        out.append({
+            "team": {"id": tid, "name": name, "short_name": short_name},
+            "position":       _i(row, "position", "rank", "standing") or i,
+            "matches":        matches,
+            "wins":           wins,
+            "losses":         losses,
+            "percentage":     pct,
+            "scores_for":     sf,
+            "scores_against": sa,
+        })
+    return {
+        "league":  {"id": league_raw.get("id") or league_id,
+                    "name": league_raw.get("name") or slug.upper().replace("_", " ")},
+        "season":  {"id": season_raw.get("id") or 0,
+                    "name": season_raw.get("name") or ""},
+        "standings": out,
+    }
+
+
+@app.get("/soccer/live")
+def soccer_live(leagues: Optional[str] = None):
+    """All currently-live soccer matches across requested leagues
+    (comma-separated slugs). Defaults to all 10 tracked competitions.
+    """
+    import soccer_source as _ss
+    league_slugs = leagues.split(",") if leagues else None
+    return {"matches": _ss.get_live_matches(league_slugs)}
+
+
+# ── Soccer alarm CRUD ────────────────────────────────────────────────────────
+
+# alarm_type values accepted by the API. Keep in sync with the iOS SoccerAlarmType
+# enum and the soccer_monitor evaluator.
+_SOCCER_ALARM_TYPES = {
+    "match",          # single-match alarm — config carries the condition
+    "late_drama",     # any tracked match, ≥75', score within 1
+    "knockout_et",    # any tracked knockout match entering ET or pens
+    "comeback",       # favorite team trailing, score brought within 1
+    "hat_trick",      # legacy — superseded by player_alert with hat_trick_watch=True
+    "red_card",       # red card in close match in last 20 min
+    "big_chance",     # 3+ big chances in last 10 min, score within 1
+    "penalty",        # penalty awarded in any tracked match
+    "drama_radar",    # Drama Engine threshold
+    "player_alert",   # per-player goal/card/hattrick watch (config carries toggles)
+}
+
+
+class SoccerAlarmRequest(BaseModel):
+    user_token: str
+    alarm_type: str
+    match_id: Optional[str] = None       # canonical id ('bsd-372') — required for 'match' type
+    competition_id: Optional[str] = None # slug — used by radar-style alarms to scope
+    player_id: Optional[str] = None      # for hat_trick
+    threshold: Optional[float] = None    # interpretation depends on alarm_type
+    config: Optional[dict] = None        # alarm-type-specific overrides
+    alert_type: str = "alarm"            # 'alarm' | 'silent'
+
+
+@app.post("/soccer-alarm")
+def soccer_alarm_create(req: SoccerAlarmRequest):
+    """Create a soccer alarm. Returns the row id for later deletion."""
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Database not configured.")
+    if not req.user_token.strip():
+        raise HTTPException(status_code=400, detail="user_token is required.")
+    if req.alarm_type not in _SOCCER_ALARM_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"alarm_type must be one of: {sorted(_SOCCER_ALARM_TYPES)}",
+        )
+    if req.alarm_type == "match" and not req.match_id:
+        raise HTTPException(status_code=400, detail="match_id is required for alarm_type='match'.")
+    if req.alarm_type in ("hat_trick", "player_alert") and not req.player_id:
+        raise HTTPException(status_code=400, detail=f"player_id is required for alarm_type='{req.alarm_type}'.")
+
+    with Session(engine) as session:
+        # Idempotency: if an active alarm already exists for the same (user, type, match, player),
+        # update it in place rather than stacking duplicates.
+        existing = session.query(SoccerAlarmDB).filter(
+            SoccerAlarmDB.user_token == req.user_token,
+            SoccerAlarmDB.alarm_type == req.alarm_type,
+            SoccerAlarmDB.match_id == req.match_id,
+            SoccerAlarmDB.player_id == req.player_id,
+            SoccerAlarmDB.is_active.is_(True),
+        ).first()
+        if existing:
+            existing.competition_id = req.competition_id
+            existing.threshold      = req.threshold
+            existing.config         = req.config or {}
+            existing.alert_type     = req.alert_type
+            session.commit()
+            session.refresh(existing)
+            alarm_id = existing.id
+            created = False
+        else:
+            alarm = SoccerAlarmDB(
+                user_token=req.user_token,
+                alarm_type=req.alarm_type,
+                match_id=req.match_id,
+                competition_id=req.competition_id,
+                player_id=req.player_id,
+                threshold=req.threshold,
+                config=req.config or {},
+                alert_type=req.alert_type,
+                is_active=True,
+            )
+            session.add(alarm)
+            session.commit()
+            session.refresh(alarm)
+            alarm_id = alarm.id
+            created = True
+
+    return {
+        "status": "alarm_set" if created else "alarm_updated",
+        "alarm_id": alarm_id,
+        "alarm_type": req.alarm_type,
+        "match_id": req.match_id,
+    }
+
+
+@app.delete("/soccer-alarm/{alarm_id}")
+def soccer_alarm_delete(alarm_id: int, user_token: str = ""):
+    """Deactivate a soccer alarm. Requires the same user_token that created it."""
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Database not configured.")
+    if not user_token.strip():
+        raise HTTPException(status_code=400, detail="user_token is required.")
+    with Session(engine) as session:
+        alarm = session.query(SoccerAlarmDB).filter(
+            SoccerAlarmDB.id == alarm_id,
+            SoccerAlarmDB.user_token == user_token,
+        ).first()
+        if alarm is None:
+            raise HTTPException(status_code=404, detail="alarm not found.")
+        alarm.is_active = False
+        session.commit()
+    return {"status": "alarm_deactivated", "alarm_id": alarm_id}
+
+
+@app.get("/soccer-alarms")
+def soccer_alarms_list(user_token: str = ""):
+    """List a user's soccer alarms (active + recently-fired)."""
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Database not configured.")
+    if not user_token.strip():
+        raise HTTPException(status_code=400, detail="user_token is required.")
+    with Session(engine) as session:
+        rows = session.query(SoccerAlarmDB).filter(
+            SoccerAlarmDB.user_token == user_token
+        ).order_by(SoccerAlarmDB.created_at.desc()).limit(100).all()
+        out = [{
+            "id": r.id,
+            "alarm_type": r.alarm_type,
+            "match_id": r.match_id,
+            "competition_id": r.competition_id,
+            "player_id": r.player_id,
+            "threshold": r.threshold,
+            "config": r.config or {},
+            "alert_type": r.alert_type,
+            "is_active": r.is_active,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "fired_at": r.fired_at.isoformat() if r.fired_at else None,
+        } for r in rows]
+    return {"alarms": out}
+
+
+# ── Soccer Favorites CRUD ────────────────────────────────────────────────────
+# Persistent player / team / competition watch lists. Players & teams power
+# event-driven alerts (hat-trick, red card, etc.); competitions scope the
+# Drama Radar (P3). All endpoints are idempotent — POST upserts by PK.
+
+class SoccerFavoritePlayerRequest(BaseModel):
+    user_token: str
+    player_id: str
+    player_name: Optional[str] = None
+    team_id: Optional[str] = None
+    config: Optional[dict] = None
+    alert_type: str = "alarm"
+    paused: bool = False
+
+
+class SoccerFavoriteTeamRequest(BaseModel):
+    user_token: str
+    team_id: str
+    team_name: Optional[str] = None
+    competition_id: Optional[str] = None
+    team_ids: list[str] = []          # all provider ids for this club (incl. primary)
+    competitions: list[str] = []      # all leagues this club plays in
+    drama_threshold: float = 7.0
+    alert_type: str = "alarm"
+    paused: bool = False
+    notify_at_kickoff: bool = False
+
+
+class SoccerFavoriteCompetitionRequest(BaseModel):
+    user_token: str
+    competition_id: str
+    drama_threshold: float = 7.0
+
+
+def _require_token(user_token: str) -> None:
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Database not configured.")
+    if not user_token.strip():
+        raise HTTPException(status_code=400, detail="user_token is required.")
+
+
+# ─── Players ────────────────────────────────────────────────────────────────
+
+@app.post("/soccer/favorites/players")
+def soccer_fav_player_upsert(req: SoccerFavoritePlayerRequest):
+    _require_token(req.user_token)
+    with Session(engine) as session:
+        row = session.get(SoccerFavoritePlayerDB, (req.user_token, req.player_id))
+        if row is None:
+            row = SoccerFavoritePlayerDB(
+                user_token=req.user_token,
+                player_id=req.player_id,
+            )
+            session.add(row)
+        row.player_name = req.player_name
+        row.team_id     = req.team_id
+        row.config      = req.config or {}
+        row.alert_type  = req.alert_type
+        row.paused      = req.paused
+        session.commit()
+    return {"status": "ok", "player_id": req.player_id}
+
+
+@app.delete("/soccer/favorites/players/{player_id}")
+def soccer_fav_player_delete(player_id: str, user_token: str = ""):
+    _require_token(user_token)
+    with Session(engine) as session:
+        row = session.get(SoccerFavoritePlayerDB, (user_token, player_id))
+        if row is None:
+            raise HTTPException(status_code=404, detail="favorite player not found.")
+        session.delete(row)
+        session.commit()
+    return {"status": "deleted", "player_id": player_id}
+
+
+@app.get("/soccer/favorites/players")
+def soccer_fav_players_list(user_token: str = ""):
+    _require_token(user_token)
+    with Session(engine) as session:
+        rows = session.query(SoccerFavoritePlayerDB).filter(
+            SoccerFavoritePlayerDB.user_token == user_token,
+        ).order_by(SoccerFavoritePlayerDB.created_at.desc()).all()
+        out = [{
+            "player_id":   r.player_id,
+            "player_name": r.player_name,
+            "team_id":     r.team_id,
+            "config":      r.config or {},
+            "alert_type":  r.alert_type,
+            "paused":      r.paused,
+            "created_at":  r.created_at.isoformat() if r.created_at else None,
+        } for r in rows]
+    return {"players": out}
+
+
+# ─── Teams ──────────────────────────────────────────────────────────────────
+
+@app.post("/soccer/favorites/teams")
+def soccer_fav_team_upsert(req: SoccerFavoriteTeamRequest):
+    _require_token(req.user_token)
+    alt_ids = [tid for tid in dict.fromkeys(req.team_ids) if tid and tid != req.team_id]
+    comps   = [c for c in dict.fromkeys(req.competitions) if c]
+    if not comps and req.competition_id:
+        comps = [req.competition_id]
+    with Session(engine) as session:
+        row = session.get(SoccerFavoriteTeamDB, (req.user_token, req.team_id))
+        if row is None:
+            row = SoccerFavoriteTeamDB(
+                user_token=req.user_token,
+                team_id=req.team_id,
+            )
+            session.add(row)
+        row.team_name         = req.team_name
+        row.competition_id    = req.competition_id
+        row.alt_team_ids      = ",".join(alt_ids) or None
+        row.competitions      = ",".join(comps) or None
+        row.drama_threshold   = req.drama_threshold
+        row.alert_type        = req.alert_type
+        row.paused            = req.paused
+        row.notify_at_kickoff = req.notify_at_kickoff
+        session.commit()
+    return {"status": "ok", "team_id": req.team_id}
+
+
+@app.delete("/soccer/favorites/teams/{team_id}")
+def soccer_fav_team_delete(team_id: str, user_token: str = ""):
+    _require_token(user_token)
+    with Session(engine) as session:
+        row = session.get(SoccerFavoriteTeamDB, (user_token, team_id))
+        if row is None:
+            raise HTTPException(status_code=404, detail="favorite team not found.")
+        session.delete(row)
+        session.commit()
+    return {"status": "deleted", "team_id": team_id}
+
+
+@app.get("/soccer/favorites/teams")
+def soccer_fav_teams_list(user_token: str = ""):
+    _require_token(user_token)
+    with Session(engine) as session:
+        rows = session.query(SoccerFavoriteTeamDB).filter(
+            SoccerFavoriteTeamDB.user_token == user_token,
+        ).order_by(SoccerFavoriteTeamDB.created_at.desc()).all()
+        out = []
+        for r in rows:
+            alt_ids = [t for t in (r.alt_team_ids or "").split(",") if t]
+            comps   = [c for c in (r.competitions or "").split(",") if c]
+            if not comps and r.competition_id:
+                comps = [r.competition_id]
+            out.append({
+                "team_id":           r.team_id,
+                "team_ids":          [r.team_id] + alt_ids,
+                "team_name":         r.team_name,
+                "competition_id":    r.competition_id,
+                "competitions":      comps,
+                "drama_threshold":   r.drama_threshold,
+                "alert_type":        r.alert_type,
+                "paused":            r.paused,
+                "notify_at_kickoff": r.notify_at_kickoff,
+                "created_at":        r.created_at.isoformat() if r.created_at else None,
+            })
+    return {"teams": out}
+
+
+# ─── Competitions ───────────────────────────────────────────────────────────
+
+@app.post("/soccer/favorites/competitions")
+def soccer_fav_competition_upsert(req: SoccerFavoriteCompetitionRequest):
+    _require_token(req.user_token)
+    with Session(engine) as session:
+        row = session.get(SoccerFavoriteCompetitionDB, (req.user_token, req.competition_id))
+        if row is None:
+            row = SoccerFavoriteCompetitionDB(
+                user_token=req.user_token,
+                competition_id=req.competition_id,
+            )
+            session.add(row)
+        row.drama_threshold = req.drama_threshold
+        session.commit()
+    return {"status": "ok", "competition_id": req.competition_id}
+
+
+@app.delete("/soccer/favorites/competitions/{competition_id}")
+def soccer_fav_competition_delete(competition_id: str, user_token: str = ""):
+    _require_token(user_token)
+    with Session(engine) as session:
+        row = session.get(SoccerFavoriteCompetitionDB, (user_token, competition_id))
+        if row is None:
+            raise HTTPException(status_code=404, detail="favorite competition not found.")
+        session.delete(row)
+        session.commit()
+    return {"status": "deleted", "competition_id": competition_id}
+
+
+@app.get("/soccer/favorites/competitions")
+def soccer_fav_competitions_list(user_token: str = ""):
+    _require_token(user_token)
+    with Session(engine) as session:
+        rows = session.query(SoccerFavoriteCompetitionDB).filter(
+            SoccerFavoriteCompetitionDB.user_token == user_token,
+        ).order_by(SoccerFavoriteCompetitionDB.created_at.desc()).all()
+        out = [{
+            "competition_id":  r.competition_id,
+            "drama_threshold": r.drama_threshold,
+            "created_at":      r.created_at.isoformat() if r.created_at else None,
+        } for r in rows]
+    return {"competitions": out}
+
+
+# ─── Combined fetch (one round-trip from iOS) ───────────────────────────────
+
+@app.get("/soccer/favorites")
+def soccer_favorites_all(user_token: str = ""):
+    _require_token(user_token)
+    return {
+        "players":      soccer_fav_players_list(user_token=user_token)["players"],
+        "teams":        soccer_fav_teams_list(user_token=user_token)["teams"],
+        "competitions": soccer_fav_competitions_list(user_token=user_token)["competitions"],
+    }
 
 
 # ── EPG (TV Broadcast Guide) ─────────────────────────────────────────────────
@@ -1992,12 +3094,55 @@ def roster(game_id: str):
 
 @app.get("/game-summary")
 def game_summary(gameId: str, date: Optional[str] = None, league: Optional[str] = None):
-    return fetch_game_summary_roster(gameId, date=date, league=league)
+    roster = fetch_game_summary_roster(gameId, date=date, league=league)
+
+    # Attach live boxscore (player stats) to the response.
+    # fetch_player_boxscore is cached 55s so this adds negligible overhead.
+    boxscore_data: list[dict] | None = None
+    try:
+        from score365_adapter import fetch_player_boxscore as _fetch_bs
+        raw = _fetch_bs(gameId)
+        log.info("game-summary: boxscore for %s: is_truthy=%s", gameId, bool(raw))
+        if raw:
+            stat_names = ["MIN", "FG", "3PT", "FT", "REB", "AST", "STL", "BLK", "TO", "PF", "PTS", "3PM"]
+            boxscore_data = []
+            for section in raw.get("boxscore", {}).get("players", []):
+                team_id = section.get("team", {}).get("id", "")
+                players_out = []
+                for ath in section.get("statistics", [{}])[0].get("athletes", []):
+                    vals = ath.get("stats", [])
+                    stats_dict = dict(zip(stat_names, vals)) if len(vals) == len(stat_names) else {}
+                    players_out.append({
+                        "id":      ath.get("athlete", {}).get("id", ""),
+                        "name":    ath.get("athlete", {}).get("displayName", ""),
+                        "starter": ath.get("starter", False),
+                        "stats":   stats_dict,
+                    })
+                boxscore_data.append({"team_id": team_id, "players": players_out})
+    except Exception as exc:
+        log.warning("game-summary: boxscore fetch EXCEPTION for %s: %r", gameId, exc)
+
+    roster["boxscore"] = boxscore_data
+    return roster
 
 
 @app.get("/all-teams-and-players")
 def all_teams_and_players():
     return {"teams": get_all_teams()}
+
+
+@app.get("/search")
+def search_endpoint(q: str = "", limit: int = 10):
+    """Free-text search across teams, leagues, and players.
+
+    Used by the iOS top-bar search overlay. Scores in-process against
+    the basketball roster cache and the soccer team accumulator (which
+    is seeded as soccer matches are fetched). Static league catalog is
+    always searchable regardless of cache state.
+    """
+    import search_index as _si
+    limit = max(1, min(20, int(limit)))
+    return _si.search(q or "", limit=limit)
 
 
 @app.get("/refresh-rosters")
@@ -2015,6 +3160,7 @@ def active_monitors(user_token: str = ""):
         "game_alarms":   [],
         "player_alarms": [],
         "db_alarms":     [],
+        "soccer_alarms": [],
         "global_radar":  {"enabled": False, "running": False, "max_diff": 5, "start_quarter": 4},
         "favorite_teams":   [],
         "favorite_players": {},
@@ -2118,10 +3264,87 @@ def active_monitors(user_token: str = ""):
                 log.error("DB error in active_monitors query: %s", db_err)
                 # Degrade gracefully — return whatever was built before the error
 
+        # v3 soccer alarms — best-effort; never break the basketball path
+        soccer_alarms: list[dict] = []
+        if engine is not None and user_token:
+            try:
+                with Session(engine) as session:
+                    rows = (
+                        session.query(SoccerAlarmDB)
+                               .filter(SoccerAlarmDB.user_token == user_token,
+                                       SoccerAlarmDB.is_active.is_(True))
+                               .order_by(SoccerAlarmDB.created_at.desc())
+                               .limit(50)
+                               .all()
+                    )
+                    soccer_alarms = [
+                        {
+                            "id":             r.id,
+                            "alarm_type":     r.alarm_type,
+                            "match_id":       r.match_id,
+                            "competition_id": r.competition_id,
+                            "player_id":      r.player_id,
+                            "threshold":      r.threshold,
+                            "alert_type":     r.alert_type,
+                            "is_active":      r.is_active,
+                            "config":         r.config or {},
+                            "fired_at":       r.fired_at.isoformat() if r.fired_at else None,
+                        }
+                        for r in rows
+                    ]
+            except Exception as soccer_err:
+                log.warning("DB error fetching soccer alarms: %s", soccer_err)
+
+        # v3 soccer favorites — best-effort; failure must not break basketball
+        soccer_fav_players: list[dict] = []
+        soccer_fav_teams: list[dict]   = []
+        soccer_fav_comps: list[dict]   = []
+        if engine is not None and user_token:
+            try:
+                with Session(engine) as session:
+                    p_rows = (session.query(SoccerFavoritePlayerDB)
+                                     .filter(SoccerFavoritePlayerDB.user_token == user_token)
+                                     .all())
+                    soccer_fav_players = [{
+                        "player_id":   r.player_id,
+                        "player_name": r.player_name,
+                        "team_id":     r.team_id,
+                        "config":      r.config or {},
+                        "alert_type":  r.alert_type,
+                        "paused":      r.paused,
+                    } for r in p_rows]
+
+                    t_rows = (session.query(SoccerFavoriteTeamDB)
+                                     .filter(SoccerFavoriteTeamDB.user_token == user_token)
+                                     .all())
+                    soccer_fav_teams = [{
+                        "team_id":           r.team_id,
+                        "team_name":         r.team_name,
+                        "competition_id":    r.competition_id,
+                        "drama_threshold":   r.drama_threshold,
+                        "alert_type":        r.alert_type,
+                        "paused":            r.paused,
+                        "notify_at_kickoff": r.notify_at_kickoff,
+                    } for r in t_rows]
+
+                    c_rows = (session.query(SoccerFavoriteCompetitionDB)
+                                     .filter(SoccerFavoriteCompetitionDB.user_token == user_token)
+                                     .all())
+                    soccer_fav_comps = [{
+                        "competition_id":  r.competition_id,
+                        "drama_threshold": r.drama_threshold,
+                    } for r in c_rows]
+            except Exception as fav_err:
+                log.warning("DB error fetching soccer favorites: %s", fav_err)
+
         return {
             "game_alarms":   game_alarms,
             "player_alarms": player_alarms,
             "db_alarms":     db_alarms,
+            "soccer_alarms": soccer_alarms,
+            "soccer_favorite_players":      soccer_fav_players,
+            "soccer_favorite_teams":        soccer_fav_teams,
+            "soccer_favorite_competitions": soccer_fav_comps,
             "global_radar": {
                 **radar_cfg,
                 "running": get_radar_status(),   # live thread status — not stored in DB
