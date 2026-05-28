@@ -2213,7 +2213,17 @@ def basketball_event_summary(canonical_id: str):
         for side in ("home_box", "away_box"):
             raw_list = box_score.get(side)
             if isinstance(raw_list, list):
-                box_score[side] = [_normalize_bsd_player(p) for p in raw_list]
+                if raw_list:
+                    logger.info("bsd_box_player_sample canonical=%s side=%s player=%s",
+                                canonical_id, side, str(raw_list[0])[:600])
+                normalized = []
+                for player in raw_list:
+                    try:
+                        normalized.append(_normalize_bsd_player(player))
+                    except Exception as exc:
+                        logger.warning("bsd player normalize error: %s | raw=%s", exc, str(player)[:200])
+                        normalized.append(player)   # return raw on error
+                box_score[side] = normalized
 
     return {
         "id":         canonical_id,
@@ -2232,8 +2242,18 @@ def _normalize_bsd_player(p: dict) -> dict:
     """
     def _v(*keys):
         """Return the first non-None value found among `keys`.
-        Checks both top-level and nested under `stats`/`statistics`."""
-        stats_obj = p.get("stats") or p.get("statistics") or {}
+        Checks top-level and nested under `stats`/`statistics` (dict or
+        list-of-{name,value} shapes both handled).
+        """
+        raw_stats = p.get("stats") or p.get("statistics")
+        # Convert list-of-dicts [{name,value}] → plain dict
+        if isinstance(raw_stats, list):
+            stats_obj: dict = {item.get("name", ""): item.get("value")
+                               for item in raw_stats if isinstance(item, dict)}
+        elif isinstance(raw_stats, dict):
+            stats_obj = raw_stats
+        else:
+            stats_obj = {}
         for k in keys:
             v = p.get(k)
             if v is None:
