@@ -337,6 +337,54 @@ def _s365_box_score(native: str) -> dict | None:
     }
 
 
+def get_s365_basketball_standings(slug: str) -> dict | None:
+    """365scores standings for basketball leagues BSD doesn't cover (Winner
+    League, BCL, etc.) — shaped to match the iOS BasketballStandings model."""
+    comp_id = s365.COMPETITION_IDS.get(slug)
+    if not comp_id:
+        return None
+    try:
+        from score365.client import Client365
+        with Client365() as client:
+            data = client.get("/standings/", params={"competitions": str(comp_id)})
+    except Exception as exc:
+        logger.warning("s365 basketball standings failed for %s: %s", slug, exc)
+        return None
+    stages = (data or {}).get("standings") or []
+    if not stages:
+        return None
+    stage = stages[0]
+    rows_out: list[dict] = []
+    for i, row in enumerate(stage.get("rows", []) or [], start=1):
+        comp = row.get("competitor") or {}
+        played = _s365_int(row.get("gamePlayed"))
+        wins   = _s365_int(row.get("gamesWon"))
+        losses = _s365_int(row.get("gamesLost"))
+        try:
+            pct = float(row.get("pct")) if row.get("pct") is not None else (
+                round(wins / played, 3) if played else None
+            )
+        except (TypeError, ValueError):
+            pct = None
+        rows_out.append({
+            "team": {"id": comp.get("id") or 0,
+                     "name": comp.get("name") or "",
+                     "short_name": comp.get("symbolicName")},
+            "position":       _s365_int(row.get("position")) or i,
+            "matches":        played or 0,
+            "wins":           wins or 0,
+            "losses":         losses or 0,
+            "percentage":     pct,
+            "scores_for":     _s365_int(row.get("for")),
+            "scores_against": _s365_int(row.get("against")),
+        })
+    return {
+        "league":    {"id": comp_id, "name": stage.get("displayName") or slug.upper().replace("_", " ")},
+        "season":    {"id": stage.get("seasonNum") or 0, "name": ""},
+        "standings": rows_out,
+    }
+
+
 def _s365_team_stats(native: str) -> dict | None:
     """Aggregate the 365 box score into team totals, shaped like BSD's
     team-stats payload. Nested group/item keys are camelCase to match the

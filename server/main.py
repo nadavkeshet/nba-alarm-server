@@ -2501,16 +2501,21 @@ def basketball_league_standings(slug: str):
     """Current standings for a basketball league slug (e.g. nba, euroleague)."""
     import bsd_basketball as _bsd_bb
     league_id = _bsd_bb.slug_to_league_id(slug)
-    if league_id is None:
-        raise HTTPException(status_code=404, detail=f"No BSD standings for basketball league '{slug}'")
-    try:
-        raw = _bsd_bb.league_standings(league_id)
-    except Exception as exc:
-        logger.warning("basketball standings error for %s: %s", slug, exc)
-        raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
-    if raw is None:
-        raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
-    return _normalize_basketball_standings(raw, league_id, slug)
+    if league_id is not None:
+        try:
+            raw = _bsd_bb.league_standings(league_id)
+        except Exception as exc:
+            logger.warning("basketball standings error for %s: %s", slug, exc)
+            raw = None
+        if raw is not None:
+            return _normalize_basketball_standings(raw, league_id, slug)
+    # 365scores fallback (Winner League, BCL — leagues BSD doesn't cover, plus a
+    # safety net if BSD upstream is down for a covered league).
+    import basketball_source as _bb
+    s365_result = _bb.get_s365_basketball_standings(slug)
+    if s365_result is not None:
+        return s365_result
+    raise HTTPException(status_code=404, detail=f"No standings available for basketball league '{slug}'")
 
 
 def _normalize_basketball_standings(raw: dict, league_id: int, slug: str) -> dict:
@@ -2713,6 +2718,9 @@ class SoccerFavoritePlayerRequest(BaseModel):
     player_id: str
     player_name: Optional[str] = None
     team_id: Optional[str] = None
+    # Alt provider ids for this player. The upsert handler reads it; without
+    # this field the endpoint 500'd because clients (iOS) don't send it.
+    team_ids: Optional[list[str]] = None
     config: Optional[dict] = None
     alert_type: str = "alarm"
     paused: bool = False
@@ -2758,7 +2766,7 @@ def soccer_fav_player_upsert(req: SoccerFavoritePlayerRequest):
             )
             session.add(row)
         row.player_name = req.player_name
-        alt_ids = [tid for tid in dict.fromkeys(req.team_ids) if tid and tid != req.team_id]
+        alt_ids = [tid for tid in dict.fromkeys(req.team_ids or []) if tid and tid != req.team_id]
         row.team_id     = req.team_id
         row.alt_team_ids = ",".join(alt_ids) or None
         row.config      = req.config or {}

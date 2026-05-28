@@ -253,7 +253,9 @@ def event_pregame(event_id: int) -> dict | None:
 # Convenience helpers used by basketball_source.py
 
 def league_standings(league_id: int) -> dict | None:
-    return _cached_get("league_standings", f"/leagues/{league_id}/standings/", None, league_id)
+    # BSD moved standings off the per-league path; it's now a top-level
+    # endpoint that takes `league` as a query param.
+    return _cached_get("league_standings", "/standings/", {"league": league_id}, league_id)
 
 
 def slug_to_league_id(slug: str) -> int | None:
