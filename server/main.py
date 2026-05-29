@@ -2217,11 +2217,61 @@ def basketball_event_summary(canonical_id: str):
                         slug, team.get("name"), team.get("id")
                     )
 
+    # Normalize BSD player objects to a predictable schema so the mobile
+    # app doesn't need to guess BSD's internal field names.
+    if isinstance(box_score, dict):
+        logger.info("bsd_box_raw canonical=%s keys=%s sample=%s",
+                    canonical_id, list(box_score.keys()), str(box_score)[:500])
+        for side in ("home_box", "away_box"):
+            raw_list = box_score.get(side)
+            if isinstance(raw_list, list):
+                if raw_list:
+                    logger.info("bsd_box_player_sample canonical=%s side=%s player=%s",
+                                canonical_id, side, str(raw_list[0])[:600])
+                normalized = []
+                for player in raw_list:
+                    try:
+                        normalized.append(_normalize_bsd_player(player))
+                    except Exception as exc:
+                        logger.warning("bsd player normalize error: %s | raw=%s", exc, str(player)[:200])
+                        normalized.append(player)
+                box_score[side] = normalized
+
     return {
         "id":         canonical_id,
         "detail":     detail,
         "team_stats": team_stats,
         "box_score":  box_score,
+    }
+
+
+def _normalize_bsd_player(p: dict) -> dict:
+    """Map a raw BSD basketball box-score player to a stable schema.
+
+    BSD field names (confirmed from iOS BasketballBoxPlayer CodingKeys):
+      name, player_id, jersey_number, position, is_starter, minutes (Double),
+      points, rebounds, assists, steals, blocks, turnovers, personal_fouls.
+    """
+    raw_mins = p.get("minutes") or 0
+    try:
+        mins_int = int(float(raw_mins))
+    except (ValueError, TypeError):
+        mins_int = 0
+
+    return {
+        "player_id":   str(p.get("player_id") or ""),
+        "player_name": p.get("name") or "",
+        "jersey":      str(p.get("jersey_number") or ""),
+        "position":    str(p.get("position") or ""),
+        "starter":     bool(p.get("is_starter")),
+        "minutes":     str(mins_int),
+        "PTS": p.get("points"),
+        "REB": p.get("rebounds"),
+        "AST": p.get("assists"),
+        "STL": p.get("steals"),
+        "BLK": p.get("blocks"),
+        "TO":  p.get("turnovers"),
+        "PF":  p.get("personal_fouls"),
     }
 
 
