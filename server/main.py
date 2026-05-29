@@ -2133,7 +2133,7 @@ def games(
     except Exception as exc:
         # Defensive fallback so the schedule never goes black during
         # rollout. Removable once BSD basketball is proven in prod.
-        logger.warning("basketball_source failed for %s/%s: %s — falling back to legacy",
+        log.warning("basketball_source failed for %s/%s: %s — falling back to legacy",
                        league, iso_date, exc)
         return {"games": get_games_for_date(date, league=league)}
 
@@ -2192,13 +2192,13 @@ def basketball_event_summary(canonical_id: str):
         try:
             team_stats = f_stats.result()
         except Exception as exc:
-            logger.warning("team-stats failed for %s: %s", canonical_id, exc)
+            log.warning("team-stats failed for %s: %s", canonical_id, exc)
         try:
             box_score = f_box.result()
         except Exception as exc:
-            logger.warning("box-score failed for %s: %s", canonical_id, exc)
-        logger.info("bsd_box_type canonical=%s type=%s value=%s",
-                    canonical_id, type(box_score).__name__, str(box_score)[:300])
+            log.warning("box-score failed for %s: %s", canonical_id, exc)
+        log.info("bsd_box_type canonical=%s type=%s value=%s",
+                 canonical_id, type(box_score).__name__, str(box_score)[:300])
 
     # Stamp 365scores logo URLs onto the team objects in the detail so
     # the iOS score header pulls from the same source as the schedule
@@ -2222,20 +2222,20 @@ def basketball_event_summary(canonical_id: str):
     # Normalize BSD player objects to a predictable schema so the mobile
     # app doesn't need to guess BSD's internal field names.
     if isinstance(box_score, dict):
-        logger.info("bsd_box_raw canonical=%s keys=%s sample=%s",
+        log.info("bsd_box_raw canonical=%s keys=%s sample=%s",
                     canonical_id, list(box_score.keys()), str(box_score)[:500])
         for side in ("home_box", "away_box"):
             raw_list = box_score.get(side)
             if isinstance(raw_list, list):
                 if raw_list:
-                    logger.info("bsd_box_player_sample canonical=%s side=%s player=%s",
+                    log.info("bsd_box_player_sample canonical=%s side=%s player=%s",
                                 canonical_id, side, str(raw_list[0])[:600])
                 normalized = []
                 for player in raw_list:
                     try:
                         normalized.append(_normalize_bsd_player(player))
                     except Exception as exc:
-                        logger.warning("bsd player normalize error: %s | raw=%s", exc, str(player)[:200])
+                        log.warning("bsd player normalize error: %s | raw=%s", exc, str(player)[:200])
                         normalized.append(player)
                 box_score[side] = normalized
 
@@ -2491,7 +2491,7 @@ def soccer_league_standings(slug: str):
         try:
             raw = _bsd_soccer.league_standings(league_id)
         except Exception as exc:
-            logger.warning("soccer standings error for %s: %s", slug, exc)
+            log.warning("soccer standings error for %s: %s", slug, exc)
             raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
         if raw is None:
             raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
@@ -2557,7 +2557,7 @@ def basketball_league_standings(slug: str):
         try:
             raw = _bsd_bb.league_standings(league_id)
         except Exception as exc:
-            logger.warning("basketball standings error for %s: %s", slug, exc)
+            log.warning("basketball standings error for %s: %s", slug, exc)
             raw = None
         if raw is not None:
             return _normalize_basketball_standings(raw, league_id, slug)
