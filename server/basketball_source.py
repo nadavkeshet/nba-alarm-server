@@ -606,6 +606,39 @@ def _enforce_date_and_dedupe(games: list[dict], date_iso: str, tz: ZoneInfo) -> 
 # Normalizers — emit the ESPN-like game shape the rest of the app already speaks
 
 
+def _abbr_from_365_roster(league_slug: str, team_name: str | None) -> str | None:
+    """Look up the 365scores-normalized abbreviation for a BSD team name.
+
+    Uses the 365 team-index (name → 365_team_id, same index built for logo
+    enrichment) and then reads the abbreviation out of the in-memory roster
+    cache so the abbreviation in the BSD game response always matches what
+    the mobile roster picker sees.
+    """
+    if not team_name:
+        return None
+    index = _get_365_team_index(league_slug)  # normalized_name → 365_team_id (int)
+    if not index:
+        return None
+    target = _normalize_team_name(team_name)
+    tid: int | None = index.get(target)
+    if tid is None:
+        # fuzzy prefix match (handles city/suffix differences between sources)
+        best_len = 0
+        for key, kid in index.items():
+            if (key.startswith(target) or target.startswith(key)) and len(key) > best_len:
+                tid = kid
+                best_len = len(key)
+    if not tid:
+        return None
+    try:
+        from monitor import _ROSTER_CACHE, _CACHE_LOCK  # late import to avoid circular
+        with _CACHE_LOCK:
+            entry = _ROSTER_CACHE.get(str(tid))
+        return entry.get("abbreviation") if entry else None
+    except Exception:
+        return None
+
+
 def _from_bsd_event(event: dict, *, slug: str) -> dict:
     """BSD basketball event → ESPN-compatible game dict.
 
@@ -620,12 +653,27 @@ def _from_bsd_event(event: dict, *, slug: str) -> dict:
 
     espn_state, espn_detail, period = _bsd_status_to_espn(bsd_status)
 
+    # Resolve abbreviations through the 365scores roster so they always
+    # match what the mobile player picker finds in /all-teams-and-players.
+    # BSD short_name may differ from 365's normalized abbreviation (e.g. BSD
+    # returns "GSW" while 365 roster has "GS"). Fall back gracefully.
+    home_abbr = (
+        _abbr_from_365_roster(slug, home_team.get("name"))
+        or home_team.get("short_name")
+        or (home_team.get("name") or "")[:3].upper()
+    )
+    away_abbr = (
+        _abbr_from_365_roster(slug, away_team.get("name"))
+        or away_team.get("short_name")
+        or (away_team.get("name") or "")[:3].upper()
+    )
+
     home_competitor = {
         "homeAway": "home",
         "score": str(event.get("home_score") or 0),
         "team": {
             "id": str(home_team.get("id") or ""),
-            "abbreviation": home_team.get("short_name") or home_team.get("name", "")[:3].upper(),
+            "abbreviation": home_abbr,
             "displayName": home_team.get("name", ""),
             "name": home_team.get("short_name", "") or home_team.get("name", ""),
             "logo": _basketball_logo_url(slug, home_team.get("name"), home_team.get("id")),
@@ -636,7 +684,7 @@ def _from_bsd_event(event: dict, *, slug: str) -> dict:
         "score": str(event.get("away_score") or 0),
         "team": {
             "id": str(away_team.get("id") or ""),
-            "abbreviation": away_team.get("short_name") or away_team.get("name", "")[:3].upper(),
+            "abbreviation": away_abbr,
             "displayName": away_team.get("name", ""),
             "name": away_team.get("short_name", "") or away_team.get("name", ""),
             "logo": _basketball_logo_url(slug, away_team.get("name"), away_team.get("id")),
