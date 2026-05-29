@@ -2197,8 +2197,6 @@ def basketball_event_summary(canonical_id: str):
             box_score = f_box.result()
         except Exception as exc:
             log.warning("box-score failed for %s: %s", canonical_id, exc)
-        log.info("bsd_box_type canonical=%s type=%s value=%s",
-                 canonical_id, type(box_score).__name__, str(box_score)[:300])
 
     # Stamp 365scores logo URLs onto the team objects in the detail so
     # the iOS score header pulls from the same source as the schedule
@@ -2221,15 +2219,12 @@ def basketball_event_summary(canonical_id: str):
 
     # Normalize BSD player objects to a predictable schema so the mobile
     # app doesn't need to guess BSD's internal field names.
+    # Use a shallow copy so we never mutate the object stored in the BSD cache.
     if isinstance(box_score, dict):
-        log.info("bsd_box_raw canonical=%s keys=%s sample=%s",
-                    canonical_id, list(box_score.keys()), str(box_score)[:500])
+        box_score = dict(box_score)
         for side in ("home_box", "away_box"):
             raw_list = box_score.get(side)
             if isinstance(raw_list, list):
-                if raw_list:
-                    log.info("bsd_box_player_sample canonical=%s side=%s player=%s",
-                                canonical_id, side, str(raw_list[0])[:600])
                 normalized = []
                 for player in raw_list:
                     try:
