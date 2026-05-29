@@ -59,6 +59,9 @@ _alarm_model: Any = None  # SoccerAlarmDB class — injected to avoid circular i
 
 POLL_INTERVAL = 25.0  # seconds
 
+# Statuses that mean the match is definitively over — deactivate all its alarms immediately.
+_TERMINAL_STATUSES = {"ft", "aet", "ap", "cancelled", "postponed", "abandoned"}
+
 
 def wire(
     *,
@@ -199,6 +202,14 @@ def _tick() -> None:
             continue
         if detail is None:
             continue
+
+        # If the match is over, deactivate every alarm for it immediately — no more polling.
+        status = (detail.get("status") or "").lower()
+        if status in _TERMINAL_STATUSES:
+            ids = [a["id"] for a in alarm_group]
+            _deactivate_alarms(ids, reason=f"match {match_id} status={status}")
+            continue
+
         for alarm in alarm_group:
             try:
                 _evaluate_alarm(alarm, detail)
@@ -550,6 +561,27 @@ def _find_recent_red_card(match: dict) -> dict | None:
     if not candidates:
         return None
     return max(candidates, key=lambda x: x["minute"])
+
+
+# ---------------------------------------------------------------------------
+# Deactivation helper
+
+
+def _deactivate_alarms(alarm_ids: list[int], *, reason: str) -> None:
+    """Bulk-mark a list of soccer alarm rows as inactive."""
+    if not alarm_ids or _db_engine is None or _alarm_model is None:
+        return
+    try:
+        from sqlalchemy.orm import Session
+        with Session(_db_engine) as session:
+            session.query(_alarm_model).filter(
+                _alarm_model.id.in_(alarm_ids),
+                _alarm_model.is_active.is_(True),
+            ).update({"is_active": False}, synchronize_session=False)
+            session.commit()
+        logger.info("soccer radar: deactivated %d alarm(s) — %s", len(alarm_ids), reason)
+    except Exception as exc:
+        logger.warning("soccer radar: deactivate failed (%s): %s", reason, exc)
 
 
 # ---------------------------------------------------------------------------
