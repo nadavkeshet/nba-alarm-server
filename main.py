@@ -2210,6 +2210,8 @@ def basketball_event_summary(canonical_id: str):
     # Normalize BSD player objects to a predictable schema so the mobile
     # app doesn't need to guess BSD's internal field names.
     if isinstance(box_score, dict):
+        logger.info("bsd_box_raw canonical=%s keys=%s sample=%s",
+                    canonical_id, list(box_score.keys()), str(box_score)[:500])
         for side in ("home_box", "away_box"):
             raw_list = box_score.get(side)
             if isinstance(raw_list, list):
