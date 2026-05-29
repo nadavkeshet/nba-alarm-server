@@ -212,6 +212,7 @@ class SoccerAlarmDB(_Base):
     user_token      = Column(String,  nullable=False, index=True)
     alarm_type      = Column(String,  nullable=False)   # match | late_drama | knockout_et | comeback | hat_trick | red_card | big_chance | penalty | drama_radar
     match_id        = Column(String,  nullable=True)    # canonical id ('bsd-372'); nullable for radar-type
+    match_name      = Column(String,  nullable=True)    # human-readable "Home vs Away"
     competition_id  = Column(String,  nullable=True)    # slug
     player_id       = Column(String,  nullable=True)
     threshold       = Column(Float,   nullable=True)    # SQL column type is REAL (see migrations/001_soccer_schema.sql)
@@ -309,6 +310,7 @@ def _init_db() -> None:
         "ALTER TABLE favorite_teams ADD COLUMN skip_euroleague_evening BOOLEAN DEFAULT FALSE NOT NULL",
         "ALTER TABLE soccer_favorite_teams ADD COLUMN alt_team_ids VARCHAR",
         "ALTER TABLE soccer_favorite_teams ADD COLUMN competitions VARCHAR",
+        "ALTER TABLE soccer_alarms ADD COLUMN match_name VARCHAR",
     ]
     for sql in migrations:
         try:
@@ -2644,6 +2646,7 @@ class SoccerAlarmRequest(BaseModel):
     user_token: str
     alarm_type: str
     match_id: Optional[str] = None       # canonical id ('bsd-372') — required for 'match' type
+    match_name: Optional[str] = None     # human-readable "Home vs Away" for display in Active tab
     competition_id: Optional[str] = None # slug — used by radar-style alarms to scope
     player_id: Optional[str] = None      # for hat_trick
     threshold: Optional[float] = None    # interpretation depends on alarm_type
@@ -2683,6 +2686,8 @@ def soccer_alarm_create(req: SoccerAlarmRequest):
             existing.threshold      = req.threshold
             existing.config         = req.config or {}
             existing.alert_type     = req.alert_type
+            if req.match_name:
+                existing.match_name = req.match_name
             session.commit()
             session.refresh(existing)
             alarm_id = existing.id
@@ -2692,6 +2697,7 @@ def soccer_alarm_create(req: SoccerAlarmRequest):
                 user_token=req.user_token,
                 alarm_type=req.alarm_type,
                 match_id=req.match_id,
+                match_name=req.match_name,
                 competition_id=req.competition_id,
                 player_id=req.player_id,
                 threshold=req.threshold,
@@ -2734,19 +2740,21 @@ def soccer_alarm_delete(alarm_id: int, user_token: str = ""):
 
 @app.get("/soccer-alarms")
 def soccer_alarms_list(user_token: str = ""):
-    """List a user's soccer alarms (active + recently-fired)."""
+    """List a user's active soccer alarms."""
     if engine is None:
         raise HTTPException(status_code=503, detail="Database not configured.")
     if not user_token.strip():
         raise HTTPException(status_code=400, detail="user_token is required.")
     with Session(engine) as session:
         rows = session.query(SoccerAlarmDB).filter(
-            SoccerAlarmDB.user_token == user_token
-        ).order_by(SoccerAlarmDB.created_at.desc()).limit(100).all()
+            SoccerAlarmDB.user_token == user_token,
+            SoccerAlarmDB.is_active.is_(True),
+        ).order_by(SoccerAlarmDB.created_at.desc()).limit(50).all()
         out = [{
             "id": r.id,
             "alarm_type": r.alarm_type,
             "match_id": r.match_id,
+            "match_name": r.match_name,
             "competition_id": r.competition_id,
             "player_id": r.player_id,
             "threshold": r.threshold,
