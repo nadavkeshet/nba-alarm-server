@@ -109,6 +109,13 @@ def get_basketball_games(
         g for g in games
         if g.get("status", {}).get("type", {}).get("detail") not in ("Cancelled", "Postponed")
     ]
+    # Drop phantom playoff games: even when BSD is slow to mark a cancelled
+    # game, if one team already has 4 wins in the series we know the game
+    # will never be played.
+    if bsd.is_supported(league_slug):
+        league_id = bsd.slug_to_league_id(league_slug)
+        if league_id is not None:
+            games = _filter_completed_series_games(games, league_id, date_iso)
     return games
 
 
@@ -509,6 +516,73 @@ def _tipoff_local_date(tipoff: str | None, tz: ZoneInfo = _DEFAULT_TZ) -> str | 
         return dt.astimezone(tz).date().isoformat()
     except Exception:
         return None
+
+
+def _filter_completed_series_games(games: list[dict], league_id: int, date_iso: str) -> list[dict]:
+    """Drop notstarted games whose playoff series is already decided.
+
+    Fetches finished games from the past 14 days for this league and counts
+    wins per team pair. If either team has reached 4 wins the upcoming game
+    is a phantom (series over) and is removed — even before BSD marks it
+    'cancelled'. The 60-second BSD events_list cache keeps this cheap.
+    """
+    pre_games = [g for g in games if g.get("status", {}).get("type", {}).get("state") == "pre"]
+    if not pre_games:
+        return games
+
+    try:
+        from datetime import date as _date, timedelta
+        d = _date.fromisoformat(date_iso)
+        past_from = (d - timedelta(days=14)).isoformat()
+        past_events = bsd.league_events(
+            league_id,
+            date_from=past_from,
+            date_to=date_iso,
+            status="finished",
+            limit=200,
+        ) or []
+    except Exception as exc:
+        logger.warning("series-check: could not fetch past games for league %s: %s", league_id, exc)
+        return games
+
+    # Count wins per team pair over the past 14 days
+    series_wins: dict[frozenset, dict[str, int]] = {}
+    for ev in past_events:
+        home = ev.get("home_team") or {}
+        away = ev.get("away_team") or {}
+        hid = str(home.get("id") or "")
+        aid = str(away.get("id") or "")
+        if not hid or not aid:
+            continue
+        hs = ev.get("home_score") or 0
+        as_ = ev.get("away_score") or 0
+        if hs == as_:
+            continue
+        winner = hid if hs > as_ else aid
+        pair: frozenset = frozenset({hid, aid})
+        series_wins.setdefault(pair, {})
+        series_wins[pair][winner] = series_wins[pair].get(winner, 0) + 1
+
+    def _is_phantom(g: dict) -> bool:
+        if g.get("status", {}).get("type", {}).get("state") != "pre":
+            return False
+        comps = (g.get("competitions") or [{}])[0]
+        ids = {
+            c.get("team", {}).get("id", "")
+            for c in (comps.get("competitors") or [])
+        }
+        ids.discard("")
+        if len(ids) != 2:
+            return False
+        wins = series_wins.get(frozenset(ids), {})
+        return any(w >= 4 for w in wins.values())
+
+    filtered = [g for g in games if not _is_phantom(g)]
+    n_dropped = len(games) - len(filtered)
+    if n_dropped:
+        logger.info("series-check: dropped %d phantom game(s) for league_id=%s on %s",
+                    n_dropped, league_id, date_iso)
+    return filtered
 
 
 def _enforce_date_and_dedupe(games: list[dict], date_iso: str, tz: ZoneInfo) -> list[dict]:
