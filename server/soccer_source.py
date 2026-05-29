@@ -872,13 +872,15 @@ def _normalize_sofa_lineup_side(side: dict) -> dict:
             rating = float(rating) if rating is not None else None
         except (TypeError, ValueError):
             rating = None
+        pid = p.get("id") or 0
         norm = {
-            "id":            p.get("id") or 0,
+            "id":            pid,
             "name":          p.get("name") or "",
             "short_name":    p.get("shortName"),
             "position":      e.get("position") or p.get("position"),
             "jersey_number": _to_int(e.get("shirtNumber") or e.get("jerseyNumber") or p.get("jerseyNumber")),
             "ai_score":      rating,
+            "photo_url":     f"https://api.sofascore.app/api/v1/player/{pid}/image" if pid else None,
         }
         (subs if e.get("substitute") else starters).append(norm)
     return {
