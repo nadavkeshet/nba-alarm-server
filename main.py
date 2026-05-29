@@ -2234,62 +2234,32 @@ def basketball_event_summary(canonical_id: str):
 
 
 def _normalize_bsd_player(p: dict) -> dict:
-    """Normalize a raw BSD basketball player object to a stable schema.
+    """Map a raw BSD basketball box-score player to a stable schema.
 
-    BSD's box-score endpoint returns stats under various shapes across
-    league versions.  We probe all known variants so the mobile app can
-    always read `p.PTS`, `p.REB`, `p.minutes`, etc. without guessing.
+    BSD field names (confirmed from iOS BasketballBoxPlayer CodingKeys):
+      name, player_id, jersey_number, position, is_starter, minutes (Double),
+      points, rebounds, assists, steals, blocks, turnovers, personal_fouls.
     """
-    def _v(*keys):
-        """Return the first non-None value found among `keys`.
-        Checks top-level and nested under `stats`/`statistics` (dict or
-        list-of-{name,value} shapes both handled).
-        """
-        raw_stats = p.get("stats") or p.get("statistics")
-        # Convert list-of-dicts [{name,value}] → plain dict
-        if isinstance(raw_stats, list):
-            stats_obj: dict = {item.get("name", ""): item.get("value")
-                               for item in raw_stats if isinstance(item, dict)}
-        elif isinstance(raw_stats, dict):
-            stats_obj = raw_stats
-        else:
-            stats_obj = {}
-        for k in keys:
-            v = p.get(k)
-            if v is None:
-                v = stats_obj.get(k)
-            if v is not None:
-                return v
-        return None
-
-    def _num(*keys):
-        v = _v(*keys)
-        if v is None:
-            return None
-        try:
-            return int(float(v))
-        except (ValueError, TypeError):
-            return None
-
-    name = (_v("player_name", "name", "full_name") or
-            (p.get("athlete") or {}).get("display_name") or "")
-    pid  = str(_v("player_id", "id", "athlete_id") or "")
-    mins = str(_v("minutes", "min", "MIN", "time_played") or "0")
+    raw_mins = p.get("minutes") or 0
+    try:
+        mins_int = int(float(raw_mins))
+    except (ValueError, TypeError):
+        mins_int = 0
 
     return {
-        "player_id":   pid,
-        "player_name": name,
-        "jersey":      str(_v("jersey_number", "jersey", "shirt_number") or ""),
-        "position":    str(_v("position", "pos") or ""),
-        "starter":     bool(_v("starter", "is_starter", "starting")),
-        "minutes":     mins,
-        "PTS": _num("PTS", "pts", "points"),
-        "REB": _num("REB", "reb", "rebounds", "total_rebounds", "totalRebounds"),
-        "AST": _num("AST", "ast", "assists"),
-        "STL": _num("STL", "stl", "steals"),
-        "BLK": _num("BLK", "blk", "blocks"),
-        "TO":  _num("TO",  "to",  "turnovers"),
-        "PF":  _num("PF",  "pf",  "fouls", "personal_fouls"),
+        "player_id":   str(p.get("player_id") or ""),
+        "player_name": p.get("name") or "",
+        "jersey":      str(p.get("jersey_number") or ""),
+        "position":    str(p.get("position") or ""),
+        "starter":     bool(p.get("is_starter")),
+        "minutes":     str(mins_int),
+        "PTS": p.get("points"),
+        "REB": p.get("rebounds"),
+        "AST": p.get("assists"),
+        "STL": p.get("steals"),
+        "BLK": p.get("blocks"),
+        "TO":  p.get("turnovers"),
+        "PF":  p.get("personal_fouls"),
     }
 
 
