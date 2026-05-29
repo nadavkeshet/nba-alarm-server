@@ -2451,7 +2451,11 @@ def _normalize_lineups(raw: dict) -> dict:
                 score = float(score) if score is not None else None
             except (TypeError, ValueError):
                 score = None
-            out.append({**p, "ai_score": score})
+            pid = p.get("id") or p.get("player_id")
+            photo = p.get("photo_url") or (
+                f"https://sports.bzzoiro.com/img/player/{pid}/" if pid else None
+            )
+            out.append({**p, "ai_score": score, "photo_url": photo})
         return out
 
     def _fix_side(side: dict) -> dict:
