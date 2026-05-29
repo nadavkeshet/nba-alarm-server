@@ -60,7 +60,7 @@ _TTL_SECONDS: dict[str, float] = {
     "events_list":      60.0,
     "event_detail":     30.0,
     "event_team_stats": 120.0,
-    "event_box_score":  60.0,
+    "event_box_score":  600.0,
     "event_pregame":    600.0,
     "league_standings": 300.0,
     "player_search": 60.0,
