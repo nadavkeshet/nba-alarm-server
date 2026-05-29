@@ -103,6 +103,12 @@ def get_basketball_games(
                            league_slug, date_iso, exc)
 
     games = _enforce_date_and_dedupe(games, date_iso, anchor_tz)
+    # Drop cancelled / postponed events — series games that won't be played
+    # show up as "pre" otherwise, which pollutes the schedule with phantom games.
+    games = [
+        g for g in games
+        if g.get("status", {}).get("type", {}).get("detail") not in ("Cancelled", "Postponed")
+    ]
     return games
 
 
