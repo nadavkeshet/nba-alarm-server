@@ -2197,6 +2197,8 @@ def basketball_event_summary(canonical_id: str):
             box_score = f_box.result()
         except Exception as exc:
             logger.warning("box-score failed for %s: %s", canonical_id, exc)
+        logger.info("bsd_box_type canonical=%s type=%s value=%s",
+                    canonical_id, type(box_score).__name__, str(box_score)[:300])
 
     # Stamp 365scores logo URLs onto the team objects in the detail so
     # the iOS score header pulls from the same source as the schedule
