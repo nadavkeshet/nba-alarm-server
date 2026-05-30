@@ -34,6 +34,11 @@ from score365_soccer_adapter import (
 
 logger = logging.getLogger(__name__)
 
+# Module-level cache: canonical_id -> (home_pens, away_pens)
+# Populated when a match detail is fetched and penalty kicks are found in the shotmap.
+# The list endpoint reads this cache so matches show penalty scores even without a detail fetch.
+_pens_cache: dict[str, tuple[int, int]] = {}
+
 
 # ---------------------------------------------------------------------------
 # Canonical ID helpers — source-tagged so we always know which adapter to use
@@ -125,8 +130,10 @@ def _from_bsd_event(event: dict, *, slug: str | None = None) -> dict:
     """Normalize a BSD /events/{id}/ payload (or list item) into SoccerMatch shape."""
     eid = event.get("id")
     status, period = _normalize_status_bsd(event.get("status"), event.get("period"))
+    cid = canonical_id("bsd", eid)
+    cached_pens = _pens_cache.get(cid)
     return {
-        "id": canonical_id("bsd", eid),
+        "id": cid,
         "source": "bsd",
         "source_event_id": eid,
         "competition": slug or _bsd_league_to_slug(event.get("league_id")),
@@ -142,7 +149,7 @@ def _from_bsd_event(event: dict, *, slug: str | None = None) -> dict:
             "crest": _bsd_team_image_url(event.get("home_team_id")) if event.get("home_team_id") else None,
             "score": event.get("home_score"),
             "score_ht": event.get("home_score_ht"),
-            "score_pens": event.get("home_score_pens"),
+            "score_pens": cached_pens[0] if cached_pens else event.get("home_score_pens"),
             "xg": None,
         },
         "away": {
@@ -152,7 +159,7 @@ def _from_bsd_event(event: dict, *, slug: str | None = None) -> dict:
             "crest": _bsd_team_image_url(event.get("away_team_id")) if event.get("away_team_id") else None,
             "score": event.get("away_score"),
             "score_ht": event.get("away_score_ht"),
-            "score_pens": event.get("away_score_pens"),
+            "score_pens": cached_pens[1] if cached_pens else event.get("away_score_pens"),
             "xg": None,
         },
         "venue": (event.get("venue_id") and {"id": event["venue_id"]}) or None,
@@ -569,6 +576,21 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
                 out["incidents"] = f_incidents.result()
             except Exception as exc:
                 logger.warning("bsd incidents failed for %s: %s", canonical, exc)
+            # If BSD didn't provide penalty scores, derive them from shootout kicks in the shotmap.
+            # Penalty shootout starts after 120 min of ET; kicks appear at minute >= 121.
+            if out["home"].get("score_pens") is None and out.get("shotmap"):
+                home_pens = sum(
+                    1 for s in out["shotmap"]
+                    if s.get("home") is True and s.get("type") == "goal" and (s.get("min") or 0) >= 121
+                )
+                away_pens = sum(
+                    1 for s in out["shotmap"]
+                    if s.get("home") is False and s.get("type") == "goal" and (s.get("min") or 0) >= 121
+                )
+                if home_pens > 0 or away_pens > 0:
+                    out["home"]["score_pens"] = home_pens
+                    out["away"]["score_pens"] = away_pens
+                    _pens_cache[canonical] = (home_pens, away_pens)
             return out
 
     if source == "sofa":
