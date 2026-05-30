@@ -142,6 +142,7 @@ def _from_bsd_event(event: dict, *, slug: str | None = None) -> dict:
             "crest": _bsd_team_image_url(event.get("home_team_id")) if event.get("home_team_id") else None,
             "score": event.get("home_score"),
             "score_ht": event.get("home_score_ht"),
+            "score_pens": event.get("home_score_pens"),
             "xg": None,
         },
         "away": {
@@ -151,6 +152,7 @@ def _from_bsd_event(event: dict, *, slug: str | None = None) -> dict:
             "crest": _bsd_team_image_url(event.get("away_team_id")) if event.get("away_team_id") else None,
             "score": event.get("away_score"),
             "score_ht": event.get("away_score_ht"),
+            "score_pens": event.get("away_score_pens"),
             "xg": None,
         },
         "venue": (event.get("venue_id") and {"id": event["venue_id"]}) or None,
@@ -186,6 +188,7 @@ def _from_sofa_event(event: dict, *, slug: str | None = None) -> dict:
             "crest": f"https://api.sofascore.app/api/v1/team/{home.get('id')}/image" if home.get("id") else None,
             "score": (event.get("homeScore", {}) or {}).get("current"),
             "score_ht": (event.get("homeScore", {}) or {}).get("period1"),
+            "score_pens": (event.get("homeScore", {}) or {}).get("penalties"),
             "xg": None,
         },
         "away": {
@@ -195,6 +198,7 @@ def _from_sofa_event(event: dict, *, slug: str | None = None) -> dict:
             "crest": f"https://api.sofascore.app/api/v1/team/{away.get('id')}/image" if away.get("id") else None,
             "score": (event.get("awayScore", {}) or {}).get("current"),
             "score_ht": (event.get("awayScore", {}) or {}).get("period1"),
+            "score_pens": (event.get("awayScore", {}) or {}).get("penalties"),
             "xg": None,
         },
         "venue": None,  # Sofascore venue lives elsewhere; skip for now
