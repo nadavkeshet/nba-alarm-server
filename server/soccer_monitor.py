@@ -195,6 +195,13 @@ def _tick() -> None:
 
     # ── Pass 1: per-match
     for match_id, alarm_group in match_scoped.items():
+        # A bsd-* id must be numeric after the prefix. A malformed one (e.g. a
+        # leftover "bsd-test-match-1" fixture) can never resolve, so polling it
+        # every cycle just spams warnings forever — deactivate it once.
+        if match_id.startswith("bsd-") and not match_id[4:].isdigit():
+            _deactivate_alarms([a["id"] for a in alarm_group],
+                               reason=f"malformed match id {match_id}")
+            continue
         try:
             detail = ss.get_soccer_match_detail(match_id)
         except Exception as exc:
