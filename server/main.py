@@ -15,7 +15,7 @@ from epg import get_broadcasts_for_game, get_all_broadcasts
 from i18n import (t_title, t_body_game, t_body_period_start, t_body_scoring,
                   t_body_early_pts, t_body_triple_double, translate_game_name)
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
@@ -2173,6 +2173,140 @@ def games(
         log.warning("basketball_source failed for %s/%s: %s — falling back to legacy",
                        league, iso_date, exc)
         return {"games": get_games_for_date(date, league=league)}
+
+
+# ── Feed batch (one-shot fan-out + empty-result memoization) ────────────────
+#
+# The app's schedule feed asks for ~50 days × ~15 leagues. As individual
+# requests that's hundreds of round-trips on a cold launch, and each soccer
+# miss re-cascades 2-3 upstream sources — enough to saturate a small instance
+# (observed: health checks timing out under the stampede). /feed collapses the
+# whole grid into ONE request, fans it out server-side (next to the upstreams),
+# and remembers empty (league, date) results so off-season dates stop
+# re-cascading every load.
+
+_empty_feed_cache: dict[str, float] = {}   # "sport|league|iso" -> monotonic expiry
+
+
+def _feed_empty_ttl(iso_date: str) -> float:
+    """Past dates never gain games retroactively (cache long); today/future can
+    still pick up newly scheduled fixtures (cache short)."""
+    try:
+        from monitor import _eastern_today
+        today_iso = _yyyymmdd_to_iso(_eastern_today()) or ""
+        if iso_date and iso_date < today_iso:
+            return 24 * 3600.0
+    except Exception:
+        pass
+    return 900.0                            # 15 min
+
+
+def _feed_basketball(league: str, iso_date: str, tz: Optional[str]) -> list[dict]:
+    key = f"bb|{league}|{iso_date}"
+    exp = _empty_feed_cache.get(key)
+    if exp is not None and time.monotonic() < exp:
+        return []
+    try:
+        import basketball_source as _bb
+        games = _bb.get_basketball_games(league, date_iso=iso_date, tz=tz)
+    except Exception as exc:
+        log.warning("feed: basketball %s/%s failed: %s", league, iso_date, exc)
+        return []
+    if not games:
+        _empty_feed_cache[key] = time.monotonic() + _feed_empty_ttl(iso_date)
+    return games
+
+
+def _feed_soccer(league: str, iso_date: str, tz: Optional[str]) -> list[dict]:
+    key = f"sc|{league}|{iso_date}"
+    exp = _empty_feed_cache.get(key)
+    if exp is not None and time.monotonic() < exp:
+        return []
+    try:
+        import soccer_source as _ss
+        matches = _ss.get_soccer_matches(league, date_iso=iso_date, tz=tz)
+    except Exception as exc:
+        log.warning("feed: soccer %s/%s failed: %s", league, iso_date, exc)
+        return []
+    if not matches:
+        _empty_feed_cache[key] = time.monotonic() + _feed_empty_ttl(iso_date)
+    return matches
+
+
+def _feed_date_range(frm: str, to: str) -> list[str]:
+    """Inclusive YYYYMMDD list between frm and to, capped to 120 days."""
+    from datetime import date as _date
+    def _parse(s: str):
+        s = (s or "").strip()
+        return _date(int(s[0:4]), int(s[4:6]), int(s[6:8]))
+    try:
+        d0, d1 = _parse(frm), _parse(to)
+    except Exception:
+        return []
+    if d1 < d0:
+        d0, d1 = d1, d0
+    out: list[str] = []
+    cur = d0
+    while cur <= d1 and len(out) < 120:
+        out.append(cur.strftime("%Y%m%d"))
+        cur += timedelta(days=1)
+    return out
+
+
+@app.get("/feed")
+def feed(
+    frm: str = Query("", alias="from"),
+    to: str = "",
+    basketball: str = "",
+    football: str = "",
+    tz: Optional[str] = None,
+):
+    """One-shot schedule fan-out across many leagues and a date range.
+
+    Query params:
+      from, to     YYYYMMDD inclusive range (defaults to today only).
+      basketball   comma-separated basketball league slugs (client's catalog).
+      football     comma-separated soccer league slugs.
+      tz           IANA tz to anchor the calendar-day filter.
+
+    Leagues come from the client because LeagueCatalog is the source of truth
+    and the server's basketball set differs. Returns a flat item list so the
+    app maps it 1:1 onto its progressive accumulator; the per-item games/matches
+    payloads are byte-for-byte what /games and /soccer/games return.
+    """
+    bb_leagues = [s.strip() for s in basketball.split(",") if s.strip()]
+    sc_leagues = [s.strip() for s in football.split(",") if s.strip()]
+    dates = _feed_date_range(frm, to)
+    if not dates:
+        from monitor import _eastern_today
+        dates = [_eastern_today()]
+
+    work: list[tuple[str, str, str, str]] = []   # (sport, league, yyyymmdd, iso)
+    for d in dates:
+        iso = _yyyymmdd_to_iso(d) or d
+        for lg in bb_leagues:
+            work.append(("basketball", lg, d, iso))
+        for lg in sc_leagues:
+            work.append(("football", lg, d, iso))
+
+    def _one(item: tuple[str, str, str, str]):
+        sport, lg, d, iso = item
+        if sport == "basketball":
+            return (sport, lg, d, "games", _feed_basketball(lg, iso, tz))
+        return (sport, lg, d, "matches", _feed_soccer(lg, iso, tz))
+
+    items: list[dict] = []
+    if work:
+        from concurrent.futures import ThreadPoolExecutor
+        # 16 covers a full single-day request (all leagues) in one batch — the
+        # client fans out per-date, so a /feed call is ~15 cascades wide.
+        with ThreadPoolExecutor(max_workers=min(16, len(work))) as pool:
+            for sport, lg, d, payload_key, payload in pool.map(_one, work):
+                if not payload:
+                    continue
+                items.append({"sport": sport, "league": lg, "date": d, payload_key: payload})
+
+    return {"items": items, "tz": tz}
 
 
 @app.get("/basketball/event/{canonical_id}")
