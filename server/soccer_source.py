@@ -25,6 +25,8 @@ from zoneinfo import ZoneInfo
 
 import bzzoiro_adapter as bsd
 import sofascore_adapter as sofa
+import drama_engine
+import win_probability
 from score365_soccer_adapter import (
     BSD_COMPETITION_IDS,
     PRIMARY_SOURCE,
@@ -33,6 +35,23 @@ from score365_soccer_adapter import (
 )
 
 logger = logging.getLogger(__name__)
+
+# canonical_id -> peak Drama Engine score seen for the match. Populated when the
+# Drama Meter / timeline is computed (main.py), so a finished match's feed badge
+# reflects how dramatic it actually got — not the FT-damped live state. Permanent
+# for finished matches (FT scores don't change).
+_peak_drama_cache: dict[str, float] = {}
+
+
+def record_peak_drama(canonical_id: str, value: float) -> None:
+    """Remember the highest Drama Engine total seen for a match (called by the
+    /soccer/drama endpoints). Best-effort, monotonic."""
+    try:
+        prev = _peak_drama_cache.get(canonical_id)
+        if prev is None or value > prev:
+            _peak_drama_cache[canonical_id] = float(value)
+    except Exception:
+        pass
 
 # Module-level cache: canonical_id -> (home_pens, away_pens)
 # Populated when a match detail is fetched and penalty kicks are found in the shotmap.
@@ -126,6 +145,18 @@ def _bsd_team_image_url(team_id: int) -> str:
     return f"https://sports.bzzoiro.com/img/team/{team_id}/"
 
 
+_WATCH_THRESHOLD = 6.0  # parity with the iOS badge (CompactMatchRow shows >= 6)
+
+
+def _to_float(v) -> float | None:
+    try:
+        if isinstance(v, dict):          # REST stats wrap xg as {"actual": ...}
+            v = v.get("actual")
+        return float(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _soccer_watch_score(
     source: str,
     eid: int | None,
@@ -133,82 +164,132 @@ def _soccer_watch_score(
     minute: int | None,
     home_score: int | None,
     away_score: int | None,
+    *,
+    slug: str | None = None,
+    round_name: str | None = None,
+    is_derby: bool = False,
+    home_score_ht: int | None = None,
+    away_score_ht: int | None = None,
+    home_xg: float | None = None,
+    away_xg: float | None = None,
 ) -> float | None:
-    """Compute a 0–10 watch score for a soccer match card.
+    """0–10 watch score for a match card — the Drama Engine total, so the feed
+    badge agrees with the live Drama Meter.
 
-    For live BSD matches the WS snapshot supplies live xG + momentum so the
-    score reflects real-time excitement. For FT / non-WS matches a goal-volume
-    + closeness formula is used. Returns None when the match is not interesting
-    (big lead, 0-0 FT, no data).
+    - LIVE BSD: build a drama context from the in-memory WS snapshot (xG,
+      dangerous-attack momentum proxy, odds win-probability + swing) — cheap, no
+      REST. - FINISHED BSD: reuse the cached PEAK drama (how dramatic it actually
+      got) when the match has been scored, else a lightweight finished-quality
+      formula. - Everything else: lightweight. None below the badge threshold.
     """
-    hs = home_score if home_score is not None else 0
-    aw = away_score if away_score is not None else 0
-    diff = abs(hs - aw)
-    total_goals = hs + aw
-    is_live = status in ("live", "ht", "et", "pens")
-    is_ft   = status == "ft"
+    try:
+        if home_score is None and away_score is None:
+            return None
+        st = (status or "").lower()
+        is_live = st in ("live", "ht", "et", "pens")
+        is_ft   = st in ("ft", "aet")
 
-    if home_score is None and away_score is None:
+        # Live BSD with a WS snapshot → full drama (same math as the Drama Meter)
+        if source == "bsd" and eid is not None and is_live:
+            ctx = _live_drama_ctx(eid, st, minute, home_score, away_score,
+                                  slug, round_name, is_derby)
+            if ctx is not None:
+                total = drama_engine.compute_drama(ctx).total
+                return total if total >= _WATCH_THRESHOLD else None
+
+        # Finished BSD → cached peak drama if we've ever scored this match
+        if source == "bsd" and is_ft and eid is not None:
+            peak = _peak_drama_cache.get(f"bsd-{eid}")
+            if peak is not None:
+                return peak if peak >= _WATCH_THRESHOLD else None
+
+        total = _lightweight_drama(
+            st, minute, home_score, away_score,
+            home_score_ht, away_score_ht, home_xg, away_xg,
+            slug, round_name, is_derby,
+        )
+        return total if (total is not None and total >= _WATCH_THRESHOLD) else None
+    except Exception:
         return None
 
-    # ── Live BSD: use WS snapshot for xG / momentum ───────────────────────
-    if source == "bsd" and eid is not None and is_live and diff <= 2:
-        try:
-            import bsd_websocket as _ws
-            snap = _ws.client().get_event_snapshot(eid)
-        except Exception:
-            snap = None
 
-        if snap:
-            h_side = snap.get("home") or {}
-            a_side = snap.get("away") or {}
-            # Cumulative xG
-            h_xg = float(h_side.get("xg") or 0)
-            a_xg = float(a_side.get("xg") or 0)
-            total_xg = h_xg + a_xg
-            # Dangerous attack balance (1 = even back-and-forth, 0 = one-way)
-            h_dng = float(h_side.get("dangerous_attack_pct") or 0)
-            a_dng = float(a_side.get("dangerous_attack_pct") or 0)
-            dng_sum = h_dng + a_dng
-            balance = (1.0 - abs(h_dng - a_dng) / dng_sum) if dng_sum > 0 else 0.5
-            # Time pressure: late-game close matches are most exciting
-            m = minute or 0
-            time_pressure = min(1.0, (m / 90) ** 0.5) if m > 0 else 0.2
-            # Closeness (0-0 live = maximum tension)
-            closeness = 1.0 if diff == 0 else (0.7 if diff == 1 else 0.3)
-            # xG reflects how many real chances each team is creating
-            xg_factor = min(1.0, total_xg / 3.5)
-            raw = (
-                0.35 * closeness +
-                0.25 * xg_factor +
-                0.20 * time_pressure +
-                0.10 * balance +
-                0.10 * min(1.0, total_goals / 3.0)
-            ) * 10
-            score = round(min(10.0, max(0.0, raw)), 1)
-            return score if score >= 5.5 else None
+def _live_drama_ctx(eid, status, minute, hs, aw, slug, round_name, is_derby) -> dict | None:
+    """Drama context from the in-memory WS snapshots (no REST). None when the
+    event isn't subscribed / has no live data — caller falls back."""
+    try:
+        import bsd_websocket as _ws
+        client = _ws.client()
+        snap  = client.get_event_snapshot(eid)
+        odds  = client.get_odds_snapshot(eid)
+        swing = client.get_winprob_swing(eid)
+    except Exception:
+        snap, odds, swing = None, None, None
+    if not snap and odds is None and swing is None:
+        return None
 
-    # ── FT / no WS data: goal-volume + closeness ──────────────────────────
-    if is_ft and total_goals == 0:
-        return None          # 0-0 FT is rarely exciting
-    if diff > 2:
-        return None          # 3-goal margin = not interesting
+    home: dict = {"score": hs}
+    away: dict = {"score": aw}
+    pressure = None
+    if snap:
+        h_side = snap.get("home") or {}
+        a_side = snap.get("away") or {}
+        home["xg"] = _to_float(h_side.get("xg"))
+        away["xg"] = _to_float(a_side.get("xg"))
+        h_dng = _to_float(h_side.get("dangerous_attack_pct")) or 0.0
+        a_dng = _to_float(a_side.get("dangerous_attack_pct")) or 0.0
+        if (h_dng + a_dng) > 0:
+            pressure = (h_dng - a_dng) / (h_dng + a_dng)   # [-1,1], + = home pressure
+    return {
+        "minute": minute or 0, "status": status, "competition": slug,
+        "round_name": round_name, "is_derby": is_derby,
+        "home": home, "away": away,
+        "momentum_pressure": pressure, "recent_events": [],
+        "win_prob": win_probability.win_prob_from_snapshot(odds),
+        "win_prob_swing": swing,
+    }
 
-    if diff == 0:   closeness = 1.0
-    elif diff == 1: closeness = 0.65
-    else:           closeness = 0.25   # diff == 2
 
-    goal_factor = min(1.0, total_goals / 4.0)
+def _lightweight_drama(status, minute, hs, aw, hs_ht, aw_ht, h_xg, a_xg,
+                       slug, round_name, is_derby) -> float | None:
+    """Cheap score from data already on the event object. For FINISHED matches
+    this rates 'how good was it to watch' (goals + closeness + comeback + xG,
+    scaled by stakes) rather than the FT-damped live state. For LIVE-without-WS
+    it leans on the engine's live state model."""
+    if hs is None and aw is None:
+        return None
+    hs = hs or 0
+    aw = aw or 0
+    is_ft = status in ("ft", "aet")
+    stakes = drama_engine._stakes_multiplier(
+        {"competition": slug, "round_name": round_name, "is_derby": is_derby}
+    )
 
-    if is_live:
-        m = minute or 0
-        time_factor = min(1.0, (m / 90) ** 0.5) if m > 0 else 0.2
-        raw = (0.45 * closeness + 0.30 * goal_factor + 0.25 * time_factor) * 10
-    else:
-        raw = (0.55 * closeness + 0.45 * goal_factor) * 10
+    if is_ft:
+        diff = abs(hs - aw)
+        total_goals = hs + aw
+        if total_goals == 0:
+            return None                       # 0-0 FT — rarely a must-watch
+        closeness = {0: 1.0, 1: 0.7, 2: 0.4}.get(diff, 0.15)
+        goals = min(1.0, total_goals / 4.0)
+        base = (0.55 * closeness + 0.45 * goals) * 7.0   # 0–7
+        if hs_ht is not None and aw_ht is not None:       # comeback win
+            ht = (hs_ht > aw_ht) - (hs_ht < aw_ht)
+            ft = (hs > aw) - (hs < aw)
+            if ht and ft and ht != ft:
+                base = min(7.0, base + 1.2)
+        if h_xg is not None and a_xg is not None and (h_xg + a_xg) >= 3.0:
+            base = min(7.0, base + 0.6)        # both ends created lots of chances
+        return round(min(10.0, base * stakes), 2)
 
-    score = round(raw, 1)
-    return score if score >= 5.5 else None
+    # Live without a WS snapshot → engine's live state model (no odds/momentum).
+    ctx = {
+        "minute": minute or 0, "status": status, "competition": slug,
+        "round_name": round_name, "is_derby": is_derby,
+        "home": {"score": hs, "xg": h_xg}, "away": {"score": aw, "xg": a_xg},
+        "momentum_pressure": None, "recent_events": [],
+        "win_prob": None, "win_prob_swing": None,
+    }
+    return round(drama_engine.compute_drama(ctx).total, 2)
 
 
 def _from_bsd_event(event: dict, *, slug: str | None = None) -> dict:
@@ -255,6 +336,10 @@ def _from_bsd_event(event: dict, *, slug: str | None = None) -> dict:
         "watch_score": _soccer_watch_score(
             "bsd", eid, status, event.get("current_minute"),
             event.get("home_score"), event.get("away_score"),
+            slug=slug, round_name=event.get("round_name"),
+            is_derby=bool(event.get("is_local_derby")),
+            home_score_ht=event.get("home_score_ht"),
+            away_score_ht=event.get("away_score_ht"),
         ),
     }
 
@@ -306,6 +391,10 @@ def _from_sofa_event(event: dict, *, slug: str | None = None) -> dict:
             "sofascore", eid, status, _sofa_minute_from_time(event),
             (event.get("homeScore", {}) or {}).get("current"),
             (event.get("awayScore", {}) or {}).get("current"),
+            slug=slug,
+            round_name=(event.get("roundInfo", {}) or {}).get("name"),
+            home_score_ht=(event.get("homeScore", {}) or {}).get("period1"),
+            away_score_ht=(event.get("awayScore", {}) or {}).get("period1"),
         ),
     }
 
@@ -581,6 +670,7 @@ def _from_365_game(game: dict, *, slug: str | None = None) -> dict:
             "s365", None, status, int(game.get("gameTime")) if isinstance(game.get("gameTime"), (int, float)) else None,
             int(home.get("score")) if isinstance(home.get("score"), (int, float)) and home.get("score") is not None and home.get("score") >= 0 else None,
             int(away.get("score")) if isinstance(away.get("score"), (int, float)) and away.get("score") is not None and away.get("score") >= 0 else None,
+            slug=slug, round_name=game.get("roundName"),
         ),
     }
 

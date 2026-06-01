@@ -35,6 +35,8 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from typing import Any
 
+import win_probability
+
 
 # ── Stakes table ─────────────────────────────────────────────────────────────
 # Tuned by hand. Tournament finals get an extra round bump on top of these.
@@ -75,6 +77,7 @@ class DramaScore:
     momentum: float   # 0–4
     events:   float   # 0–4
     stakes:   float   # 0.6–2
+    odds:     float = 0.0  # 0–2 — live market uncertainty + win-prob swing
 
     def as_dict(self) -> dict[str, float]:
         return asdict(self)
@@ -110,13 +113,14 @@ def compute_drama(ctx: dict[str, Any]) -> DramaScore:
     state    = _score_state(ctx)
     momentum = _score_momentum(ctx)
     events   = _score_events(ctx)
+    odds     = _score_odds(ctx)
     stakes   = _stakes_multiplier(ctx)
 
     # Clamp the raw sum at 7 so stakes (~0.85–2.17) always have headroom
     # to push the final number up to the 10-cap. Without this, every
     # close-late tied game in any league saturates at 10 and the league
     # signal is lost.
-    raw = min(7.0, max(0.0, state + momentum + events))
+    raw = min(7.0, max(0.0, state + momentum + events + odds))
     total = min(10.0, raw * stakes)
     return DramaScore(
         total=round(total, 2),
@@ -124,7 +128,42 @@ def compute_drama(ctx: dict[str, Any]) -> DramaScore:
         momentum=round(momentum, 2),
         events=round(events, 2),
         stakes=round(stakes, 2),
+        odds=round(odds, 2),
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Odds — live betting-market signal (win-probability + swings)
+
+
+def _score_odds(ctx: dict) -> float:
+    """Live betting-market signal, 0–2. Two parts:
+      • Uncertainty: a coin-flip match (home win-prob ≈ away win-prob) is tense;
+        a decided one is not. 0–1.2, gated off before minute 25 (matching the
+        state earliness damper).
+      • Swing: a sharp move in the favorite's win probability (a goal / red card
+        that flipped the match) is a spike of drama. 0–0.8.
+    Returns 0.0 when no odds are available — a pure-upside signal that never
+    penalizes a match for a missing market.
+    """
+    status = (ctx.get("status") or "").lower()
+    if status in {"scheduled", "postponed", "canceled"}:
+        return 0.0
+    minute = ctx.get("minute") or 0
+
+    wp = ctx.get("win_prob")           # (p_home, p_draw, p_away) or None
+    swing = ctx.get("win_prob_swing")  # float in [0, 1] or None
+
+    score = 0.0
+    if wp:
+        p_home, _p_draw, p_away = wp
+        uncertainty = max(0.0, 1.0 - abs(p_home - p_away))  # ~1 coin-flip, ~0 decided
+        if minute < 25:
+            uncertainty *= max(0.15, (minute + 5) / 30.0)
+        score += uncertainty * 1.2
+    if swing is not None:
+        score += min(0.8, max(0.0, swing) * 1.6)
+    return min(2.0, score)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -378,6 +417,11 @@ def context_from_match_detail(detail: dict) -> dict:
         "away":               away,
         "momentum_pressure":  pressure,
         "recent_events":      recent_events,
+        # Live betting market: implied 1X2 from the odds snapshot _ws_overlay
+        # attaches to the detail. Swing is injected by the caller (which has the
+        # WS client in scope); None here for the retroactive timeline path.
+        "win_prob":           win_probability.win_prob_from_snapshot(detail.get("odds")),
+        "win_prob_swing":     None,
     }
 
 

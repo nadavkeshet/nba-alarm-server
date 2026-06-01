@@ -2,6 +2,7 @@ import os
 import asyncio
 import logging
 import threading
+import time
 import requests
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -826,7 +827,7 @@ _summary_cache: dict[str, dict] = {}   # game_id → boxscore JSON (shared acros
 
 
 def _fetch_game_summary(game_id: str) -> dict | None:
-    """Fetch (and cache) the boxscore for a specific game via API-Basketball."""
+    """Fetch (and cache) the boxscore for a specific game via 365scores."""
     if game_id in _summary_cache:
         return _summary_cache[game_id]
     try:
@@ -2200,7 +2201,7 @@ def basketball_event_summary(canonical_id: str):
         try:
             detail = f_detail.result()
         except Exception as exc:
-            logger.warning("basketball detail failed for %s: %s", canonical_id, exc)
+            log.warning("basketball detail failed for %s: %s", canonical_id, exc)
         if detail is None:
             raise HTTPException(status_code=404, detail="event not found")
         team_stats = None
@@ -2391,7 +2392,18 @@ def soccer_drama(canonical_id: str):
     if detail is None:
         raise HTTPException(status_code=404, detail="match not found")
     ctx = _de.context_from_match_detail(detail)
+    # Live BSD: enrich with the win-probability swing from the WS history
+    # (context_from_match_detail can't reach the WS without importing it).
+    if canonical_id.startswith("bsd-"):
+        try:
+            import bsd_websocket as _ws
+            swing = _ws.get_winprob_swing(int(canonical_id[4:]))
+            if swing is not None:
+                ctx["win_prob_swing"] = swing
+        except Exception:
+            pass
     score = _de.compute_drama(ctx)
+    _ss.record_peak_drama(canonical_id, score.total)
     return {
         "match_id": detail.get("id"),
         "minute":   detail.get("minute"),
@@ -2426,6 +2438,14 @@ def soccer_drama_timeline(canonical_id: str, step: int = 2):
         raise HTTPException(status_code=404, detail="match not found")
     step = max(1, min(5, step))
     timeline = _de.compute_drama_timeline(detail, step=step)
+    # Cache the peak so a finished match's feed badge reflects how dramatic it
+    # actually got (not the FT-damped live state).
+    try:
+        peak = max((p.get("drama", 0.0) for p in timeline), default=0.0)
+        if peak > 0:
+            _ss.record_peak_drama(canonical_id, peak)
+    except Exception:
+        pass
     return {"match_id": detail.get("id"), "timeline": timeline}
 
 
@@ -3126,7 +3146,14 @@ def _get_cached_watch_score(home: str, away: str, date_str: str, league: str) ->
     return _watch_score_cache.get(key)
 
 
-def _cache_watch_score(home: str, away: str, date_str: str, league: str, result) -> dict:
+def _watch_cache_fresh(entry: dict) -> bool:
+    """Final scores are permanent; live scores refresh every 45 s."""
+    if not entry.get("live"):
+        return True
+    return (time.monotonic() - entry.get("_ts", 0.0)) < 45.0
+
+
+def _cache_watch_score(home: str, away: str, date_str: str, league: str, result, *, live: bool = False) -> dict:
     entry = {
         "score": result.score,
         "tension": result.tension_score,
@@ -3134,6 +3161,8 @@ def _cache_watch_score(home: str, away: str, date_str: str, league: str, result)
         "clutch": result.clutch_score,
         "overtime": result.overtime,
         "buzzer_beater": result.buzzer_beater,
+        "live": live,
+        "_ts": time.monotonic(),
     }
     key = f"{league}_{date_str}_{home}_{away}"
     _watch_score_cache[key] = entry
@@ -3150,7 +3179,7 @@ def watch_score(home: str, away: str, date: str = "", league: str = "nba"):
     from monitor import _eastern_today
     game_date = date if date else _eastern_today()
     cached = _get_cached_watch_score(home, away, game_date, league)
-    if cached:
+    if cached and _watch_cache_fresh(cached):
         return cached
     result = calculate_watch_score_by_teams(
         home_abbr=home, away_abbr=away, date_yyyymmdd=game_date, league=league)
@@ -3166,7 +3195,7 @@ def watch_scores(date: str = "", league: str = "nba"):
     Returns: { "scores": { "DEN_SA": { "score": 8.8, ... }, ... } }
     Cached in-memory — subsequent requests are instant.
     """
-    from watch_score import calculate_watch_score_by_teams
+    from watch_score import calculate_watch_score_by_teams, calculate_watch_score_bsd
     from monitor import _eastern_today
     game_date = date if date else _eastern_today()
 
@@ -3174,30 +3203,49 @@ def watch_scores(date: str = "", league: str = "nba"):
     results: dict[str, dict] = {}
 
     for event in events:
-        state = event.get("status", {}).get("type", {}).get("state", "")
-        if state != "post":
-            continue
-        comp = (event.get("competitions") or [{}])[0]
-        home_abbr, away_abbr = "", ""
-        for c in comp.get("competitors", []):
-            abbr = c.get("team", {}).get("abbreviation", "")
-            if c.get("homeAway") == "home":
-                home_abbr = abbr
+        try:
+            state = event.get("status", {}).get("type", {}).get("state", "")
+            if state not in ("post", "in"):     # skip pre-game; score live + final
+                continue
+            comp = (event.get("competitions") or [{}])[0]
+            home_abbr, away_abbr = "", ""
+            for c in comp.get("competitors", []):
+                abbr = c.get("team", {}).get("abbreviation", "")
+                if c.get("homeAway") == "home":
+                    home_abbr = abbr
+                else:
+                    away_abbr = abbr
+            if not home_abbr or not away_abbr:
+                continue
+
+            key = f"{home_abbr}_{away_abbr}"
+            cached = _get_cached_watch_score(home_abbr, away_abbr, game_date, league)
+            if cached and _watch_cache_fresh(cached):
+                results[key] = cached
+                continue
+
+            # BSD-sourced ids (bsd-*) score directly from BSD — live + final.
+            # Legacy s365-* games keep the 365 play-by-play path (final only).
+            gid = str(event.get("id") or "")
+            if gid.startswith("bsd-"):
+                try:
+                    result = calculate_watch_score_bsd(int(gid[4:]), league=league)
+                except Exception:
+                    result = None
+            elif state == "post":
+                result = calculate_watch_score_by_teams(
+                    home_abbr=home_abbr, away_abbr=away_abbr,
+                    date_yyyymmdd=game_date, league=league)
             else:
-                away_abbr = abbr
-        if not home_abbr or not away_abbr:
-            continue
+                result = None
 
-        key = f"{home_abbr}_{away_abbr}"
-        cached = _get_cached_watch_score(home_abbr, away_abbr, game_date, league)
-        if cached:
-            results[key] = cached
+            if result:
+                results[key] = _cache_watch_score(
+                    home_abbr, away_abbr, game_date, league, result,
+                    live=(state == "in"))
+        except Exception as exc:
+            log.warning("watch-scores entry failed: %s", exc)
             continue
-
-        result = calculate_watch_score_by_teams(
-            home_abbr=home_abbr, away_abbr=away_abbr, date_yyyymmdd=game_date, league=league)
-        if result:
-            results[key] = _cache_watch_score(home_abbr, away_abbr, game_date, league, result)
 
     return {"scores": results}
 

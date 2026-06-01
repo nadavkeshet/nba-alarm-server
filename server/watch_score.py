@@ -817,3 +817,263 @@ def calculate_watch_score_by_teams(
     except Exception as exc:
         log.warning("WatchScore team lookup failed: %s", exc)
     return None
+
+
+# ── BSD-native scoring (live + final, all basketball leagues) ─────────────────
+
+def _bb_period_num(key: str) -> int | None:
+    k = (key or "").lower()
+    if k.startswith("period"):
+        try:
+            return int(k[6:])
+        except ValueError:
+            return None
+    if k.startswith("overtime"):
+        try:
+            return 4 + int(k[8:] or "1")
+        except ValueError:
+            return 5
+    return None
+
+
+def _bb_synthesize_plays_from_periods(detail: dict, period_length_sec: int):
+    """Build coarse end-of-quarter ScoringPlays from BSD `periods_score`
+    (per-quarter deltas; -1 sentinels = unplayed). Works live — completed
+    quarters are final and the in-progress quarter's partial is already summed
+    into the live total."""
+    ps = detail.get("periods_score") or {}
+    items: list[tuple[int, int, int]] = []
+    for key, val in ps.items():
+        p = _bb_period_num(key)
+        if p is None or not isinstance(val, (list, tuple)) or len(val) < 2:
+            continue
+        h, a = val[0], val[1]
+        if h is None or a is None or h < 0 or a < 0:   # -1 = quarter not played yet
+            continue
+        items.append((p, int(h), int(a)))
+    items.sort(key=lambda x: x[0])
+
+    home_id = str((detail.get("home_team") or {}).get("id") or "home")
+    away_id = str((detail.get("away_team") or {}).get("id") or "away")
+    home_running = away_running = 0
+    plays: list[ScoringPlay] = []
+    for (p, hq, aq) in items:
+        home_running += hq
+        away_running += aq
+        plays.append(ScoringPlay(
+            period=p, clock_seconds=0.0,
+            game_seconds=_game_elapsed(p, 0.0, period_length_sec),
+            home_score=home_running, away_score=away_running,
+            diff=home_running - away_running,
+            team_id=home_id if hq >= aq else away_id,
+            score_value=hq + aq, text=f"End of period {p}",
+        ))
+
+    # Safety net: if periods_score lags the live total, append the live state.
+    lh, la = detail.get("home_score"), detail.get("away_score")
+    if lh is not None and la is not None and (int(lh), int(la)) != (home_running, away_running):
+        cur_p = (items[-1][0] if items else 0) + 1
+        plays.append(ScoringPlay(
+            period=cur_p, clock_seconds=0.0,
+            game_seconds=_game_elapsed(cur_p, 0.0, period_length_sec),
+            home_score=int(lh), away_score=int(la), diff=int(lh) - int(la),
+            team_id=home_id, score_value=0, text="live total",
+        ))
+
+    team_info = {
+        "home_id": home_id, "away_id": away_id,
+        "home_abbr": (detail.get("home_team") or {}).get("short_name") or "",
+        "away_abbr": (detail.get("away_team") or {}).get("short_name") or "",
+    }
+    return plays, team_info
+
+
+def _bb_find_stat_item(team_stats: dict, key_substr: str) -> dict | None:
+    try:
+        scopes = team_stats.get("statistics") or []
+        for g in (scopes[0].get("groups") or []):
+            for it in (g.get("statisticsItems") or []):
+                if key_substr in (it.get("key") or ""):
+                    return it
+    except Exception:
+        pass
+    return None
+
+
+def _bb_efficiency_factor(team_stats: dict | None) -> float:
+    """0.9–1.1 from field-goal efficiency. A close game where both teams shoot
+    well is a better watch than both bricking. Neutral (1.0) on missing data."""
+    try:
+        it = _bb_find_stat_item(team_stats or {}, "fieldGoals")
+        if not it:
+            return 1.0
+        pcts = []
+        if it.get("homeTotal"):
+            pcts.append(it["homeValue"] / it["homeTotal"])
+        if it.get("awayTotal"):
+            pcts.append(it["awayValue"] / it["awayTotal"])
+        if not pcts:
+            return 1.0
+        avg = sum(pcts) / len(pcts)                    # ~0.45 typical
+        return max(0.9, min(1.1, 1.0 + (avg - 0.45) * 1.6))
+    except Exception:
+        return 1.0
+
+
+def _bb_standout_boost(box_score: dict | None) -> float:
+    """0–0.6 when a player goes off (40+ pts / triple-double / near it) on either
+    team — a star night makes a game must-watch. Neutral (0) on missing data."""
+    if not box_score:
+        return 0.0
+    best = 0.0
+    try:
+        for side in ("home_box", "away_box"):
+            for p in (box_score.get(side) or []):
+                pts = p.get("points") or 0
+                cats = sum(1 for v in (p.get("points"), p.get("rebounds"),
+                                       p.get("assists"), p.get("steals"),
+                                       p.get("blocks")) if (v or 0) >= 10)
+                s = 0.0
+                if pts >= 40:
+                    s = 0.5
+                elif pts >= 30:
+                    s = 0.3
+                if cats >= 3:
+                    s = max(s, 0.6)        # triple-double
+                elif cats == 2:
+                    s = max(s, 0.2)
+                best = max(best, s)
+    except Exception:
+        return 0.0
+    return min(0.6, best)
+
+
+def _compute_avdija_boost_bsd(detail: dict, box_score: dict | None) -> tuple[float, dict]:
+    """Portland/Deni-Avdija boost from the BSD box score — same point formula and
+    +2.5 cap as the 365 path, matched by name (BSD ids differ from 365)."""
+    if not box_score:
+        return 0.0, {}
+    home_name = ((detail.get("home_team") or {}).get("name") or "").lower()
+    away_name = ((detail.get("away_team") or {}).get("name") or "").lower()
+    def _is_pdx(n: str) -> bool:
+        return "portland" in n or "trail blazers" in n
+    if not (_is_pdx(home_name) or _is_pdx(away_name)):
+        return 0.0, {}
+
+    deni = None
+    for side in ("home_box", "away_box"):
+        for p in (box_score.get(side) or []):
+            if any(pat in (p.get("name") or "").lower() for pat in _DENI_NAME_PATTERNS):
+                deni = p
+                break
+        if deni:
+            break
+    if deni is None:
+        return 0.0, {"reason": "not_in_boxscore"}
+    if (deni.get("minutes") or 0) <= 0:
+        return 0.0, {"reason": "did_not_play"}
+
+    pts = deni.get("points") or 0
+    reb = deni.get("rebounds") or 0
+    ast = deni.get("assists") or 0
+    stl = deni.get("steals") or 0
+    blk = deni.get("blocks") or 0
+
+    boost = 0.0
+    if pts >= 10:
+        boost += min(1.5, (pts - 10) / 10 * 0.7)
+    ra = reb + ast
+    if ra >= 7:
+        boost += min(0.6, (ra - 7) / 10 * 0.5)
+    boost += min(0.4, (stl + blk) * 0.1)
+    cats = sum(1 for v in (pts, reb, ast, stl, blk) if v >= 10)
+    if cats >= 3:
+        boost += 1.5
+    elif cats == 2:
+        boost += 0.5
+
+    hs = detail.get("home_score") or 0
+    as_ = detail.get("away_score") or 0
+    portland_won = (_is_pdx(home_name) and hs > as_) or (_is_pdx(away_name) and as_ > hs)
+    if portland_won:
+        boost += 0.8
+
+    boost = min(_AVDIJA_BOOST_MAX, round(boost, 2))
+    return boost, {"applied": boost > 0, "pts": pts, "team_won": portland_won, "double_categories": cats}
+
+
+def _bb_safe(fn, event_id):
+    try:
+        return fn(int(event_id)) or {}
+    except Exception:
+        return {}
+
+
+def calculate_watch_score_bsd(bsd_event_id: int, league: str = "nba") -> WatchScoreResult | None:
+    """Watch score driven directly from a BSD basketball event — works LIVE
+    (in-progress) and final, across every league (periods_score is universal).
+    Enriches with BSD team-stats (shooting efficiency) + box-score (standout
+    performances) and keeps the Portland/Avdija boost on finals."""
+    try:
+        import bsd_basketball as _bb
+    except Exception:
+        return None
+    detail = _bb_safe(_bb.event_detail, bsd_event_id)
+    if not detail:
+        return None
+    status = (detail.get("status") or "").lower()
+    is_live = status == "inprogress"
+    is_final = status == "finished"
+    if not (is_live or is_final):
+        return None
+
+    period_length = _period_length_for_league(league)
+    plays, team_info = _bb_synthesize_plays_from_periods(detail, period_length)
+    if not plays:
+        return None
+
+    raw, tension, flow, clutch, details = _score_from_stages(plays)
+    max_period = max(p.period for p in plays)
+    is_overtime = max_period > 4
+    if raw > 0:
+        raw = (raw ** 0.78) * (10 ** 0.22)
+    final_score = raw
+
+    # Enrichment (both live & final), neutral on any missing data.
+    eff = _bb_efficiency_factor(_bb_safe(_bb.event_team_stats, bsd_event_id))
+    final_score *= eff
+    diff_now = abs(plays[-1].diff)
+    standout = 0.0
+    if diff_now <= 25:                       # skip box fetch for decided games
+        standout = _bb_standout_boost(_bb_safe(_bb.event_box_score, bsd_event_id))
+        final_score += standout
+
+    avdija = 0.0
+    if is_live:
+        # Tight + late climbs; an early blowout stays low. No final-only bonuses.
+        closeness_now = max(0.0, 1.0 - diff_now / 12.0)
+        frac_elapsed = min(1.0, max_period / 4.0)
+        final_score *= (1.0 + 0.5 * closeness_now * frac_elapsed)
+    else:
+        if is_overtime:
+            final_score += 1.0
+            final_score = max(8.5, final_score)
+        avdija, _ = _compute_avdija_boost_bsd(detail, _bb_safe(_bb.event_box_score, bsd_event_id))
+        final_score += avdija
+
+    final_score = max(1.0, min(10.0, round(final_score, 1)))
+    return WatchScoreResult(
+        score=final_score,
+        tension_score=round(tension, 1),
+        flow_score=round(flow, 1),
+        clutch_score=round(clutch, 1),
+        details={
+            **details, "teams": team_info, "source": "bsd", "live": is_live,
+            "efficiency": round(eff, 3), "standout": round(standout, 2),
+            "avdija": round(avdija, 2),
+            "final_score_home": plays[-1].home_score,
+            "final_score_away": plays[-1].away_score,
+        },
+        buzzer_beater=False,
+        overtime=is_overtime,
+    )

@@ -89,7 +89,7 @@ def _check_game_schema(events: list[dict]) -> None:
     if now - _CANARY_LAST_ALERT < _CANARY_COOLDOWN:
         return
     _CANARY_LAST_ALERT = now
-    msg = f"{failed}/{len(events)} games failed schema validation — API-Basketball adapter may be broken."
+    msg = f"{failed}/{len(events)} games failed schema validation — 365scores adapter may be broken."
     log.error("SCHEMA CANARY: %s", msg)
     if ADMIN_FCM_TOKEN and _firebase_ready:
         try:
@@ -543,7 +543,7 @@ def _parse_nba_start_time(event: dict) -> datetime | None:
 def _fetch_player_stats(game_id: str, player_id: str) -> dict | None:
     """
     Return a stat dict with keys PTS, REB, AST, 3PM (and others)
-    for the given player from the API-Basketball box score, or None if unavailable.
+    for the given player from the 365scores box score, or None if unavailable.
     """
     try:
         data = api_fetch_boxscore(game_id)
@@ -662,7 +662,7 @@ def fetch_game_summary_roster(game_id: str, date: str | None = None, league: str
         if not team_id:
             continue
 
-        # Cache miss — live fetch from API-Basketball
+        # Cache miss — live fetch from 365scores
         log.warning("Roster cache miss for team %s – fetching live.", team_id)
         try:
             players = api_fetch_team_players(int(team_id))
@@ -1483,7 +1483,7 @@ def start_radar_job() -> None:
                 api_failures += 1
                 if api_failures >= 3:
                     log.error(
-                        "RADAR_API_DOWN: API-Basketball has failed %d consecutive ticks – "
+                        "RADAR_API_DOWN: 365scores has failed %d consecutive ticks – "
                         "alerts may be missed until it recovers.",
                         api_failures,
                     )

@@ -30,9 +30,12 @@ import os
 import random
 import threading
 import time
+from collections import deque
 from typing import Any, Callable
 
 import websocket  # websocket-client
+
+import win_probability
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +84,9 @@ class BSDLiveClient:
         self._state_event:    dict[int, dict] = {}
         self._state_livedata: dict[int, dict] = {}
         self._state_odds:     dict[int, dict] = {}
+        # event_id → bounded history of (monotonic_ts, p_home, p_draw, p_away)
+        # derived from odds frames, for win-probability swing detection.
+        self._winprob_history: dict[int, deque] = {}
 
         self._callbacks: list[EventCallback] = []
 
@@ -147,6 +153,7 @@ class BSDLiveClient:
             self._state_event.pop(event_id, None)
             self._state_livedata.pop(event_id, None)
             self._state_odds.pop(event_id, None)
+            self._winprob_history.pop(event_id, None)
         self._send_if_connected({"action": "unsubscribe", "event_id": event_id})
 
     def sync_subscriptions(self, desired_ids: set[int]) -> None:
@@ -178,6 +185,44 @@ class BSDLiveClient:
     def get_odds_snapshot(self, event_id: int) -> dict | None:
         with self._lock:
             return self._state_odds.get(event_id)
+
+    def get_winprob_snapshot(self, event_id: int) -> tuple[float, float, float] | None:
+        """Latest implied (p_home, p_draw, p_away) for this event, or None."""
+        with self._lock:
+            hist = self._winprob_history.get(event_id)
+            if not hist:
+                return None
+            _, ph, pd, pa = hist[-1]
+            return (ph, pd, pa)
+
+    def get_winprob_swing(self, event_id: int, window_s: float = 300.0) -> float | None:
+        """Max change in the favorite's win probability (max(p_home, p_away))
+        over the last `window_s` seconds, in [0, 1]. A big swing means a goal /
+        red card flipped the match — a clutch moment. None if < 2 samples."""
+        cutoff = time.monotonic() - window_s
+        with self._lock:
+            hist = self._winprob_history.get(event_id)
+            if not hist:
+                return None
+            leads = [max(ph, pa) for (ts, ph, pd, pa) in hist if ts >= cutoff]
+        if len(leads) < 2:
+            return None
+        return max(leads) - min(leads)
+
+    def _record_winprob(self, event_id: int, odds_payload: dict) -> None:
+        """Append the implied win-prob derived from an odds frame. Best-effort —
+        never raise on the WS thread. Caller holds self._lock."""
+        try:
+            probs = win_probability.win_prob_from_snapshot(odds_payload)
+            if probs is None:
+                return
+            hist = self._winprob_history.get(event_id)
+            if hist is None:
+                hist = deque(maxlen=40)
+                self._winprob_history[event_id] = hist
+            hist.append((time.monotonic(), probs[0], probs[1], probs[2]))
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Callbacks
@@ -351,6 +396,7 @@ class BSDLiveClient:
                 self._state_livedata[event_id] = payload
             elif kind == "odds":
                 self._state_odds[event_id] = payload
+                self._record_winprob(event_id, payload)
 
     # ------------------------------------------------------------------
     # Send helpers
@@ -417,6 +463,15 @@ def get_live_event_state(event_id: int) -> dict | None:
         if _singleton is None:
             return None
     return _singleton.get_event_snapshot(event_id)
+
+
+def get_winprob_swing(event_id: int, window_s: float = 300.0) -> float | None:
+    """Module-level convenience: favorite win-prob swing for `event_id`, or None."""
+    global _singleton
+    with _singleton_lock:
+        if _singleton is None:
+            return None
+    return _singleton.get_winprob_swing(event_id, window_s)
 
 
 def is_subscription_active() -> bool:
