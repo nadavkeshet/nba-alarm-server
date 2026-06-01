@@ -139,7 +139,7 @@ def _request_json(path: str, *, max_retries: int = 3) -> dict | list:
 
         try:
             proxies = {"https": _PROXY_URL, "http": _PROXY_URL} if _PROXY_URL else None
-            r = cf_requests.get(url, impersonate=impersonate, timeout=20, headers=_HEADERS, proxies=proxies)
+            r = cf_requests.get(url, impersonate=impersonate, timeout=8, headers=_HEADERS, proxies=proxies)
         except Exception as e:
             last_error = e
             logger.warning("sofascore network error on %s: %s", path, e)

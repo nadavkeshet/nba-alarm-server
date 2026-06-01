@@ -2195,6 +2195,14 @@ def games(
 
 _empty_feed_cache: dict[str, float] = {}   # "sport|league|iso" -> monotonic expiry
 
+# ONE shared, bounded pool for all /feed fan-out. A per-request pool meant
+# ~6 concurrent /feed calls (the app fans out per-date) each spawned 16 worker
+# threads = ~96 upstream calls in flight, which exhausted the small dev box and
+# made even /health time out. A single capped pool bounds total upstream
+# concurrency no matter how many feed requests land at once.
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+_FEED_POOL = _ThreadPoolExecutor(max_workers=16, thread_name_prefix="feed")
+
 
 def _feed_empty_ttl(iso_date: str) -> float:
     """Past dates never gain games retroactively (cache long); today/future can
@@ -2305,14 +2313,12 @@ def feed(
 
     items: list[dict] = []
     if work:
-        from concurrent.futures import ThreadPoolExecutor
-        # 16 covers a full single-day request (all leagues) in one batch — the
-        # client fans out per-date, so a /feed call is ~15 cascades wide.
-        with ThreadPoolExecutor(max_workers=min(16, len(work))) as pool:
-            for sport, lg, d, payload_key, payload in pool.map(_one, work):
-                if not payload:
-                    continue
-                items.append({"sport": sport, "league": lg, "date": d, payload_key: payload})
+        # Submit to the shared bounded pool (NOT a fresh per-request pool) so
+        # concurrent /feed calls can't explode the thread count.
+        for sport, lg, d, payload_key, payload in _FEED_POOL.map(_one, work):
+            if not payload:
+                continue
+            items.append({"sport": sport, "league": lg, "date": d, payload_key: payload})
 
     return {"items": items, "tz": tz}
 
