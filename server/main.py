@@ -266,6 +266,32 @@ class SoccerFavoriteCompetitionDB(_Base):
     created_at      = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
+class WatchScoreCacheDB(_Base):
+    """
+    Persisted *final* watch scores so they survive restarts and deploys.
+
+    A finished game's score is immutable, so a row here is permanent — written
+    once when first computed, read forever after. This is what makes the feed
+    badges instant: without it the in-memory cache is wiped on every Railway
+    redeploy / cold-start and the app re-pays the BSD recompute. Live scores are
+    NOT persisted (they change) — they stay in the in-memory cache (45 s TTL).
+    """
+    __tablename__ = "watch_score_cache"
+
+    id            = Column(String, primary_key=True)   # "{league}_{date}_{home}_{away}"
+    league        = Column(String, index=True)
+    date          = Column(String, index=True)
+    home          = Column(String)
+    away          = Column(String)
+    score         = Column(Float)
+    tension       = Column(Float)
+    flow          = Column(Float)
+    clutch        = Column(Float)
+    overtime      = Column(Boolean, default=False)
+    buzzer_beater = Column(Boolean, default=False)
+    computed_at   = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 def _init_db() -> None:
     """Create tables if they don't already exist, and run lightweight migrations."""
     if engine is None:
@@ -3183,6 +3209,66 @@ def _cache_watch_score(home: str, away: str, date_str: str, league: str, result,
     return entry
 
 
+def _entry_from_db_row(row: "WatchScoreCacheDB") -> dict:
+    """A persisted final score reads back as a fresh, non-live cache entry."""
+    return {
+        "score": row.score,
+        "tension": row.tension,
+        "flow": row.flow,
+        "clutch": row.clutch,
+        "overtime": bool(row.overtime),
+        "buzzer_beater": bool(row.buzzer_beater),
+        "live": False,
+        "_ts": time.monotonic(),
+    }
+
+
+def _load_persisted_watch_scores(league: str, date_str: str) -> dict[str, dict]:
+    """All persisted final scores for one (league, date), keyed "HOME_AWAY".
+
+    One query, so seeding a whole date is a single round-trip. Also warms the
+    in-memory cache so repeat requests skip the DB entirely.
+    """
+    if engine is None:
+        return {}
+    out: dict[str, dict] = {}
+    try:
+        with Session(engine) as session:
+            rows = session.query(WatchScoreCacheDB).filter_by(
+                league=league, date=date_str).all()
+            for r in rows:
+                entry = _entry_from_db_row(r)
+                out[f"{r.home}_{r.away}"] = entry
+                _watch_score_cache[f"{league}_{date_str}_{r.home}_{r.away}"] = entry
+    except Exception as exc:
+        log.warning("watch-scores: persisted load failed (%s/%s): %s", league, date_str, exc)
+    return out
+
+
+def _persist_watch_score(league: str, date_str: str, home: str, away: str, entry: dict) -> None:
+    """Upsert a final score. No-op for live scores or when no DB is configured."""
+    if engine is None or entry.get("live"):
+        return
+    key = f"{league}_{date_str}_{home}_{away}"
+    try:
+        with Session(engine) as session:
+            row = session.get(WatchScoreCacheDB, key)
+            if row is None:
+                row = WatchScoreCacheDB(id=key, league=league, date=date_str,
+                                        home=home, away=away)
+                session.add(row)
+            row.score         = entry.get("score")
+            row.tension       = entry.get("tension")
+            row.flow          = entry.get("flow")
+            row.clutch        = entry.get("clutch")
+            row.overtime      = bool(entry.get("overtime"))
+            row.buzzer_beater = bool(entry.get("buzzer_beater"))
+            row.computed_at   = datetime.now(timezone.utc)
+            session.commit()
+    except Exception as exc:
+        log.warning("watch-scores: persist failed (%s): %s", key, exc)
+
+
 @app.get("/watch-score")
 def watch_score(home: str, away: str, date: str = "", league: str = "nba"):
     """
@@ -3211,10 +3297,17 @@ def watch_scores(date: str = "", league: str = "nba"):
     """
     from watch_score import calculate_watch_score_by_teams, calculate_watch_score_bsd
     from monitor import _eastern_today
+    from concurrent.futures import ThreadPoolExecutor
     game_date = date if date else _eastern_today()
 
     events = get_games_for_date(game_date, league=league)
+
+    # One round-trip seeds every persisted final score for the date (permanent,
+    # survives restarts/deploys). Misses fall through to compute below.
+    persisted = _load_persisted_watch_scores(league, game_date)
+
     results: dict[str, dict] = {}
+    todo: list[tuple[str, str, str, str]] = []   # (home, away, gid, state) to compute
 
     for event in events:
         try:
@@ -3233,33 +3326,53 @@ def watch_scores(date: str = "", league: str = "nba"):
                 continue
 
             key = f"{home_abbr}_{away_abbr}"
+            # Fresh in-memory hit (covers live within 45 s and final).
             cached = _get_cached_watch_score(home_abbr, away_abbr, game_date, league)
             if cached and _watch_cache_fresh(cached):
                 results[key] = cached
                 continue
+            # Persisted final score — permanent, only valid once the game is over.
+            if state == "post" and key in persisted:
+                results[key] = persisted[key]
+                continue
 
+            gid = str(event.get("id") or "")
+            todo.append((home_abbr, away_abbr, gid, state))
+        except Exception as exc:
+            log.warning("watch-scores entry failed: %s", exc)
+            continue
+
+    # Compute the misses in parallel — each calculate_* makes 2-3 BSD HTTP calls,
+    # so this is I/O-bound and threads overlap the waits (serial was the dominant
+    # cost on a cold date).
+    def _compute(item: tuple[str, str, str, str]):
+        home_abbr, away_abbr, gid, state = item
+        try:
             # BSD-sourced ids (bsd-*) score directly from BSD — live + final.
             # Legacy s365-* games keep the 365 play-by-play path (final only).
-            gid = str(event.get("id") or "")
             if gid.startswith("bsd-"):
-                try:
-                    result = calculate_watch_score_bsd(int(gid[4:]), league=league)
-                except Exception:
-                    result = None
+                result = calculate_watch_score_bsd(int(gid[4:]), league=league)
             elif state == "post":
                 result = calculate_watch_score_by_teams(
                     home_abbr=home_abbr, away_abbr=away_abbr,
                     date_yyyymmdd=game_date, league=league)
             else:
                 result = None
+        except Exception:
+            result = None
+        return (home_abbr, away_abbr, state, result)
 
-            if result:
-                results[key] = _cache_watch_score(
-                    home_abbr, away_abbr, game_date, league, result,
-                    live=(state == "in"))
-        except Exception as exc:
-            log.warning("watch-scores entry failed: %s", exc)
-            continue
+    if todo:
+        with ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool:
+            for home_abbr, away_abbr, state, result in pool.map(_compute, todo):
+                if not result:
+                    continue
+                live = (state == "in")
+                entry = _cache_watch_score(
+                    home_abbr, away_abbr, game_date, league, result, live=live)
+                results[f"{home_abbr}_{away_abbr}"] = entry
+                if not live:                  # finished → persist permanently
+                    _persist_watch_score(league, game_date, home_abbr, away_abbr, entry)
 
     return {"scores": results}
 
