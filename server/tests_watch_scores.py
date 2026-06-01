@@ -91,11 +91,72 @@ def t_basketball_units():
     assert ws._compute_avdija_boost_bsd(nope, bx) == (0.0, {})
 
 
+def t_wc_drama():
+    import drama_engine as de
+    K = de._is_knockout
+    assert K("Final") and K("Quarter-final") and K("Round of 16") and K("Semi-final")
+    assert not K("Group A") and not K("Group Stage") and not K(None)
+
+    def ctx(**kw):
+        base = {"minute": 80, "status": "live", "competition": "world_cup",
+                "home": {"score": 0}, "away": {"score": 0}}
+        base.update(kw); return base
+
+    # UPSET — a pre-match underdog leading late in a knockout screams; the
+    # favorite leading does not.
+    up = de.compute_drama(ctx(round_name="Round of 16", home={"score": 1}, away={"score": 0},
+                              pre_match_win_prob=(0.12, 0.20, 0.68)))   # home was a big underdog
+    fav = de.compute_drama(ctx(round_name="Round of 16", home={"score": 1}, away={"score": 0},
+                               pre_match_win_prob=(0.68, 0.20, 0.12)))  # home was the favorite
+    assert up.upset >= 1.5 and fav.upset == 0.0, (up.upset, fav.upset)
+    assert up.total > fav.total
+    # Live market dissonance also triggers an upset (market still favors the trailer).
+    dis = de.compute_drama(ctx(home={"score": 1}, away={"score": 0}, win_prob=(0.30, 0.20, 0.50)))
+    assert dis.upset > 0.0
+
+    # KNOCKOUT peaks — a shootout is ~10; a late 1-goal knockout beats a late
+    # 1-goal group game.
+    shootout = de.compute_drama(ctx(status="pens", round_name="Final",
+                                    home={"score": 1}, away={"score": 1}))
+    assert shootout.total >= 9.5, shootout.total
+    ko = de.compute_drama(ctx(minute=88, round_name="Quarter-final",
+                              home={"score": 1}, away={"score": 0})).state
+    grp = de.compute_drama(ctx(minute=88, round_name="Group A",
+                               home={"score": 1}, away={"score": 0})).state
+    assert ko > grp, (ko, grp)
+
+    # COMEBACK — a late equalizer adds event drama.
+    eq = de.compute_drama(ctx(minute=85, home={"score": 1}, away={"score": 1},
+        recent_events=[{"type": "goal", "minute": 84, "team": "away",
+                        "home_score": 1, "away_score": 1}])).events
+    assert eq > 1.5, eq
+
+    # CHANCES — end-to-end (both ends) beats one-sided.
+    end2end = de._score_chances({"home": {"big_chances": 4}, "away": {"big_chances": 4}})
+    oneside = de._score_chances({"home": {"big_chances": 6}, "away": {"big_chances": 0}})
+    assert end2end > oneside and de._score_chances({}) == 0.0
+
+    # QUALIFICATION — late close group game boosts; knockout / early / non-group = 0.
+    qg = de.compute_drama(ctx(minute=88, round_name="Group C",
+                              home={"score": 1}, away={"score": 1})).qualification
+    assert qg > 0.0
+    assert de.compute_drama(ctx(minute=88, round_name="Final",
+                                home={"score": 1}, away={"score": 1})).qualification == 0.0
+    assert de.compute_drama(ctx(minute=20, round_name="Group C")).qualification == 0.0
+
+    # Robustness: empty ctx and full ctx both clamp 0–10, never crash.
+    for c in ({}, ctx(status="pens", round_name="Final",
+                      pre_match_win_prob=(0.05, 0.15, 0.80), win_prob=(0.1, 0.2, 0.7),
+                      home={"score": 2, "big_chances": 5}, away={"score": 1, "big_chances": 4})):
+        assert 0.0 <= de.compute_drama(c).total <= 10.0
+
+
 def main():
     t_win_probability()
     t_drama_odds()
     t_soccer_lightweight()
     t_basketball_units()
+    t_wc_drama()
     print("OK")
 
 

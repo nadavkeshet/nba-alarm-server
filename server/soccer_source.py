@@ -53,6 +53,23 @@ def record_peak_drama(canonical_id: str, value: float) -> None:
     except Exception:
         pass
 
+
+def pre_match_win_prob(eid: int) -> tuple[float, float, float] | None:
+    """(p_home, p_draw, p_away) in 0–1 from the BSD pre-match prediction — the
+    baseline for the Drama Engine's upset signal. None on any failure."""
+    try:
+        pred = bsd.event_prediction(int(eid)) or {}
+        mr = (pred.get("markets") or {}).get("match_result") or {}
+        ph, pd, pa = mr.get("prob_home"), mr.get("prob_draw"), mr.get("prob_away")
+        if ph is None or pd is None or pa is None:
+            return None
+        total = float(ph) + float(pd) + float(pa)
+        if total <= 0:
+            return None
+        return (float(ph) / total, float(pd) / total, float(pa) / total)
+    except Exception:
+        return None
+
 # Module-level cache: canonical_id -> (home_pens, away_pens)
 # Populated when a match detail is fetched and penalty kicks are found in the shotmap.
 # The list endpoint reads this cache so matches show penalty scores even without a detail fetch.
@@ -235,6 +252,8 @@ def _live_drama_ctx(eid, status, minute, hs, aw, slug, round_name, is_derby) -> 
         a_side = snap.get("away") or {}
         home["xg"] = _to_float(h_side.get("xg"))
         away["xg"] = _to_float(a_side.get("xg"))
+        home["big_chances"] = h_side.get("big_chances")
+        away["big_chances"] = a_side.get("big_chances")
         h_dng = _to_float(h_side.get("dangerous_attack_pct")) or 0.0
         a_dng = _to_float(a_side.get("dangerous_attack_pct")) or 0.0
         if (h_dng + a_dng) > 0:

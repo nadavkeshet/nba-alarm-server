@@ -2397,9 +2397,14 @@ def soccer_drama(canonical_id: str):
     if canonical_id.startswith("bsd-"):
         try:
             import bsd_websocket as _ws
-            swing = _ws.get_winprob_swing(int(canonical_id[4:]))
+            eid = int(canonical_id[4:])
+            swing = _ws.get_winprob_swing(eid)
             if swing is not None:
                 ctx["win_prob_swing"] = swing
+            # Pre-match prediction powers the upset signal (giant-killing).
+            pm = _ss.pre_match_win_prob(eid)
+            if pm is not None:
+                ctx["pre_match_win_prob"] = pm
         except Exception:
             pass
     score = _de.compute_drama(ctx)

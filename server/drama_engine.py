@@ -77,7 +77,10 @@ class DramaScore:
     momentum: float   # 0–4
     events:   float   # 0–4
     stakes:   float   # 0.6–2
-    odds:     float = 0.0  # 0–2 — live market uncertainty + win-prob swing
+    odds:     float = 0.0          # 0–2 — live market uncertainty + win-prob swing
+    chances:  float = 0.0          # 0–1 — end-to-end big chances (in the core)
+    upset:    float = 0.0          # 0–2.5 — giant-killing spike (added after stakes)
+    qualification: float = 0.0     # 0–2 — group-stage qualification jeopardy (spike)
 
     def as_dict(self) -> dict[str, float]:
         return asdict(self)
@@ -114,14 +117,18 @@ def compute_drama(ctx: dict[str, Any]) -> DramaScore:
     momentum = _score_momentum(ctx)
     events   = _score_events(ctx)
     odds     = _score_odds(ctx)
+    chances  = _score_chances(ctx)
+    upset    = _score_upset(ctx)
+    qualification = _score_qualification(ctx)
     stakes   = _stakes_multiplier(ctx)
 
-    # Clamp the raw sum at 7 so stakes (~0.85–2.17) always have headroom
-    # to push the final number up to the 10-cap. Without this, every
-    # close-late tied game in any league saturates at 10 and the league
-    # signal is lost.
-    raw = min(7.0, max(0.0, state + momentum + events + odds))
-    total = min(10.0, raw * stakes)
+    # Live-tension core, clamped at 7 so stakes (~0.85–2.17) always have headroom
+    # to push toward the 10-cap and the league signal isn't lost.
+    core = min(7.0, max(0.0, state + momentum + events + odds + chances))
+    total = core * stakes
+    # WC "spike" terms ride ON TOP of the stakes-scaled core, so a giant-killing
+    # or a qualification-deciding moment screams toward 10 even outside finals.
+    total = min(10.0, total + upset + qualification)
     return DramaScore(
         total=round(total, 2),
         state=round(state, 2),
@@ -129,7 +136,21 @@ def compute_drama(ctx: dict[str, Any]) -> DramaScore:
         events=round(events, 2),
         stakes=round(stakes, 2),
         odds=round(odds, 2),
+        chances=round(chances, 2),
+        upset=round(upset, 2),
+        qualification=round(qualification, 2),
     )
+
+
+def _is_knockout(round_name) -> bool:
+    """A knockout/elimination tie — where losing means going home."""
+    n = (round_name or "").lower()
+    if "group" in n:
+        return False
+    return any(k in n for k in (
+        "knockout", "round of", "last 16", "last 32", "playoff", "play-off",
+        "quarter", "semi", "final",   # 'final' also matches quarter/semi-final
+    ))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -186,12 +207,20 @@ def _score_state(ctx: dict) -> float:
     # on its own, but a 0-0 at minute 89 *is* — that's what the lateness
     # multiplier (below) is for. Without this, even tedious tied finals
     # got pumped to 6/10 mid-game by the stakes multiplier.
+    knockout = _is_knockout(ctx.get("round_name"))
+
     if   diff == 0: base, late_max = 1.5, 2.5  # tied — lean on lateness + momentum
     elif diff == 1: base, late_max = 2.0, 0.8  # 1-goal late is only dramatic
                                                 # if the trailer is pressuring;
                                                 # we let momentum do that work
     elif diff == 2: base, late_max = 1.0, 0.3
     else:           base, late_max = 0.3, 0.0   # blowout
+
+    # Knockout "elimination jeopardy" — a slender late lead is agonizing because
+    # the trailing side goes HOME, not just drops points. Late drama bites harder.
+    if knockout:
+        if   diff == 1: late_max = 1.8
+        elif diff == 2: late_max = 0.7
 
     # Earliness damper — nothing's happened yet in the opening 25 minutes,
     # so the scoreline alone shouldn't drive drama past ~1/10. Ramps from
@@ -205,11 +234,12 @@ def _score_state(ctx: dict) -> float:
         late_factor = min(late_max, max(0.0, (minute - 60) / 20.0 * late_max))
         base *= (1.0 + late_factor)
 
-    # Extra time and penalties are automatically high-state
+    # Extra time and penalties are automatically high-state. A knockout
+    # shootout / ET is do-or-die — push it to the very top.
     if status == "et":
-        base = max(base, 5.5)
+        base = max(base, 6.5 if knockout else 5.5)
     elif status == "pens":
-        base = max(base, 6.5)
+        base = max(base, 8.5)   # a shootout is peak drama (× stakes → ~10 at a WC)
 
     # Half-time of a close game is mildly dramatic but cooled off
     if status == "ht":
@@ -303,6 +333,7 @@ def _score_events(ctx: dict) -> float:
         return 0.0
 
     minute = ctx.get("minute") or 0
+    knockout = _is_knockout(ctx.get("round_name"))
     score = 0.0
 
     for ev in incidents:
@@ -311,14 +342,132 @@ def _score_events(ctx: dict) -> float:
         late_bonus = max(0.0, (ev_min - 60) / 30.0)   # 0 at 60', 1.0 at 90'+
 
         if ev_type == "goal":
-            # 88th-minute goals matter much more than 30th-minute ones
+            # 88th-minute goals matter much more than 30th-minute ones.
             score += 1.0 + late_bonus * 0.7
+            # Comeback: a goal that levels the match (an equalizer) is its own
+            # drama — the resulting score on the incident is tied.
+            hs, as_ = ev.get("home_score"), ev.get("away_score")
+            if hs is not None and as_ is not None and hs == as_ and (hs + as_) > 0:
+                score += 0.8 + late_bonus * 0.6
+            # A late knockout goal can send a team home — amplify it.
+            if knockout and ev_min >= 75:
+                score += 0.6 * (0.5 + late_bonus)
         elif ev_type == "penalty_awarded":
             score += 1.8 + late_bonus * 0.6
         else:
             score += _EVENT_WEIGHTS.get(ev_type, 0.0)
 
-    return min(4.0, score)
+    return min(4.5, score)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Chances — end-to-end thrillers (big chances both ways)
+
+
+def _score_chances(ctx: dict) -> float:
+    """0–1 (in the core). Rewards END-TO-END matches — both teams racking up big
+    chances — not one-sided pressure. 0 when there's no chance data."""
+    home = ctx.get("home") or {}
+    away = ctx.get("away") or {}
+    hbc, abc = home.get("big_chances"), away.get("big_chances")
+    if hbc is None and abc is None:
+        return 0.0
+    hbc = hbc or 0
+    abc = abc or 0
+    return min(1.0, (hbc + abc) * 0.12 + min(hbc, abc) * 0.15)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Upset — giant-killing in progress (the World Cup's signature moment)
+
+
+def _score_upset(ctx: dict) -> float:
+    """0–2.5 spike. The team that is WINNING was the underdog — strong by design.
+    Uses the pre-match prediction (the leader was unlikely to win) and/or live
+    market dissonance (the market still favors the team that's behind), scaled by
+    how long it's held and whether it's a knockout. 0 without odds/prediction."""
+    home = ctx.get("home") or {}
+    away = ctx.get("away") or {}
+    h = home.get("score") or 0
+    a = away.get("score") or 0
+    status = (ctx.get("status") or "").lower()
+    if status in {"scheduled", "postponed", "canceled"} or h == a:
+        return 0.0
+    leading_home = h > a
+    minute = ctx.get("minute") or 0
+    lateness = min(1.0, max(0.0, (minute - 30) / 60.0))   # 30'→90'
+
+    underdog = 0.0
+    pm = ctx.get("pre_match_win_prob")     # (p_home, p_draw, p_away), 0–1
+    if pm:
+        p_lead_pre = pm[0] if leading_home else pm[2]
+        underdog = max(underdog, max(0.0, (0.40 - p_lead_pre) / 0.40))   # 0 at 40%, 1 at 0%
+    wp = ctx.get("win_prob")               # live (p_home, p_draw, p_away)
+    if wp:
+        p_lead = wp[0] if leading_home else wp[2]
+        p_trail = wp[2] if leading_home else wp[0]
+        if p_trail > p_lead:               # market still favors the team that's behind
+            underdog = max(underdog, min(1.0, (p_trail - p_lead) * 1.5))
+    if underdog <= 0.0:
+        return 0.0
+
+    spike = underdog * 2.0 * (0.5 + 0.5 * lateness)
+    if _is_knockout(ctx.get("round_name")):
+        spike *= 1.25                      # a knockout upset is era-defining
+    return min(2.5, spike)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Qualification — late group-stage jeopardy
+
+
+def _score_qualification(ctx: dict) -> float:
+    """0–2 spike, group stage only. A late, close group game is inherently high-
+    stakes (qualification on the line); refined by standings when a team sits on
+    the qualification bubble. Conservative — 0 when nothing is clearly at stake."""
+    round_name = (ctx.get("round_name") or "").lower()
+    if "group" not in round_name:
+        return 0.0
+    status = (ctx.get("status") or "").lower()
+    if status in {"scheduled", "postponed", "canceled"}:
+        return 0.0
+    minute = ctx.get("minute") or 0
+    home = ctx.get("home") or {}
+    away = ctx.get("away") or {}
+    diff = abs((home.get("score") or 0) - (away.get("score") or 0))
+    lateness = min(1.0, max(0.0, (minute - 60) / 30.0))   # 60'→90'
+    if lateness <= 0:
+        return 0.0
+    closeness = 1.0 if diff == 0 else (0.7 if diff == 1 else 0.2)
+    base = 1.2 * lateness * closeness                      # 0–1.2 heuristic
+    base += _qualification_bubble_bonus(ctx, lateness)     # 0–0.8, 0 if no standings
+    return min(2.0, base)
+
+
+def _qualification_bubble_bonus(ctx: dict, lateness: float) -> float:
+    """0–0.8. Best-effort from the group standings rows the caller supplies for
+    this match's group. 0 on any missing/ambiguous data — never mis-fires."""
+    rows = ctx.get("standings")
+    if not rows or not isinstance(rows, list):
+        return 0.0
+    try:
+        ids = set()
+        for side in ("home", "away"):
+            t = ctx.get(side) or {}
+            tid = t.get("id") or t.get("team_id")
+            if tid is not None:
+                ids.add(str(tid))
+        if not ids:
+            return 0.0
+        for r in rows:
+            tid = str(r.get("team_id") or (r.get("team") or {}).get("id") or "")
+            pos = r.get("position") or r.get("rank")
+            played = r.get("played") or r.get("matches") or 0
+            if tid in ids and pos in (2, 3) and (played or 0) >= 1:
+                return 0.8 * lateness
+        return 0.0
+    except Exception:
+        return 0.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -365,6 +514,13 @@ def context_from_match_detail(detail: dict) -> dict:
     away = (detail.get("away") or {}).copy()
     minute = detail.get("minute") or 0
     status = detail.get("status")
+
+    # Big chances (end-to-end signal) live in the per-team stats, not the side.
+    stats = detail.get("stats") or {}
+    if isinstance(stats.get("home"), dict):
+        home["big_chances"] = stats["home"].get("big_chances")
+    if isinstance(stats.get("away"), dict):
+        away["big_chances"] = stats["away"].get("big_chances")
 
     # ── xG window: cumulative xg at (minute-15) vs at (minute) ──────────────
     xg_per_minute = detail.get("xg_per_minute") or []
@@ -646,5 +802,10 @@ def _normalize_recent_incidents(
         team = inc.get("team")  # BSD has 'home'/'away' here
         if isinstance(team, dict):
             team = team.get("side") or team.get("name")
-        out.append({"type": ev_type, "minute": inc_min, "team": team})
+        out.append({
+            "type": ev_type, "minute": inc_min, "team": team,
+            # Resulting score on the incident — lets _score_events spot equalizers.
+            "home_score": inc.get("home_score"),
+            "away_score": inc.get("away_score"),
+        })
     return out
