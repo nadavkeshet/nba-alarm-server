@@ -785,13 +785,16 @@ def build_live_snapshot(canonical: str) -> dict:
         return {"ws_active": False}
 
     # Eagerly subscribe so the next poll cycle finds data even if the
-    # 30-second sub-manager loop hasn't run yet.
-    if event_id not in ws.desired_subscriptions():
-        ws.subscribe(event_id)
-
-    event_snap = ws.get_event_snapshot(event_id)
-    ld         = ws.get_livedata_snapshot(event_id)
-    odds       = ws.get_odds_snapshot(event_id)
+    # 30-second sub-manager loop hasn't run yet. Guarded: this polling
+    # endpoint must never 500 — a failed WS read just means "no snapshot yet".
+    try:
+        if event_id not in ws.desired_subscriptions():
+            ws.subscribe(event_id)
+        event_snap = ws.get_event_snapshot(event_id)
+        ld         = ws.get_livedata_snapshot(event_id)
+        odds       = ws.get_odds_snapshot(event_id)
+    except Exception:
+        return {"ws_active": False}
 
     if not event_snap and not ld and not odds:
         return {"ws_active": False}
@@ -884,7 +887,11 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
                     _pens_cache[canonical] = (home_pens, away_pens)
             # Overlay in-memory WS snapshots (score/stats/livedata/odds) on
             # top of the REST payload — fresher data, no extra round-trip.
-            _ws_overlay(out, eid)
+            # Fully guarded: a WS-snapshot read must never 500 the match detail.
+            try:
+                _ws_overlay(out, eid)
+            except Exception as exc:
+                logger.warning("ws overlay failed for %s: %s", canonical, exc)
             return out
 
     if source == "sofa":

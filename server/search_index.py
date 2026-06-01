@@ -119,10 +119,7 @@ def _normalize_team_name(name: str) -> str:
     no_punct = re.sub(r"[^\w\s]", " ", lowered)
     tokens = [t for t in no_punct.split() if t]
     filtered = [t for t in tokens if t not in _CLUB_SUFFIX_TOKENS]
-    base = " ".join(filtered or tokens)
-    # Apply cross-provider token aliases (e.g. "ta" -> "tel aviv") so the same
-    # club from BSD and 365scores collapses to one merge key.
-    return _bx.norm_name(base)
+    return " ".join(filtered or tokens)
 
 
 def _is_bsd_sourced(team: dict) -> bool:
@@ -311,13 +308,16 @@ def search(query: str, limit: int = 10) -> dict[str, list[dict]]:
     # Attach BSD ids so EuroLeague-family games (BSD-sourced) match a favorite
     # saved from a 365-sourced search row. Crosswalk first; name-merge fallback
     # uses the BSD team index. Extra rows merge via _merge_duplicate_teams.
+    # The alias-aware `_bx.norm_name` is applied ONLY here (basketball BSD
+    # matching), not in the global `_normalize_team_name` merge key, so it
+    # can never over-merge two distinct clubs in another sport.
     try:
         bsd_idx = _bx.bsd_team_index()                    # {bsd_id: name}
         bsd_by_norm = { _bx.norm_name(n): bid for bid, n in bsd_idx.items() if n }
         for t in list(teams):
             if t.get("sport") != "basketball":
                 continue
-            bid = _bx.bsd_for_365(t["id"]) or bsd_by_norm.get(_normalize_team_name(t["name"]))
+            bid = _bx.bsd_for_365(t["id"]) or bsd_by_norm.get(_bx.norm_name(t["name"]))
             if bid and bid != t["id"]:
                 teams.append({**t, "id": bid})            # sibling row → merges
     except Exception:
