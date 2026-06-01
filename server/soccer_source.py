@@ -522,20 +522,14 @@ def get_soccer_matches(
     if date_iso is None:
         date_iso = datetime.now(anchor_tz).date().isoformat()
 
-    primary = PRIMARY_SOURCE[league_slug]
-
-    # Build the order of sources to try: primary, then the other, then 365scores
+    # Sofascore was removed from the cascade: it block-403s from Railway's
+    # egress IPs, so on a cold feed fan-out every miss burned a slow
+    # fingerprint-rotation through a dead source and stalled the schedule. BSD
+    # (primary for most competitions, incl. the World Cup) plus 365scores
+    # (covers all competitions) are sufficient.
     sources: list[tuple[str, callable]] = []  # type: ignore[type-arg]
-    if primary == "bsd":
-        if league_slug in BSD_COMPETITION_IDS:
-            sources.append(("bsd", _fetch_bsd))
-        if league_slug in SOFASCORE_COMPETITION_IDS:
-            sources.append(("sofascore", _fetch_sofa))
-    else:
-        if league_slug in SOFASCORE_COMPETITION_IDS:
-            sources.append(("sofascore", _fetch_sofa))
-        if league_slug in BSD_COMPETITION_IDS:
-            sources.append(("bsd", _fetch_bsd))
+    if league_slug in BSD_COMPETITION_IDS:
+        sources.append(("bsd", _fetch_bsd))
     sources.append(("score365", _fetch_365))
 
     for name, fetcher in sources:
