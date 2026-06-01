@@ -2186,7 +2186,13 @@ def basketball_event_summary(canonical_id: str):
         f_detail = pool.submit(_bb.get_basketball_event_detail, canonical_id)
         f_stats  = pool.submit(_bb.get_basketball_team_stats, canonical_id)
         f_box    = pool.submit(_bb.get_basketball_box_score, canonical_id)
-        detail = f_detail.result()
+        # Wrap every result() call so upstream exceptions (auth failures,
+        # network timeouts, scraper errors) become clean 404s instead of 500s.
+        detail = None
+        try:
+            detail = f_detail.result()
+        except Exception as exc:
+            logger.warning("basketball detail failed for %s: %s", canonical_id, exc)
         if detail is None:
             raise HTTPException(status_code=404, detail="event not found")
         team_stats = None
@@ -2343,6 +2349,20 @@ def soccer_match_detail(canonical_id: str):
     if detail is None:
         raise HTTPException(status_code=404, detail="match not found")
     return detail
+
+
+@app.get("/soccer/live/{canonical_id}")
+def soccer_live_snapshot(canonical_id: str):
+    """Lightweight WebSocket-only live state. Zero REST calls — returns the
+    in-memory WS snapshot for score, minute, per-team stats (40+ counters),
+    ball position (livedata, ~5 s cadence), and consensus odds.
+
+    Always 200. `ws_active: false` means no snapshot yet (match not tracked
+    or WS not connected); iOS should fall back to the full /soccer/match
+    endpoint in that case.  Only meaningful for bsd-* canonical ids.
+    """
+    import soccer_source as _ss
+    return _ss.build_live_snapshot(canonical_id)
 
 
 @app.get("/soccer/drama/{canonical_id}")

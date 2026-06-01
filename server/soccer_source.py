@@ -126,6 +126,91 @@ def _bsd_team_image_url(team_id: int) -> str:
     return f"https://sports.bzzoiro.com/img/team/{team_id}/"
 
 
+def _soccer_watch_score(
+    source: str,
+    eid: int | None,
+    status: str,
+    minute: int | None,
+    home_score: int | None,
+    away_score: int | None,
+) -> float | None:
+    """Compute a 0–10 watch score for a soccer match card.
+
+    For live BSD matches the WS snapshot supplies live xG + momentum so the
+    score reflects real-time excitement. For FT / non-WS matches a goal-volume
+    + closeness formula is used. Returns None when the match is not interesting
+    (big lead, 0-0 FT, no data).
+    """
+    hs = home_score if home_score is not None else 0
+    aw = away_score if away_score is not None else 0
+    diff = abs(hs - aw)
+    total_goals = hs + aw
+    is_live = status in ("live", "ht", "et", "pens")
+    is_ft   = status == "ft"
+
+    if home_score is None and away_score is None:
+        return None
+
+    # ── Live BSD: use WS snapshot for xG / momentum ───────────────────────
+    if source == "bsd" and eid is not None and is_live and diff <= 2:
+        try:
+            import bsd_websocket as _ws
+            snap = _ws.client().get_event_snapshot(eid)
+        except Exception:
+            snap = None
+
+        if snap:
+            h_side = snap.get("home") or {}
+            a_side = snap.get("away") or {}
+            # Cumulative xG
+            h_xg = float(h_side.get("xg") or 0)
+            a_xg = float(a_side.get("xg") or 0)
+            total_xg = h_xg + a_xg
+            # Dangerous attack balance (1 = even back-and-forth, 0 = one-way)
+            h_dng = float(h_side.get("dangerous_attack_pct") or 0)
+            a_dng = float(a_side.get("dangerous_attack_pct") or 0)
+            dng_sum = h_dng + a_dng
+            balance = (1.0 - abs(h_dng - a_dng) / dng_sum) if dng_sum > 0 else 0.5
+            # Time pressure: late-game close matches are most exciting
+            m = minute or 0
+            time_pressure = min(1.0, (m / 90) ** 0.5) if m > 0 else 0.2
+            # Closeness (0-0 live = maximum tension)
+            closeness = 1.0 if diff == 0 else (0.7 if diff == 1 else 0.3)
+            # xG reflects how many real chances each team is creating
+            xg_factor = min(1.0, total_xg / 3.5)
+            raw = (
+                0.35 * closeness +
+                0.25 * xg_factor +
+                0.20 * time_pressure +
+                0.10 * balance +
+                0.10 * min(1.0, total_goals / 3.0)
+            ) * 10
+            score = round(min(10.0, max(0.0, raw)), 1)
+            return score if score >= 5.5 else None
+
+    # ── FT / no WS data: goal-volume + closeness ──────────────────────────
+    if is_ft and total_goals == 0:
+        return None          # 0-0 FT is rarely exciting
+    if diff > 2:
+        return None          # 3-goal margin = not interesting
+
+    if diff == 0:   closeness = 1.0
+    elif diff == 1: closeness = 0.65
+    else:           closeness = 0.25   # diff == 2
+
+    goal_factor = min(1.0, total_goals / 4.0)
+
+    if is_live:
+        m = minute or 0
+        time_factor = min(1.0, (m / 90) ** 0.5) if m > 0 else 0.2
+        raw = (0.45 * closeness + 0.30 * goal_factor + 0.25 * time_factor) * 10
+    else:
+        raw = (0.55 * closeness + 0.45 * goal_factor) * 10
+
+    score = round(raw, 1)
+    return score if score >= 5.5 else None
+
+
 def _from_bsd_event(event: dict, *, slug: str | None = None) -> dict:
     """Normalize a BSD /events/{id}/ payload (or list item) into SoccerMatch shape."""
     eid = event.get("id")
@@ -167,6 +252,10 @@ def _from_bsd_event(event: dict, *, slug: str | None = None) -> dict:
         "is_neutral_ground": bool(event.get("is_neutral_ground")),
         "round_number": event.get("round_number"),
         "round_name": event.get("round_name"),
+        "watch_score": _soccer_watch_score(
+            "bsd", eid, status, event.get("current_minute"),
+            event.get("home_score"), event.get("away_score"),
+        ),
     }
 
 
@@ -213,6 +302,11 @@ def _from_sofa_event(event: dict, *, slug: str | None = None) -> dict:
         "is_neutral_ground": False,
         "round_number": (event.get("roundInfo", {}) or {}).get("round"),
         "round_name": (event.get("roundInfo", {}) or {}).get("name"),
+        "watch_score": _soccer_watch_score(
+            "sofascore", eid, status, _sofa_minute_from_time(event),
+            (event.get("homeScore", {}) or {}).get("current"),
+            (event.get("awayScore", {}) or {}).get("current"),
+        ),
     }
 
 
@@ -483,6 +577,11 @@ def _from_365_game(game: dict, *, slug: str | None = None) -> dict:
         "is_neutral_ground": False,
         "round_number": game.get("roundNum"),
         "round_name": game.get("roundName"),
+        "watch_score": _soccer_watch_score(
+            "s365", None, status, int(game.get("gameTime")) if isinstance(game.get("gameTime"), (int, float)) else None,
+            int(home.get("score")) if isinstance(home.get("score"), (int, float)) and home.get("score") is not None and home.get("score") >= 0 else None,
+            int(away.get("score")) if isinstance(away.get("score"), (int, float)) and away.get("score") is not None and away.get("score") >= 0 else None,
+        ),
     }
 
 
@@ -538,6 +637,198 @@ def get_soccer_match_state(canonical: str) -> dict | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# WebSocket live data overlay
+# ---------------------------------------------------------------------------
+
+# Canonical WS-side field → (canonical stats key, coerce type)
+_WS_STAT_MAP: list[tuple[str, str, type]] = [
+    ("xg",                      "expected_goals",           float),
+    ("total_shots",             "total_shots",              int),
+    ("shots_on_target",         "shots_on_target",          int),
+    ("shots_off_target",        "shots_off_target",         int),
+    ("shots_inside_box",        "shots_inside_box",         int),
+    ("blocked_shots",           "blocked_shots",            int),
+    ("hit_woodwork",            "hit_woodwork",             int),
+    ("big_chances",             "big_chances",              int),
+    ("big_chances_missed",      "big_chances_missed",       int),
+    ("big_saves",               "big_saves",                int),
+    ("corner_kicks",            "corner_kicks",             int),
+    ("fouls",                   "fouls",                    int),
+    ("yellow_cards",            "yellow_cards",             int),
+    ("red_cards",               "red_cards",                int),
+    ("offsides",                "offsides",                 int),
+    ("pass_accuracy_pct",       "pass_accuracy_pct",        float),
+    ("touches_in_penalty_area", "touches_in_penalty_area",  int),
+    ("goalkeeper_saves",        "goalkeeper_saves",         int),
+    ("total_saves",             "total_saves",              int),
+    ("interceptions",           "interceptions",            int),
+    ("clearances",              "clearances",               int),
+    ("duels",                   "duels",                    int),
+    ("aerial_duels",            "aerial_duels",             int),
+    ("dangerous_attack_pct",    "dangerous_attack_pct",     float),
+    ("attack_pct",              "attack_pct",               float),
+    ("ball_safe_pct",           "ball_safe_pct",            float),
+]
+
+
+def _ws_side_to_stats(ws_side: dict) -> dict:
+    """Map one WS team-side snapshot to the canonical per-team stats shape."""
+    s: dict = {}
+    for ws_key, canon_key, typ in _WS_STAT_MAP:
+        v = ws_side.get(ws_key)
+        if v is None:
+            continue
+        try:
+            s[canon_key] = typ(v)
+        except (TypeError, ValueError):
+            pass
+    # accurate_passes: WS sends an {value, total, pct} object
+    ap = ws_side.get("accurate_passes")
+    if isinstance(ap, dict):
+        if ap.get("value") is not None:
+            try:
+                s["accurate_passes"] = int(ap["value"])
+            except (TypeError, ValueError):
+                pass
+        if ap.get("total") is not None:
+            try:
+                s["total_passes"] = int(ap["total"])
+            except (TypeError, ValueError):
+                pass
+        if ap.get("pct") is not None:
+            try:
+                s["pass_accuracy_pct"] = float(ap["pct"])
+            except (TypeError, ValueError):
+                pass
+    elif isinstance(ap, (int, float)):
+        s["accurate_passes"] = int(ap)
+    return s
+
+
+def _ws_overlay(out: dict, event_id: int) -> None:
+    """Overlay in-memory WebSocket snapshots onto a canonical BSD match detail.
+
+    Enriches score/minute, 40+ per-team stats, ball position (livedata at
+    ~5 s cadence), and consensus odds — all without a REST round-trip.
+    Completely non-destructive: no-ops when the WS singleton is not running
+    or has no snapshot for this event (match not live or not yet subscribed).
+    """
+    try:
+        import bsd_websocket as _ws
+        ws = _ws.client()
+    except Exception:
+        return
+
+    # ── event snapshot: score, time, 40+ stats ───────────────────────────
+    event_snap = ws.get_event_snapshot(event_id)
+    if event_snap:
+        score = event_snap.get("score") or {}
+        if isinstance(score.get("home"), (int, float)):
+            out.setdefault("home", {})["score"] = int(score["home"])
+        if isinstance(score.get("away"), (int, float)):
+            out.setdefault("away", {})["score"] = int(score["away"])
+
+        time_obj = event_snap.get("time") or {}
+        if isinstance(time_obj.get("minute"), (int, float)):
+            out["minute"] = int(time_obj["minute"])
+
+        curr_stats: dict = out.get("stats") or {}
+        for side in ("home", "away"):
+            ws_side = event_snap.get(side) or {}
+            if not isinstance(ws_side, dict):
+                continue
+            merged = {**curr_stats.get(side, {}), **_ws_side_to_stats(ws_side)}
+            curr_stats[side] = merged
+            # xg also lives on the team side object used by the score header
+            if isinstance(ws_side.get("xg"), (int, float)):
+                out.setdefault(side, {})["xg"] = float(ws_side["xg"])
+        out["stats"] = curr_stats
+
+    # ── livedata snapshot: ball position + situation (~5 s cadence) ───────
+    ld = ws.get_livedata_snapshot(event_id)
+    if ld:
+        coords = ld.get("coordinates") or []
+        first  = coords[0] if coords else {}
+        out["livedata"] = {
+            "side":      ld.get("side"),
+            "situation": ld.get("situation"),
+            "x":         first.get("x"),
+            "y":         first.get("y"),
+            "uts":       ld.get("uts"),
+        }
+
+    # ── odds snapshot: consensus across 11–12 bookmakers (~30 s) ─────────
+    odds = ws.get_odds_snapshot(event_id)
+    if odds:
+        out["odds"] = odds.get("odds") or odds
+
+
+def build_live_snapshot(canonical: str) -> dict:
+    """Build the lightweight WS-only live-state response for /soccer/live/*.
+
+    Returns {ws_active: false} when no snapshot is available (no REST calls
+    are ever made).  On-demand subscribes the event so the next poll may
+    already find data.
+    """
+    if not canonical.startswith("bsd-"):
+        return {"ws_active": False}
+    try:
+        event_id = int(canonical[4:])
+    except ValueError:
+        return {"ws_active": False}
+
+    try:
+        import bsd_websocket as _ws
+        ws = _ws.client()
+    except Exception:
+        return {"ws_active": False}
+
+    # Eagerly subscribe so the next poll cycle finds data even if the
+    # 30-second sub-manager loop hasn't run yet.
+    if event_id not in ws.desired_subscriptions():
+        ws.subscribe(event_id)
+
+    event_snap = ws.get_event_snapshot(event_id)
+    ld         = ws.get_livedata_snapshot(event_id)
+    odds       = ws.get_odds_snapshot(event_id)
+
+    if not event_snap and not ld and not odds:
+        return {"ws_active": False}
+
+    out: dict = {"ws_active": True, "event_id": event_id}
+
+    if event_snap:
+        out["score"]  = event_snap.get("score")
+        out["minute"] = (event_snap.get("time") or {}).get("minute")
+        out["status"] = (event_snap.get("time") or {}).get("status")
+        stats: dict = {}
+        for side in ("home", "away"):
+            ws_side = event_snap.get(side) or {}
+            if isinstance(ws_side, dict):
+                stats[side] = _ws_side_to_stats(ws_side)
+        if stats:
+            out["stats"] = stats
+
+    if ld:
+        coords = ld.get("coordinates") or []
+        first  = coords[0] if coords else {}
+        out["livedata"] = {
+            "side":      ld.get("side"),
+            "situation": ld.get("situation"),
+            "x":         first.get("x"),
+            "y":         first.get("y"),
+            "uts":       ld.get("uts"),
+        }
+
+    if odds:
+        out["odds"] = odds.get("odds") or odds
+
+    return out
+
+
+# ---------------------------------------------------------------------------
+
 def get_soccer_match_detail(canonical: str) -> dict | None:
     """Full match payload including xG, momentum, shotmap, incidents.
 
@@ -591,6 +882,9 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
                     out["home"]["score_pens"] = home_pens
                     out["away"]["score_pens"] = away_pens
                     _pens_cache[canonical] = (home_pens, away_pens)
+            # Overlay in-memory WS snapshots (score/stats/livedata/odds) on
+            # top of the REST payload — fresher data, no extra round-trip.
+            _ws_overlay(out, eid)
             return out
 
     if source == "sofa":
