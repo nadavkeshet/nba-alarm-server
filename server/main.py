@@ -340,6 +340,14 @@ def _init_db() -> None:
         "ALTER TABLE soccer_favorite_teams ADD COLUMN competitions VARCHAR",
         "ALTER TABLE favorite_teams ADD COLUMN alt_team_ids VARCHAR",
         "ALTER TABLE soccer_alarms ADD COLUMN match_name VARCHAR",
+        # FavoritePlayerDB columns added to the model after the original
+        # `favorites` table was created. Without these, GET /settings does a
+        # `SELECT favorites.team_id ...` that 500s on UndefinedColumn — the
+        # handler swallows it and returns empty defaults, so NO favorites
+        # (teams or players) ever come back even though the saves succeeded.
+        "ALTER TABLE favorites ADD COLUMN team_id   VARCHAR",
+        "ALTER TABLE favorites ADD COLUMN team_name VARCHAR",
+        "ALTER TABLE favorites ADD COLUMN td_watch  BOOLEAN DEFAULT FALSE NOT NULL",
     ]
     for sql in migrations:
         try:
