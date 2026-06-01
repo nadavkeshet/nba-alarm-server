@@ -29,6 +29,44 @@ def bsd_for_365(s365_id: str) -> str | None:
 def s365_for_bsd(bsd_id: str) -> str | None:
     return _BSD_TO_365.get(str(bsd_id))
 
+import time as _time
+
+# BSD-primary basketball leagues whose teams we enumerate for name-merge.
+_BSD_LEAGUE_SLUGS = ("euroleague", "eurocup", "bcl")
+_INDEX_TTL = 6 * 3600.0
+_index_cache: tuple[float, dict[str, str]] | None = None
+
+def bsd_team_index() -> dict[str, str]:
+    """{bsd_team_id (str): team name} across BSD-primary leagues. Cached 6h.
+    Best-effort: any upstream failure yields an empty/partial dict, never raises."""
+    global _index_cache
+    now = _time.monotonic()
+    if _index_cache and now - _index_cache[0] < _INDEX_TTL:
+        return _index_cache[1]
+    out: dict[str, str] = {}
+    try:
+        import bsd_basketball as bb
+        for slug in _BSD_LEAGUE_SLUGS:
+            lid = bb.slug_to_league_id(slug)
+            if lid is None:
+                continue
+            try:
+                events = bb.league_events(lid) or []
+            except Exception:
+                continue
+            for ev in events:
+                if not isinstance(ev, dict):
+                    continue
+                for side in ("home_team", "away_team", "home", "away"):
+                    t = ev.get(side)
+                    if isinstance(t, dict) and t.get("id") is not None:
+                        out[str(t["id"])] = t.get("name") or t.get("displayName") or ""
+    except Exception:
+        pass
+    _index_cache = (now, out)
+    return out
+
+
 def norm_name(name: str) -> str:
     decomposed = unicodedata.normalize("NFKD", name or "")
     ascii_only = "".join(c for c in decomposed if not unicodedata.combining(c))

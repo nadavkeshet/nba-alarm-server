@@ -7,6 +7,8 @@ def main():
     assert x.norm_name("Maccabi TA") == x.norm_name("Maccabi Tel Aviv")
     assert x.norm_name("Maccabi TA") == "maccabi tel aviv"
     assert x.bsd_for_365("999999") is None
+    idx = x.bsd_team_index()
+    assert isinstance(idx, dict)
     print("OK")
 
 if __name__ == "__main__":
