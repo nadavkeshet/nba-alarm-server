@@ -149,6 +149,7 @@ class FavoriteTeamDB(_Base):
     skip_euroleague_evening = Column(Boolean, default=False, nullable=False)
     notify_at_start  = Column(Boolean, default=False, nullable=False)
     paused           = Column(Boolean, default=False, nullable=False)
+    alt_team_ids     = Column(String,  nullable=True)   # comma-sep other provider ids
     created_at       = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
@@ -310,6 +311,7 @@ def _init_db() -> None:
         "ALTER TABLE favorite_teams ADD COLUMN skip_euroleague_evening BOOLEAN DEFAULT FALSE NOT NULL",
         "ALTER TABLE soccer_favorite_teams ADD COLUMN alt_team_ids VARCHAR",
         "ALTER TABLE soccer_favorite_teams ADD COLUMN competitions VARCHAR",
+        "ALTER TABLE favorite_teams ADD COLUMN alt_team_ids VARCHAR",
         "ALTER TABLE soccer_alarms ADD COLUMN match_name VARCHAR",
     ]
     for sql in migrations:
@@ -1764,6 +1766,7 @@ def get_settings(user_token: str = ""):
                     "notify_at_start": getattr(t, 'notify_at_start', False),
                     "paused":          getattr(t, 'paused', False),
                     "skip_euroleague_evening": getattr(t, 'skip_euroleague_evening', False),
+                    "team_ids":        (t.alt_team_ids.split(",") if t.alt_team_ids else [t.team_id]),
                 }
                 for t in teams
             ]
@@ -1873,6 +1876,7 @@ class FavoriteTeam(BaseModel):
     free_only:       bool = False
     notify_at_start: bool = False
     skip_euroleague_evening: bool = False
+    team_ids:        list[str] = []
 
 
 @app.post("/settings/teams")
@@ -1884,6 +1888,8 @@ def upsert_team(req: FavoriteTeam):
                 existing = session.query(FavoriteTeamDB).filter_by(
                     user_token=req.user_token, team_id=req.team_id
                 ).first()
+                team_ids = req.team_ids or []
+                alt_team_ids_val = ",".join(str(i) for i in team_ids) if team_ids else None
                 if existing:
                     existing.team_name      = req.team_name
                     existing.league         = league
@@ -1893,6 +1899,7 @@ def upsert_team(req: FavoriteTeam):
                     existing.broadcast_only  = getattr(req, 'broadcast_only', False)
                     existing.notify_at_start = getattr(req, 'notify_at_start', False)
                     existing.skip_euroleague_evening = getattr(req, 'skip_euroleague_evening', False)
+                    existing.alt_team_ids   = alt_team_ids_val
                 else:
                     session.add(FavoriteTeamDB(
                         user_token=req.user_token, team_id=req.team_id,
@@ -1902,6 +1909,7 @@ def upsert_team(req: FavoriteTeam):
                         broadcast_only=getattr(req, 'broadcast_only', False),
                         notify_at_start=getattr(req, 'notify_at_start', False),
                         skip_euroleague_evening=getattr(req, 'skip_euroleague_evening', False),
+                        alt_team_ids=alt_team_ids_val,
                     ))
                 session.commit()
         except Exception as exc:
