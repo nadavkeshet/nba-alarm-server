@@ -38,15 +38,20 @@ def t_drama_odds():
 
 
 def t_soccer_lightweight():
-    # FT comeback in a final is a must-watch; 0-0 and blowouts are not.
-    assert ws_soccer("ft", 90, 3, 2, slug="ucl", round_name="Final",
-                     home_score_ht=1, away_score_ht=2) >= 8.0
-    assert ws_soccer("ft", 90, 0, 0, slug="premier_league") is None
-    assert ws_soccer("ft", 90, 4, 0, slug="ligue_1") is None
-    # A tight finish stays sane (lightweight path is intentionally conservative;
-    # actually-watched matches get the richer peak-drama value).
-    v = ws_soccer("ft", 90, 2, 1, slug="premier_league")
-    assert v is None or 4.0 <= v <= 10.0, v
+    # Every started match now gets a score (badge shows on ALL matches), but the
+    # number still ranks drama: a FT comeback in a final is a must-watch, while a
+    # 0-0 or a blowout lands low.
+    comeback = ws_soccer("ft", 90, 3, 2, slug="ucl", round_name="Final",
+                         home_score_ht=1, away_score_ht=2)
+    goalless = ws_soccer("ft", 90, 0, 0, slug="premier_league")
+    blowout  = ws_soccer("ft", 90, 4, 0, slug="ligue_1")
+    tight    = ws_soccer("ft", 90, 2, 1, slug="premier_league")
+    # No match returns None anymore.
+    for v in (comeback, goalless, blowout, tight):
+        assert v is not None and 0.0 <= v <= 10.0, v
+    assert comeback >= 8.0, comeback
+    # Drama ordering holds: comeback > tight > blowout > goalless.
+    assert comeback > tight > blowout > goalless, (comeback, tight, blowout, goalless)
 
 
 def ws_soccer(status, minute, hs, aw, **kw):

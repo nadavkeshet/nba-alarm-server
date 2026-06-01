@@ -2407,6 +2407,15 @@ def soccer_drama(canonical_id: str):
                 ctx["pre_match_win_prob"] = pm
         except Exception:
             pass
+    # World Cup group game → full 12-group standings drive qualification jeopardy.
+    if (detail.get("competition") or "").lower() == "world_cup" \
+            and "group" in (detail.get("round_name") or "").lower():
+        try:
+            groups = _ss.wc_group_standings("world_cup")
+            if groups:
+                ctx["wc_groups"] = groups
+        except Exception:
+            pass
     score = _de.compute_drama(ctx)
     _ss.record_peak_drama(canonical_id, score.total)
     return {

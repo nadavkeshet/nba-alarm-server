@@ -421,10 +421,16 @@ def _score_upset(ctx: dict) -> float:
 # Qualification — late group-stage jeopardy
 
 
+# Best-placed third-placed teams that advance, by group-tournament format.
+_ADVANCING_THIRDS = {"world_cup": 8, "euros": 4}
+
+
 def _score_qualification(ctx: dict) -> float:
-    """0–2 spike, group stage only. A late, close group game is inherently high-
-    stakes (qualification on the line); refined by standings when a team sits on
-    the qualification bubble. Conservative — 0 when nothing is clearly at stake."""
+    """0–2.5 spike, group stage only. A late, close group game carries
+    qualification stakes; refined by the full group standings so a team on the
+    best-thirds bubble (2026 WC: top 2 of each group + the 8 best 3rd-placed
+    teams advance) drives real jeopardy. Conservative — 0 outside the group
+    stage / when nothing is clearly at stake."""
     round_name = (ctx.get("round_name") or "").lower()
     if "group" not in round_name:
         return 0.0
@@ -439,33 +445,62 @@ def _score_qualification(ctx: dict) -> float:
     if lateness <= 0:
         return 0.0
     closeness = 1.0 if diff == 0 else (0.7 if diff == 1 else 0.2)
-    base = 1.2 * lateness * closeness                      # 0–1.2 heuristic
-    base += _qualification_bubble_bonus(ctx, lateness)     # 0–0.8, 0 if no standings
-    return min(2.0, base)
+    base = 1.2 * lateness * closeness                      # 0–1.2 heuristic (no standings)
+    base += _wc_qualification_bonus(ctx, lateness)         # 0–1.5 from the live tables
+    return min(2.5, base)
 
 
-def _qualification_bubble_bonus(ctx: dict, lateness: float) -> float:
-    """0–0.8. Best-effort from the group standings rows the caller supplies for
-    this match's group. 0 on any missing/ambiguous data — never mis-fires."""
-    rows = ctx.get("standings")
-    if not rows or not isinstance(rows, list):
+def _wc_qualification_bonus(ctx: dict, lateness: float) -> float:
+    """0–1.5. From the FULL group standings the caller supplies as `wc_groups`
+    (a list of groups, each a list of rows): a 3rd-placed team on the best-thirds
+    bubble = maximum jeopardy; 1st/2nd are progressively safer; 4th can still
+    climb. 0 on any missing/ambiguous data — never mis-fires."""
+    groups = ctx.get("wc_groups")
+    if not groups or not isinstance(groups, list):
         return 0.0
     try:
-        ids = set()
-        for side in ("home", "away"):
-            t = ctx.get(side) or {}
-            tid = t.get("id") or t.get("team_id")
-            if tid is not None:
-                ids.add(str(tid))
-        if not ids:
+        adv = _ADVANCING_THIRDS.get((ctx.get("competition") or "").lower(), 8)
+
+        def _tid(r):
+            return str(r.get("team_id") or (r.get("team") or {}).get("id") or "")
+        def _pos(r):
+            return r.get("position") or r.get("rank") or 0
+        def _key(r):
+            return (r.get("points") or r.get("pts") or 0, r.get("gd") or 0, r.get("gf") or 0)
+
+        # Rank every 3rd-placed team across all groups; the top `adv` advance.
+        thirds = sorted((r for grp in groups for r in grp if _pos(r) == 3),
+                        key=_key, reverse=True)
+        third_rank = {_tid(r): i for i, r in enumerate(thirds)}
+
+        match_ids = {str((ctx.get(s) or {}).get("id") or (ctx.get(s) or {}).get("team_id") or "")
+                     for s in ("home", "away")}
+        match_ids.discard("")
+        if not match_ids:
             return 0.0
-        for r in rows:
-            tid = str(r.get("team_id") or (r.get("team") or {}).get("id") or "")
-            pos = r.get("position") or r.get("rank")
-            played = r.get("played") or r.get("matches") or 0
-            if tid in ids and pos in (2, 3) and (played or 0) >= 1:
-                return 0.8 * lateness
-        return 0.0
+
+        bubble = 0.0
+        for grp in groups:
+            for r in grp:
+                if _tid(r) not in match_ids:
+                    continue
+                if not (r.get("played") or r.get("matches") or 0):
+                    continue
+                pos = _pos(r)
+                if pos == 1:
+                    bubble = max(bubble, 0.25)              # near-safe
+                elif pos == 2:
+                    bubble = max(bubble, 0.6)               # safe, but could slip to 3rd
+                elif pos == 3:
+                    rank = third_rank.get(_tid(r))
+                    if rank is None:
+                        bubble = max(bubble, 1.0)
+                    else:                                    # closeness to the qualify/out line
+                        dist = abs(rank - (adv - 1))         # 0 at the 8th-best cutoff
+                        bubble = max(bubble, max(0.6, 1.0 - dist * 0.12))
+                elif pos == 4:
+                    bubble = max(bubble, 0.55)              # still alive — could climb to 3rd
+        return min(1.0, bubble) * 1.5 * (0.4 + 0.6 * lateness)
     except Exception:
         return 0.0
 

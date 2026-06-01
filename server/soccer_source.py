@@ -70,6 +70,42 @@ def pre_match_win_prob(eid: int) -> tuple[float, float, float] | None:
     except Exception:
         return None
 
+
+def wc_group_standings(slug: str = "world_cup") -> list[list[dict]] | None:
+    """All groups' live standings for a grouped competition (the World Cup) as a
+    list of groups, each a list of normalized rows {team_id, position, points,
+    played, gf, ga, gd}. Powers the Drama Engine's best-thirds qualification
+    jeopardy. None on any failure / tolerant of the raw BSD group shape."""
+    try:
+        comp_id = BSD_COMPETITION_IDS.get(slug)
+        if comp_id is None:
+            return None
+        raw = bsd.league_standings(comp_id) or {}
+        raw_groups = raw.get("groups") or raw.get("standings") or []
+        out: list[list[dict]] = []
+        for grp in raw_groups:
+            rows_raw = (grp.get("rows") or grp.get("standings") or grp.get("table")
+                        or grp.get("teams") or []) if isinstance(grp, dict) else grp
+            rows: list[dict] = []
+            for r in rows_raw or []:
+                team = r.get("team") or {}
+                tid = r.get("team_id") or team.get("id")
+                gf = _to_int(r.get("gf") or r.get("scores_for") or r.get("goals_for")) or 0
+                ga = _to_int(r.get("ga") or r.get("scores_against") or r.get("goals_against")) or 0
+                rows.append({
+                    "team_id":  str(tid) if tid is not None else "",
+                    "position": _to_int(r.get("position") or r.get("rank")) or 0,
+                    "points":   _to_int(r.get("points") or r.get("pts")) or 0,
+                    "played":   _to_int(r.get("played") or r.get("matches") or r.get("games")) or 0,
+                    "gf": gf, "ga": ga,
+                    "gd": _to_int(r.get("gd") or r.get("goal_difference")) or (gf - ga),
+                })
+            if rows:
+                out.append(rows)
+        return out or None
+    except Exception:
+        return None
+
 # Module-level cache: canonical_id -> (home_pens, away_pens)
 # Populated when a match detail is fetched and penalty kicks are found in the shotmap.
 # The list endpoint reads this cache so matches show penalty scores even without a detail fetch.
@@ -205,27 +241,28 @@ def _soccer_watch_score(
         st = (status or "").lower()
         is_live = st in ("live", "ht", "et", "pens")
         is_ft   = st in ("ft", "aet")
+        # The watch score now shows on EVERY match (both sports) — no must-watch
+        # threshold; any started match returns its drama value, low or high.
 
         # Live BSD with a WS snapshot → full drama (same math as the Drama Meter)
         if source == "bsd" and eid is not None and is_live:
             ctx = _live_drama_ctx(eid, st, minute, home_score, away_score,
                                   slug, round_name, is_derby)
             if ctx is not None:
-                total = drama_engine.compute_drama(ctx).total
-                return total if total >= _WATCH_THRESHOLD else None
+                return drama_engine.compute_drama(ctx).total
 
         # Finished BSD → cached peak drama if we've ever scored this match
         if source == "bsd" and is_ft and eid is not None:
             peak = _peak_drama_cache.get(f"bsd-{eid}")
             if peak is not None:
-                return peak if peak >= _WATCH_THRESHOLD else None
+                return peak
 
-        total = _lightweight_drama(
+        # Lightweight (never None — every started match gets a value).
+        return _lightweight_drama(
             st, minute, home_score, away_score,
             home_score_ht, away_score_ht, home_xg, away_xg,
-            slug, round_name, is_derby,
+            slug, round_name, is_derby, never_none=True,
         )
-        return total if (total is not None and total >= _WATCH_THRESHOLD) else None
     except Exception:
         return None
 
@@ -269,11 +306,12 @@ def _live_drama_ctx(eid, status, minute, hs, aw, slug, round_name, is_derby) -> 
 
 
 def _lightweight_drama(status, minute, hs, aw, hs_ht, aw_ht, h_xg, a_xg,
-                       slug, round_name, is_derby) -> float | None:
+                       slug, round_name, is_derby, *, never_none=False) -> float | None:
     """Cheap score from data already on the event object. For FINISHED matches
     this rates 'how good was it to watch' (goals + closeness + comeback + xG,
     scaled by stakes) rather than the FT-damped live state. For LIVE-without-WS
-    it leans on the engine's live state model."""
+    it leans on the engine's live state model. When `never_none` it always
+    returns a value (so every match shows a score)."""
     if hs is None and aw is None:
         return None
     hs = hs or 0
@@ -287,7 +325,8 @@ def _lightweight_drama(status, minute, hs, aw, hs_ht, aw_ht, h_xg, a_xg,
         diff = abs(hs - aw)
         total_goals = hs + aw
         if total_goals == 0:
-            return None                       # 0-0 FT — rarely a must-watch
+            # 0-0 FT — a low watch but every match still shows a value.
+            return round(0.6 * stakes, 2) if never_none else None
         closeness = {0: 1.0, 1: 0.7, 2: 0.4}.get(diff, 0.15)
         goals = min(1.0, total_goals / 4.0)
         base = (0.55 * closeness + 0.45 * goals) * 7.0   # 0–7
