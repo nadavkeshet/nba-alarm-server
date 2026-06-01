@@ -122,8 +122,13 @@ def _request_json(path: str, params: dict[str, Any] | None = None, *, max_retrie
     last_error: Exception | None = None
     for attempt in range(max_retries):
         try:
-            with httpx.Client(timeout=20, headers=_headers()) as c:
+            with httpx.Client(timeout=httpx.Timeout(8.0, connect=5.0), headers=_headers()) as c:
                 r = c.get(url, params=params or {})
+        except httpx.TimeoutException as e:
+            # Don't retry a timeout — it just waits the full timeout again and
+            # stacks into 30s+ match-detail hangs. Give up fast.
+            last_error = e
+            break
         except Exception as e:
             last_error = e
             time.sleep(0.5 + random.random())
