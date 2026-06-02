@@ -1491,8 +1491,16 @@ def get_sofa_lineups(event_id: int) -> dict | None:
 
 def get_sofa_standings(slug: str) -> dict | None:
     """League table for a Sofascore-primary competition slug, in the canonical
-    LeagueStandings shape. Flattens grouped tables (e.g. the Israeli league's
-    championship/relegation split) and flags `grouped`."""
+    LeagueStandings shape (matching `_normalize_soccer_standings`).
+
+    Sofascore returns split competitions (e.g. the Israeli Ligat Ha'al, which
+    splits into Championship + Relegation rounds after the regular season) as
+    MULTIPLE groups. We must NOT flatten them into one list — overlapping
+    positions (1-6, then 1-8, …) made iOS render a garbled fragment. Instead we
+    emit a proper `groups[]` array (one mini-table per group), exactly like the
+    BSD grouped path the client already knows how to draw. For a single-table
+    league we emit a flat `standings[]`.
+    """
     utid = SOFASCORE_COMPETITION_IDS.get(slug)
     if not utid:
         return None
@@ -1509,14 +1517,15 @@ def get_sofa_standings(slug: str) -> dict | None:
     groups = raw.get("standings") if isinstance(raw, dict) else None
     if not groups:
         return None
-    rows_out: list[dict] = []
-    for grp in groups:
+
+    def _rows(grp: dict) -> list[dict]:
+        out: list[dict] = []
         for row in (grp.get("rows") or []):
             team = row.get("team") or {}
             tid = team.get("id") or 0
             gf = _to_int(row.get("scoresFor")) or 0
             ga = _to_int(row.get("scoresAgainst")) or 0
-            rows_out.append({
+            out.append({
                 "position":   _to_int(row.get("position")) or 0,
                 "team_id":    tid,
                 "team_name":  team.get("name") or "",
@@ -1530,14 +1539,30 @@ def get_sofa_standings(slug: str) -> dict | None:
                 "form":       None,
                 "live":       None,
             })
-    if not rows_out:
+        return out
+
+    # When a league splits into playoff rounds, those "Round" groups ARE the
+    # live standings; the full regular-season table Sofascore also returns is
+    # redundant, so prefer the round groups when present.
+    round_groups = [g for g in groups if "round" in (g.get("name") or "").lower()]
+    use_groups = round_groups or groups
+
+    base = {"league_id": utid, "season": {"id": season_id or 0, "name": season_name}}
+
+    if len(use_groups) > 1:
+        out_groups = [
+            {"name": g.get("name") or "", "standings": _rows(g)}
+            for g in use_groups
+        ]
+        out_groups = [g for g in out_groups if g["standings"]]
+        if not out_groups:
+            return None
+        return {**base, "grouped": True, "standings": [], "groups": out_groups}
+
+    rows = _rows(use_groups[0]) if use_groups else []
+    if not rows:
         return None
-    return {
-        "league_id": utid,
-        "season":    {"id": season_id or 0, "name": season_name},
-        "grouped":   len(groups) > 1,
-        "standings": rows_out,
-    }
+    return {**base, "grouped": False, "standings": rows}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

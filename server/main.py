@@ -2652,6 +2652,9 @@ def _normalize_bsd_player(p: dict) -> dict:
         "BLK": p.get("blocks"),
         "TO":  p.get("turnovers"),
         "PF":  p.get("personal_fouls"),
+        # 365 headshot stamped onto the player by get_basketball_box_score —
+        # keep it through normalization so the box score shows player photos.
+        "photo": p.get("photo"),
     }
 
 
@@ -3086,6 +3089,7 @@ def basketball_league_standings(slug: str):
 
 
 def _normalize_basketball_standings(raw: dict, league_id: int, slug: str) -> dict:
+    import basketball_source as _bb
     league_raw  = raw.get("league") or {}
     season_raw  = raw.get("season") or {}
     rows = raw.get("standings") or raw.get("results") or raw.get("table") or []
@@ -3110,7 +3114,8 @@ def _normalize_basketball_standings(raw: dict, league_id: int, slug: str) -> dic
         sf  = _i(row, "points_scored",  "points_for",     "pf") or None
         sa  = _i(row, "points_allowed", "points_against",  "pa") or None
         out.append({
-            "team": {"id": tid, "name": name, "short_name": short_name},
+            "team": {"id": tid, "name": name, "short_name": short_name,
+                     "logo": _bb._basketball_logo_url(slug, name, tid)},
             "position":       _i(row, "position", "rank", "standing") or i,
             "matches":        matches,
             "wins":           wins,

@@ -399,7 +399,8 @@ def get_s365_basketball_standings(slug: str) -> dict | None:
         rows_out.append({
             "team": {"id": comp.get("id") or 0,
                      "name": comp.get("name") or "",
-                     "short_name": comp.get("symbolicName")},
+                     "short_name": comp.get("symbolicName"),
+                     "logo": (f"{_365_LOGO_BASE}{comp.get('id')}" if comp.get("id") else "")},
             "position":       _s365_int(row.get("position")) or i,
             "matches":        played or 0,
             "wins":           wins or 0,
