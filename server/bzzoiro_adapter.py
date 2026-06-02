@@ -117,13 +117,36 @@ _cache = _Cache()
 # ---------------------------------------------------------------------------
 # HTTP
 
+# One process-wide httpx.Client. httpx.Client is thread-safe and keeps a
+# connection pool, so reusing it across all worker threads pays the TLS
+# handshake to BSD once instead of on every request. Created lazily so importing
+# this module without BZZOIRO_API_TOKEN set stays safe (the token, baked into the
+# client headers, is constant for the process lifetime).
+_client_lock = threading.Lock()
+_client: httpx.Client | None = None
+
+
+def _get_client() -> httpx.Client:
+    global _client
+    if _client is not None:
+        return _client
+    with _client_lock:
+        if _client is None:
+            _client = httpx.Client(
+                timeout=httpx.Timeout(8.0, connect=5.0),
+                headers=_headers(),
+                limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
+            )
+    return _client
+
+
 def _request_json(path: str, params: dict[str, Any] | None = None, *, max_retries: int = 3) -> Any:
     url = f"{_BASE}{path}"
+    client = _get_client()
     last_error: Exception | None = None
     for attempt in range(max_retries):
         try:
-            with httpx.Client(timeout=httpx.Timeout(8.0, connect=5.0), headers=_headers()) as c:
-                r = c.get(url, params=params or {})
+            r = client.get(url, params=params or {})
         except httpx.TimeoutException as e:
             # Don't retry a timeout — it just waits the full timeout again and
             # stacks into 30s+ match-detail hangs. Give up fast.

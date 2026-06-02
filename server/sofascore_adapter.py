@@ -119,6 +119,32 @@ _cache = _Cache()
 _current_impersonate = _IMPERSONATE_ROTATION[0]
 _impersonate_lock = threading.Lock()
 
+# Per-thread curl_cffi Session for connection reuse (keep-alive). A curl_cffi
+# Session wraps a libcurl handle that is NOT safe to share across threads, so we
+# keep one Session per worker thread — each thread reuses its own connection
+# across calls instead of doing a fresh TLS handshake every request. On a 403 we
+# rotate the impersonation fingerprint AND drop the thread's Session, because a
+# kept-alive connection would otherwise keep serving the old fingerprint.
+_session_tls = threading.local()
+
+
+def _session():
+    s = getattr(_session_tls, "session", None)
+    if s is None:
+        s = cf_requests.Session()
+        _session_tls.session = s
+    return s
+
+
+def _reset_session() -> None:
+    s = getattr(_session_tls, "session", None)
+    if s is not None:
+        try:
+            s.close()
+        except Exception:
+            pass
+    _session_tls.session = None
+
 
 def _request_json(path: str, *, max_retries: int = 3) -> dict | list:
     """Issue a GET request to Sofascore and return parsed JSON.
@@ -139,10 +165,12 @@ def _request_json(path: str, *, max_retries: int = 3) -> dict | list:
 
         try:
             proxies = {"https": _PROXY_URL, "http": _PROXY_URL} if _PROXY_URL else None
-            r = cf_requests.get(url, impersonate=impersonate, timeout=8, headers=_HEADERS, proxies=proxies)
+            r = _session().get(url, impersonate=impersonate, timeout=8, headers=_HEADERS, proxies=proxies)
         except Exception as e:
             last_error = e
             logger.warning("sofascore network error on %s: %s", path, e)
+            # Drop a possibly-broken connection so the retry opens a fresh one.
+            _reset_session()
             time.sleep(0.5 + random.random())
             continue
 
@@ -164,6 +192,9 @@ def _request_json(path: str, *, max_retries: int = 3) -> dict | list:
                     "sofascore 403 on %s, rotating impersonate %s → %s",
                     path, impersonate, _current_impersonate,
                 )
+            # Drop the kept-alive connection so the next attempt re-handshakes
+            # with the new fingerprint instead of reusing the blocked one.
+            _reset_session()
             continue
 
         if r.status_code == 429:

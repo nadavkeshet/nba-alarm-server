@@ -103,13 +103,35 @@ _cache = _Cache()
 # ---------------------------------------------------------------------------
 # HTTP
 
+# One process-wide httpx.Client (thread-safe, connection-pooled) so the TLS
+# handshake to BSD basketball is paid once per process instead of once per call.
+# Lazy so importing without the token set stays safe; the token is constant and
+# baked into the client headers.
+_client_lock = threading.Lock()
+_client: httpx.Client | None = None
+
+
+def _get_client() -> httpx.Client:
+    global _client
+    if _client is not None:
+        return _client
+    with _client_lock:
+        if _client is None:
+            _client = httpx.Client(
+                timeout=httpx.Timeout(8.0, connect=5.0),
+                headers=_headers(),
+                limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
+            )
+    return _client
+
+
 def _request_json(path: str, params: dict[str, Any] | None = None, *, max_retries: int = 3) -> Any:
     url = f"{_BASE}{path}"
+    client = _get_client()
     last_error: Exception | None = None
     for attempt in range(max_retries):
         try:
-            with httpx.Client(timeout=httpx.Timeout(8.0, connect=5.0), headers=_headers()) as c:
-                r = c.get(url, params=params or {})
+            r = client.get(url, params=params or {})
         except httpx.TimeoutException as e:
             # A timeout means this upstream is slow *right now* — retrying just
             # waits the full timeout again, stacking 3×20s into the 30s+ hangs
