@@ -2409,12 +2409,14 @@ def _feed_date_range(frm: str, to: str) -> list[str]:
     return out
 
 
-# Pre-warm window: yesterday through +3 days. Future days cache for 6h, so the
-# warm survives well past boot; today caches ~75s but a fresh-deploy user usually
+# Pre-warm window: today-2 through +3 days. Covers the client's first-run
+# prefetch range (today +/-2) so even the very first user after a deploy gets a
+# fully warm window. Future days cache for 6h and past days 12-24h, so the warm
+# survives well past boot; today caches ~75s but a fresh-deploy user usually
 # lands within that. tz is the primary audience (and the 365 client's default) —
 # the _feed_cache is tz-keyless, so this just makes the server, not the first
 # random client, decide day-grouping for the TTL (a pre-existing tradeoff).
-_PREWARM_OFFSETS = range(-1, 4)
+_PREWARM_OFFSETS = range(-2, 4)
 _PREWARM_TZ = "Asia/Jerusalem"
 
 
