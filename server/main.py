@@ -1393,6 +1393,9 @@ async def lifespan(_app: FastAPI):
     threading.Thread(target=get_today_games, daemon=True).start()
     # Seed soccer team search index from standings so /search works on cold start
     threading.Thread(target=_seed_soccer_search_index, daemon=True).start()
+    # Prime the /feed result cache around today so the first client after a
+    # (re)deploy never hits a fully cold upstream cascade.
+    threading.Thread(target=_prewarm_feed_cache, daemon=True).start()
     # Radar reads all users directly from DB — always start it
     threading.Thread(target=start_radar_job, daemon=True).start()
     # v3 soccer radar (event-driven). Wired with our existing FCM helper + dedup.
@@ -2404,6 +2407,57 @@ def _feed_date_range(frm: str, to: str) -> list[str]:
         out.append(cur.strftime("%Y%m%d"))
         cur += timedelta(days=1)
     return out
+
+
+# Pre-warm window: yesterday through +3 days. Future days cache for 6h, so the
+# warm survives well past boot; today caches ~75s but a fresh-deploy user usually
+# lands within that. tz is the primary audience (and the 365 client's default) —
+# the _feed_cache is tz-keyless, so this just makes the server, not the first
+# random client, decide day-grouping for the TTL (a pre-existing tradeoff).
+_PREWARM_OFFSETS = range(-1, 4)
+_PREWARM_TZ = "Asia/Jerusalem"
+
+
+def _prewarm_feed_cache() -> None:
+    """Prime `_feed_cache` for the popular leagues around today so the first
+    client after a (re)deploy paints from cache instead of triggering a cold
+    upstream cascade. Runs once at startup in a daemon thread; uses the shared
+    `_FEED_POOL` so it can't explode threads, and tolerates per-item failures.
+    A brief settle delay lets the monitors/alarm restore finish booting first.
+    """
+    try:
+        time.sleep(5)   # let boot settle before the warm burst
+        from datetime import date as _d
+        from monitor import _eastern_today
+        from bsd_basketball import BSD_BASKETBALL_LEAGUE_IDS
+        from score365_soccer_adapter import DEFAULT_LEAGUE_ORDER
+
+        t = _eastern_today()
+        base = _d(int(t[0:4]), int(t[4:6]), int(t[6:8]))
+        dates = [(base + timedelta(days=off)).strftime("%Y-%m-%d") for off in _PREWARM_OFFSETS]
+        # winner_league is 365-sourced (not BSD) but popular with the audience.
+        bb_leagues = list(BSD_BASKETBALL_LEAGUE_IDS) + ["winner_league"]
+        sc_leagues = list(DEFAULT_LEAGUE_ORDER)
+
+        work: list[tuple[str, str, str]] = []
+        for iso in dates:
+            work += [("bb", lg, iso) for lg in bb_leagues]
+            work += [("sc", lg, iso) for lg in sc_leagues]
+
+        def _warm(item: tuple[str, str, str]) -> None:
+            kind, lg, iso = item
+            try:
+                if kind == "bb":
+                    _feed_basketball(lg, iso, _PREWARM_TZ)
+                else:
+                    _feed_soccer(lg, iso, _PREWARM_TZ)
+            except Exception:
+                pass
+
+        list(_FEED_POOL.map(_warm, work))
+        log.info("feed cache prewarmed: %d (league,date) pairs over %d days", len(work), len(dates))
+    except Exception as exc:
+        log.warning("feed cache prewarm skipped: %s", exc)
 
 
 @app.get("/feed")
