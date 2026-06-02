@@ -1246,13 +1246,26 @@ def _run_radar_tick_for_user(
         if game_id not in summaries:
             try:
                 summaries[game_id] = api_fetch_boxscore(game_id)
+                log.info("RADAR DEBUG: boxscore fetched for %s (%s)", game_id, game_name)
             except Exception as exc:
                 log.warning("RADAR: boxscore fetch failed for %s: %s", game_id, exc)
                 summaries[game_id] = None
 
         summary = summaries.get(game_id)
         if not summary:
+            log.warning("RADAR DEBUG: no boxscore for %s — skipping player checks", game_id)
             continue
+
+        # Log all player IDs in this boxscore vs what we're watching
+        if fav_players:
+            boxscore_ids = [
+                str(entry.get("athlete", {}).get("id", ""))
+                for section in summary.get("boxscore", {}).get("players", [])
+                for sg in section.get("statistics", [])
+                for entry in sg.get("athletes", [])
+            ]
+            log.info("RADAR DEBUG: game=%s | watching=%s | boxscore_ids=%s",
+                     game_name, list(fav_players.keys()), boxscore_ids[:10])
 
         for section in summary.get("boxscore", {}).get("players", []):
             for stats_group in section.get("statistics", []):
@@ -1273,6 +1286,9 @@ def _run_radar_tick_for_user(
                     # ── Favorite Player Alerts ───────────────────────────────
                     if player_id in fav_players and not _has_manual_player_alarm(player_id):
                         fav_cfg      = fav_players[player_id]
+                        total_pts_thr = fav_cfg.get("total_pts")
+                        log.info("RADAR DEBUG: FAV PLAYER FOUND id=%s name=%s pts=%d thr=%s paused=%s",
+                                 player_id, player_name, pts, total_pts_thr, fav_cfg.get("paused"))
                         if bool(fav_cfg.get("paused", False)):
                             continue
                         # broadcast_only / skip_euroleague_evening check for players
@@ -1295,7 +1311,6 @@ def _run_radar_tick_for_user(
                             ):
                                 continue
                         p_alert      = fav_cfg.get("alert_type", "silent")
-                        total_pts_thr = fav_cfg.get("total_pts")
                         early_pts_q  = fav_cfg.get("early_pts_q")
                         early_pts    = fav_cfg.get("early_pts")
                         td_watch     = bool(fav_cfg.get("td_watch", False))
