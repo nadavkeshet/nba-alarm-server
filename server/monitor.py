@@ -1258,17 +1258,21 @@ def _run_radar_tick_for_user(
 
         # Log which watched players were found/missing in this boxscore
         if fav_players:
-            boxscore_ids = set(
-                str(entry.get("athlete", {}).get("id", ""))
+            boxscore_id_to_name = {
+                str(entry.get("athlete", {}).get("id", "")): entry.get("athlete", {}).get("displayName", "?")
                 for section in summary.get("boxscore", {}).get("players", [])
                 for sg in section.get("statistics", [])
                 for entry in sg.get("athletes", [])
-            )
+            }
+            boxscore_ids = set(boxscore_id_to_name.keys())
+            log.info("RADAR DEBUG: boxscore players in %s: %s", game_name,
+                     [(pid, boxscore_id_to_name[pid]) for pid in sorted(boxscore_ids)])
             for watched_id in fav_players:
+                watched_name = fav_players[watched_id].get("name", "?")
                 if watched_id in boxscore_ids:
-                    log.info("RADAR DEBUG: MATCH  player_id=%s FOUND in boxscore of %s", watched_id, game_name)
+                    log.info("RADAR DEBUG: MATCH  player_id=%s (%s) FOUND in boxscore of %s", watched_id, watched_name, game_name)
                 else:
-                    log.warning("RADAR DEBUG: MISS   player_id=%s NOT in boxscore of %s | all_ids=%s", watched_id, game_name, sorted(boxscore_ids))
+                    log.warning("RADAR DEBUG: MISS   player_id=%s (%s) NOT in boxscore of %s | all_ids=%s", watched_id, watched_name, game_name, sorted(boxscore_ids))
 
         for section in summary.get("boxscore", {}).get("players", []):
             for stats_group in section.get("statistics", []):
