@@ -2382,10 +2382,15 @@ def _feed_soccer(league: str, iso_date: str, tz: Optional[str]) -> list[dict]:
 
 
 def _feed_date_range(frm: str, to: str) -> list[str]:
-    """Inclusive YYYYMMDD list between frm and to, capped to 120 days."""
+    """Inclusive YYYYMMDD list between frm and to, capped to 120 days.
+
+    Accepts both compact `YYYYMMDD` (what the app sends) and dashed `YYYY-MM-DD`
+    so a caller passing ISO dates isn't silently coerced to "today" — that
+    foot-gun made dashed-date probes look like an empty schedule.
+    """
     from datetime import date as _date
     def _parse(s: str):
-        s = (s or "").strip()
+        s = (s or "").strip().replace("-", "")   # tolerate YYYY-MM-DD
         return _date(int(s[0:4]), int(s[4:6]), int(s[6:8]))
     try:
         d0, d1 = _parse(frm), _parse(to)
