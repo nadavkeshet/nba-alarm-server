@@ -9,6 +9,9 @@ normalization to internal models happens in `monitor.py` / `main.py` consumers.
 """
 
 import json
+import threading
+import time
+from datetime import date
 from pathlib import Path
 
 from score365.client import Client365
@@ -93,6 +96,58 @@ DEFAULT_LEAGUE_ORDER: list[str] = [
 
 
 # ---------------------------------------------------------------------------
+# Allscores day cache
+#
+# 365scores has no per-competition games endpoint — `/games/allscores/` returns
+# the ENTIRE day's global football slate (~800 competitions), which we then
+# filter by competitionId in Python. Without caching, a single cold `/feed`
+# request asks for the same day once *per* tracked league (10x), re-downloading
+# the whole world each time. We cache the raw day payload keyed by date range so
+# concurrent same-date callers collapse to one upstream fetch, while distinct
+# dates still run in parallel (per-key locking, not a single global lock).
+
+_allscores_cache: dict[tuple[str, str], tuple[float, list[dict]]] = {}
+_allscores_key_locks: dict[tuple[str, str], threading.Lock] = {}
+_allscores_meta_lock = threading.Lock()
+_ALLSCORES_CACHE_MAX = 40  # full-day payloads are large; cap memory footprint
+
+
+def _allscores_ttl(start: str) -> float:
+    """Date-aware TTL (seconds), mirroring main.py's `_feed_ttl`: live (today)
+    data is volatile, past results are static, future fixtures rarely move."""
+    try:
+        d = date(*(int(p) for p in reversed(start.split("/"))))  # DD/MM/YYYY
+    except (ValueError, TypeError):
+        return 60.0  # unparseable → treat as volatile
+    today = date.today()
+    if d < today:
+        return 6 * 3600.0   # past — static results
+    if d == today:
+        return 60.0         # today — live scores in flight
+    return 30 * 60.0        # future — fixtures
+
+
+def _allscores_key_lock(key: tuple[str, str]) -> threading.Lock:
+    with _allscores_meta_lock:
+        lk = _allscores_key_locks.get(key)
+        if lk is None:
+            lk = threading.Lock()
+            _allscores_key_locks[key] = lk
+        return lk
+
+
+def _allscores_store(key: tuple[str, str], games: list[dict]) -> None:
+    with _allscores_meta_lock:
+        _allscores_cache[key] = (time.time(), games)
+        if len(_allscores_cache) > _ALLSCORES_CACHE_MAX:
+            # Evict the oldest-inserted entries (and their per-key locks).
+            oldest = sorted(_allscores_cache, key=lambda k: _allscores_cache[k][0])
+            for k in oldest[: len(_allscores_cache) - _ALLSCORES_CACHE_MAX]:
+                _allscores_cache.pop(k, None)
+                _allscores_key_locks.pop(k, None)
+
+
+# ---------------------------------------------------------------------------
 # Public adapter functions
 
 def soccer_games_by_date(start: str, end: str | None = None) -> list[dict]:
@@ -102,10 +157,28 @@ def soccer_games_by_date(start: str, end: str | None = None) -> list[dict]:
     unlike basketball which uses MM/DD/YYYY. Callers must convert accordingly.
     Returns the `games` list from the response (caller can filter by
     `competitionId` against `COMPETITION_IDS`).
+
+    The raw day payload is cached (see `_allscores_cache`) so the ~800-competition
+    download happens once per date instead of once per tracked league.
     """
-    with Client365() as c:
-        data = get_games_by_date(c, start, end, sport_id=FOOTBALL_SPORT_ID)
-        return data.get("games", [])
+    key = (start, end or start)
+    ttl = _allscores_ttl(start)
+
+    cached = _allscores_cache.get(key)
+    if cached and time.time() - cached[0] < ttl:
+        return cached[1]
+
+    # Serialize misses for this exact date so 10 concurrent leagues asking for
+    # the same day trigger a single upstream fetch (the rest hit the warm entry).
+    with _allscores_key_lock(key):
+        cached = _allscores_cache.get(key)
+        if cached and time.time() - cached[0] < ttl:
+            return cached[1]
+        with Client365() as c:
+            data = get_games_by_date(c, start, end, sport_id=FOOTBALL_SPORT_ID)
+            games = data.get("games", [])
+        _allscores_store(key, games)
+        return games
 
 
 def soccer_game_detail(game_id: int) -> dict:
