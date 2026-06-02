@@ -2340,12 +2340,15 @@ def _feed_basketball(league: str, iso_date: str, tz: Optional[str]) -> list[dict
         return cached
     try:
         import basketball_source as _bb
-        games = _bb.get_basketball_games(league, date_iso=iso_date, tz=tz)
+        games, trustworthy = _bb.get_basketball_games_status(league, date_iso=iso_date, tz=tz)
     except Exception as exc:
         log.warning("feed: basketball %s/%s failed: %s", league, iso_date, exc)
         return []
     if not games:
-        _empty_feed_cache[key] = time.monotonic() + _feed_empty_ttl(iso_date)
+        # Only cache "no games" when a source confirmed it (see _feed_soccer):
+        # an all-sources-errored empty must not stick for 15 minutes.
+        if trustworthy:
+            _empty_feed_cache[key] = time.monotonic() + _feed_empty_ttl(iso_date)
     else:
         _feed_cache_put(key, games, _feed_ttl(iso_date))
     return games
@@ -2361,12 +2364,18 @@ def _feed_soccer(league: str, iso_date: str, tz: Optional[str]) -> list[dict]:
         return cached
     try:
         import soccer_source as _ss
-        matches = _ss.get_soccer_matches(league, date_iso=iso_date, tz=tz)
+        matches, trustworthy = _ss.get_soccer_matches_status(league, date_iso=iso_date, tz=tz)
     except Exception as exc:
         log.warning("feed: soccer %s/%s failed: %s", league, iso_date, exc)
         return []
     if not matches:
-        _empty_feed_cache[key] = time.monotonic() + _feed_empty_ttl(iso_date)
+        # Only memoize "no games" when a source actually CONFIRMED it. An
+        # untrustworthy empty (every upstream errored — e.g. a transient 429)
+        # must not be cached, or one hiccup hides real fixtures for 15 minutes
+        # (this is what made World Cup days vanish from /feed while /soccer/games
+        # — which never caches — kept serving them).
+        if trustworthy:
+            _empty_feed_cache[key] = time.monotonic() + _feed_empty_ttl(iso_date)
     else:
         _feed_cache_put(key, matches, _feed_ttl(iso_date))
     return matches

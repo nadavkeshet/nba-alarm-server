@@ -581,7 +581,27 @@ def get_soccer_matches(
     date_iso: str | None = None,
     tz: str | None = None,
 ) -> list[dict]:
-    """All matches in a league on a given date.
+    """All matches in a league on a given date. See `get_soccer_matches_status`;
+    this thin wrapper drops the trustworthiness flag for callers (e.g.
+    /soccer/games) that just want the list and never cache it."""
+    return get_soccer_matches_status(league_slug, date_iso, tz)[0]
+
+
+def get_soccer_matches_status(
+    league_slug: str,
+    date_iso: str | None = None,
+    tz: str | None = None,
+) -> tuple[list[dict], bool]:
+    """All matches in a league on a given date, plus a `trustworthy` flag.
+
+    Returns `(matches, trustworthy)`. `trustworthy` is False when EVERY source
+    raised an exception (e.g. an upstream 429/timeout/egress block) so no source
+    ever confirmed the schedule — in that case an empty `matches` means "we don't
+    know", NOT "no games". The feed uses this to avoid caching a transient
+    upstream failure as a sticky 15-minute "no games" (which is what made future
+    fixtures like the World Cup vanish from /feed while /soccer/games still
+    served them). When at least one source replies cleanly — even with zero
+    games — the empty result is real and `trustworthy` is True.
 
     `league_slug` must be one of the keys in PRIMARY_SOURCE.
     `date_iso` is YYYY-MM-DD; defaults to today in `tz` (UTC if no tz given).
@@ -590,15 +610,14 @@ def get_soccer_matches(
     matches what they see in the UI. Falls back to UTC if invalid.
 
     Source chain (cascades on either exception OR empty result):
-        1. primary       (from PRIMARY_SOURCE — bsd or sofascore)
-        2. the other unofficial source (bsd ↔ sofascore)
-        3. 365scores     (free fallback; covers all 10 competitions and is
+        1. BSD           (primary for most competitions, incl. the World Cup)
+        2. 365scores     (free fallback; covers all 10 competitions and is
                          reachable from Railway egress IPs that Sofascore
                          occasionally blocks)
     """
     if league_slug not in PRIMARY_SOURCE:
         logger.warning("get_soccer_matches: unknown league %r", league_slug)
-        return []
+        return [], True  # a genuinely unknown league is a definitive empty
 
     anchor_tz = _resolve_tz(tz)
 
@@ -615,12 +634,14 @@ def get_soccer_matches(
         sources.append(("bsd", _fetch_bsd))
     sources.append(("score365", _fetch_365))
 
+    any_source_replied = False  # at least one source returned without raising
     for name, fetcher in sources:
         try:
             matches = fetcher(league_slug, date_iso)
         except Exception as exc:
             logger.warning("soccer source %s errored for %s/%s: %s", name, league_slug, date_iso, exc)
             continue
+        any_source_replied = True
         if matches:
             before = len(matches)
             matches = _enforce_date_and_dedupe(matches, date_iso, anchor_tz)
@@ -632,11 +653,14 @@ def get_soccer_matches(
             if matches:
                 logger.info("soccer source %s served %s/%s with %d matches", name, league_slug, date_iso, len(matches))
                 _seed_search_index(matches)
-                return matches
+                return matches, True
         logger.info("soccer source %s returned 0 for %s/%s — trying next", name, league_slug, date_iso)
 
-    logger.warning("all soccer sources empty for %s/%s", league_slug, date_iso)
-    return []
+    if any_source_replied:
+        logger.info("all soccer sources empty for %s/%s (confirmed)", league_slug, date_iso)
+    else:
+        logger.warning("all soccer sources ERRORED for %s/%s — empty is untrusted", league_slug, date_iso)
+    return [], any_source_replied
 
 
 # Sources have different day boundaries (Sofa = UTC/CET, BSD = Israel, 365 =

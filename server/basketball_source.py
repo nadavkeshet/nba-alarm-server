@@ -59,7 +59,21 @@ def get_basketball_games(
     date_iso: str | None = None,
     tz: str | None = None,
 ) -> list[dict]:
-    """All basketball games in a league on a given date.
+    """All basketball games in a league on a given date. Thin wrapper over
+    `get_basketball_games_status` for callers that don't cache the result."""
+    return get_basketball_games_status(league_slug, date_iso, tz)[0]
+
+
+def get_basketball_games_status(
+    league_slug: str,
+    date_iso: str | None = None,
+    tz: str | None = None,
+) -> tuple[list[dict], bool]:
+    """All basketball games in a league on a given date, plus a `trustworthy`
+    flag (False when every source raised, so an empty result means "unknown",
+    not "no games"). The feed uses the flag to avoid caching a transient
+    upstream failure as a sticky "no games" — see `soccer_source` for the
+    same rationale.
 
     `date_iso` is YYYY-MM-DD; defaults to today in `tz` (UTC if not given).
     `tz` is an IANA TZ used to anchor the calendar-day filter so the user's
@@ -70,6 +84,7 @@ def get_basketball_games(
         date_iso = datetime.now(anchor_tz).date().isoformat()
 
     games: list[dict] = []
+    any_source_replied = False  # at least one source returned without raising
 
     # BSD primary if covered. Query a ±1 day window because BSD filters by
     # UTC event_date but we want games landing on `date_iso` in the user's
@@ -82,6 +97,7 @@ def get_basketball_games(
             from_iso, to_iso = _bsd_query_window(date_iso)
             events = bsd.league_events(league_id, date_from=from_iso, date_to=to_iso)
             games = [_from_bsd_event(e, slug=league_slug) for e in events]
+            any_source_replied = True
             if games:
                 logger.info("bsd basketball served %s/%s with %d games (raw, pre-filter)",
                             league_slug, date_iso, len(games))
@@ -95,6 +111,7 @@ def get_basketball_games(
             # 365 expects YYYYMMDD form; the adapter normalizes either shape.
             raw = s365.fetch_games(date_iso.replace("-", ""), league=league_slug)
             games = [_from_365_event(e, slug=league_slug) for e in raw]
+            any_source_replied = True
             if games:
                 logger.info("365scores basketball served %s/%s with %d games",
                             league_slug, date_iso, len(games))
@@ -116,7 +133,7 @@ def get_basketball_games(
         league_id = bsd.slug_to_league_id(league_slug)
         if league_id is not None:
             games = _filter_completed_series_games(games, league_id, date_iso)
-    return games
+    return games, any_source_replied
 
 
 def get_basketball_event_detail(canonical: str) -> dict | None:
