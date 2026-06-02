@@ -2825,35 +2825,51 @@ def soccer_league_standings(slug: str):
 
 def _normalize_soccer_standings(raw: dict, league_id: int) -> dict:
     season_raw = raw.get("season") or {}
-    rows = raw.get("standings") or raw.get("table") or raw.get("rows") or []
-    out = []
-    for row in rows:
-        team = row.get("team") if isinstance(row.get("team"), dict) else {}
-        tid  = team.get("id") or row.get("team_id") or row.get("id") or 0
-        name = team.get("name") or row.get("team_name") or ""
-        gf   = _i(row, "goals_for",       "gf",  "scored",         "goals_scored")
-        ga   = _i(row, "goals_against",    "ga",  "conceded",       "goals_conceded")
-        gd   = _i(row, "goal_difference",  "gd") or (gf - ga)
-        out.append({
-            "position":   _i(row, "position", "rank"),
-            "team_id":    tid,
-            "team_name":  name,
-            "team_crest": f"https://sports.bzzoiro.com/img/team/{tid}/" if tid else None,
-            "played":     _i(row, "played", "matches", "games_played"),
-            "won":        _i(row, "won",    "wins",    "w"),
-            "drawn":      _i(row, "drawn",  "draws",   "d"),
-            "lost":       _i(row, "lost",   "losses",  "l"),
-            "gf": gf, "ga": ga, "gd": gd,
-            "pts":        _i(row, "points", "pts"),
-            "form":       row.get("form"),
-            "live":       row.get("live"),
-        })
-    return {
+
+    def _norm_rows(rows: list) -> list:
+        out = []
+        for row in rows or []:
+            team = row.get("team") if isinstance(row.get("team"), dict) else {}
+            tid  = team.get("id") or row.get("team_id") or row.get("id") or 0
+            name = team.get("name") or row.get("team_name") or ""
+            gf   = _i(row, "goals_for",      "gf", "scored",   "goals_scored")
+            ga   = _i(row, "goals_against",  "ga", "conceded", "goals_conceded")
+            gd   = _i(row, "goal_difference", "gd") or (gf - ga)
+            out.append({
+                "position":   _i(row, "position", "rank"),
+                "team_id":    tid,
+                "team_name":  name,
+                "team_crest": f"https://sports.bzzoiro.com/img/team/{tid}/" if tid else None,
+                "played":     _i(row, "played", "matches", "games_played"),
+                "won":        _i(row, "won",   "wins",   "w"),
+                "drawn":      _i(row, "drawn", "draws",  "d"),
+                "lost":       _i(row, "lost",  "losses", "l"),
+                "gf": gf, "ga": ga, "gd": gd,
+                "pts":        _i(row, "points", "pts"),
+                "form":       row.get("form"),
+                "live":       row.get("live"),
+            })
+        return out
+
+    out = {
         "league_id": league_id,
         "season":    {"id": season_raw.get("id") or 0, "name": season_raw.get("name") or ""},
         "grouped":   bool(raw.get("grouped", False)),
-        "standings": out,
+        "standings": [],
+        "groups":    [],
     }
+    # Grouped competitions (World Cup, Euros, …) come back as
+    # `{"groups": {"Group A": [rows], ...}}` — emit a groups array so the client
+    # can render one mini-table per group instead of a single flat list.
+    groups_raw = raw.get("groups")
+    if isinstance(groups_raw, dict) and groups_raw:
+        out["grouped"] = True
+        out["groups"] = [{"name": gname, "standings": _norm_rows(grows)}
+                         for gname, grows in groups_raw.items()]
+    else:
+        out["standings"] = _norm_rows(
+            raw.get("standings") or raw.get("table") or raw.get("rows") or [])
+    return out
 
 
 def _i(d: dict, *keys: str) -> int:
