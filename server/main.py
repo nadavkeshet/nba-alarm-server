@@ -2211,7 +2211,17 @@ _empty_feed_cache: dict[str, float] = {}   # "sport|league|iso" -> monotonic exp
 # made even /health time out. A single capped pool bounds total upstream
 # concurrency no matter how many feed requests land at once.
 from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
-_FEED_POOL = _ThreadPoolExecutor(max_workers=16, thread_name_prefix="feed")
+# Bounded a bit lower than before: combined with the result cache below, most
+# feed requests are cache hits and never touch the pool, so a smaller pool keeps
+# the (small) box from thrashing when a cold scroll-back lands.
+_FEED_POOL = _ThreadPoolExecutor(max_workers=10, thread_name_prefix="feed")
+
+# Result cache for NON-empty feed days. Past dates are immutable (final scores)
+# so they're cached for hours — this is the fix for "loading old games" being
+# slow/crashy: scrolling back used to re-fetch upstream AND re-normalize every
+# single request. Keyed "bb|league|iso" / "sc|league|iso" -> (expiry, payload).
+_feed_cache: dict[str, tuple[float, list]] = {}
+_FEED_CACHE_MAX = 6000
 
 
 def _feed_empty_ttl(iso_date: str) -> float:
@@ -2227,11 +2237,45 @@ def _feed_empty_ttl(iso_date: str) -> float:
     return 900.0                            # 15 min
 
 
+def _feed_ttl(iso_date: str) -> float:
+    """TTL for a NON-empty feed day. Past = long (final scores don't change),
+    today = short (live scores), future = medium (fixtures stable)."""
+    try:
+        from monitor import _eastern_today
+        today_iso = _yyyymmdd_to_iso(_eastern_today()) or ""
+        if iso_date and iso_date < today_iso:
+            return 12 * 3600.0
+        if iso_date == today_iso:
+            return 75.0
+    except Exception:
+        pass
+    return 6 * 3600.0
+
+
+def _feed_cache_get(key: str) -> Optional[list]:
+    hit = _feed_cache.get(key)
+    if hit is not None and time.monotonic() < hit[0]:
+        return hit[1]
+    return None
+
+
+def _feed_cache_put(key: str, payload: list, ttl: float) -> None:
+    if len(_feed_cache) >= _FEED_CACHE_MAX:
+        # Evict the soonest-to-expire quarter to bound memory.
+        victims = sorted(_feed_cache, key=lambda k: _feed_cache[k][0])[: _FEED_CACHE_MAX // 4 + 1]
+        for k in victims:
+            _feed_cache.pop(k, None)
+    _feed_cache[key] = (time.monotonic() + ttl, payload)
+
+
 def _feed_basketball(league: str, iso_date: str, tz: Optional[str]) -> list[dict]:
     key = f"bb|{league}|{iso_date}"
     exp = _empty_feed_cache.get(key)
     if exp is not None and time.monotonic() < exp:
         return []
+    cached = _feed_cache_get(key)
+    if cached is not None:
+        return cached
     try:
         import basketball_source as _bb
         games = _bb.get_basketball_games(league, date_iso=iso_date, tz=tz)
@@ -2240,6 +2284,8 @@ def _feed_basketball(league: str, iso_date: str, tz: Optional[str]) -> list[dict
         return []
     if not games:
         _empty_feed_cache[key] = time.monotonic() + _feed_empty_ttl(iso_date)
+    else:
+        _feed_cache_put(key, games, _feed_ttl(iso_date))
     return games
 
 
@@ -2248,6 +2294,9 @@ def _feed_soccer(league: str, iso_date: str, tz: Optional[str]) -> list[dict]:
     exp = _empty_feed_cache.get(key)
     if exp is not None and time.monotonic() < exp:
         return []
+    cached = _feed_cache_get(key)
+    if cached is not None:
+        return cached
     try:
         import soccer_source as _ss
         matches = _ss.get_soccer_matches(league, date_iso=iso_date, tz=tz)
@@ -2256,6 +2305,8 @@ def _feed_soccer(league: str, iso_date: str, tz: Optional[str]) -> list[dict]:
         return []
     if not matches:
         _empty_feed_cache[key] = time.monotonic() + _feed_empty_ttl(iso_date)
+    else:
+        _feed_cache_put(key, matches, _feed_ttl(iso_date))
     return matches
 
 
