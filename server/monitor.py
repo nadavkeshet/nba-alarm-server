@@ -1268,7 +1268,7 @@ def _run_radar_tick_for_user(
                 if watched_id in boxscore_ids:
                     log.info("RADAR DEBUG: MATCH  player_id=%s FOUND in boxscore of %s", watched_id, game_name)
                 else:
-                    log.warning("RADAR DEBUG: MISS   player_id=%s NOT in boxscore of %s (total=%d ids)", watched_id, game_name, len(boxscore_ids))
+                    log.warning("RADAR DEBUG: MISS   player_id=%s NOT in boxscore of %s | all_ids=%s", watched_id, game_name, sorted(boxscore_ids))
 
         for section in summary.get("boxscore", {}).get("players", []):
             for stats_group in section.get("statistics", []):
