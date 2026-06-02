@@ -628,11 +628,34 @@ def fetch_player_boxscore(game_id: str) -> dict | None:
     # The mobile app stores squad athlete IDs (from /game-summary roster), so we must
     # index the boxscore by athlete IDs for player alarm lookups to work.
     _member_to_athlete: dict[str, str] = {}
+    has_athlete_id = False
     for m in game.get("members", []):
         mid = str(m.get("id", ""))
         aid = str(m.get("athleteId", mid))  # fall back to mid if no athleteId
+        if m.get("athleteId"):
+            has_athlete_id = True
         if mid:
             _member_to_athlete[mid] = aid
+
+    # Fallback: when athleteId is absent (some leagues), resolve via squad name lookup
+    if not has_athlete_id:
+        log.warning("365scores: game %s has NO athleteId — falling back to name-based squad ID resolution", game_id)
+        name_to_squad_id: dict[str, str] = {}
+        for team_id_str in [home_id, away_id]:
+            try:
+                squad_players = fetch_team_players(int(team_id_str))
+                for sp in squad_players:
+                    name_to_squad_id[sp["name"].lower()] = sp["id"]
+            except Exception:
+                pass
+        # Re-map member IDs: replace with squad ID if name matches
+        for m in game.get("members", []):
+            mid = str(m.get("id", ""))
+            name = (m.get("name") or "").lower()
+            if mid and name and name in name_to_squad_id:
+                _member_to_athlete[mid] = name_to_squad_id[name]
+        log.info("365scores: game %s name-based fallback resolved %d/%d members",
+                 game_id, sum(1 for m in game.get("members", []) if _member_to_athlete.get(str(m.get("id",""))) != str(m.get("id",""))), len(game.get("members", [])))
 
     stat_names = ["MIN", "FG", "3PT", "FT", "REB", "AST", "STL", "BLK", "TO", "PF", "PTS", "3PM"]
     players_sections = []
