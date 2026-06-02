@@ -36,6 +36,18 @@ from score365_soccer_adapter import (
 
 logger = logging.getLogger(__name__)
 
+# ONE shared, bounded pool for match-detail fan-out (BSD: 3 calls, Sofa: 5).
+# A per-request pool spawned 3-5 fresh threads on every Match Summary open, so a
+# burst of users opening sheets multiplied threads on top of the request pool
+# (the same explosion that _FEED_POOL/_WATCH_POOL in main.py were created to fix).
+# All submitted tasks are leaf HTTP calls (no re-submission to this pool), so a
+# bounded shared pool can't deadlock. Results are always gathered inside the
+# `with nullcontext(_DETAIL_POOL)` block, so the pool is reused, never shut down.
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+from contextlib import nullcontext as _nullcontext
+
+_DETAIL_POOL = _ThreadPoolExecutor(max_workers=8, thread_name_prefix="soccerdetail")
+
 # canonical_id -> peak Drama Engine score seen for the match. Populated when the
 # Drama Meter / timeline is computed (main.py), so a finished match's feed badge
 # reflects how dramatic it actually got — not the FT-damped live state. Permanent
@@ -1053,13 +1065,12 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
     are independent, so doing them sequentially was adding 400–1000 ms of
     latency to every Match Summary open.
     """
-    from concurrent.futures import ThreadPoolExecutor
     source, native = parse_canonical_id(canonical)
     eid = int(native)
     if source == "bsd":
         # Fan out the three upstream calls. Adapter has its own LRU + TTL
         # cache, so a warm match returns near-instantly here.
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with _nullcontext(_DETAIL_POOL) as pool:
             f_detail    = pool.submit(bsd.event_detail, eid)
             f_stats     = pool.submit(bsd.event_stats, eid)
             f_incidents = pool.submit(bsd.event_incidents, eid)
@@ -1110,7 +1121,7 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
     if source == "sofa":
         # Sofascore — five independent calls; parallelize. Per-call failures
         # are isolated so one upstream hiccup doesn't 500 the endpoint.
-        with ThreadPoolExecutor(max_workers=5) as pool:
+        with _nullcontext(_DETAIL_POOL) as pool:
             f_detail    = pool.submit(sofa.event_detail, eid)
             f_stats     = pool.submit(sofa.event_statistics, eid)
             f_graph     = pool.submit(sofa.event_graph, eid)

@@ -4,7 +4,7 @@ import logging
 import threading
 import time
 import requests
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -2222,6 +2222,13 @@ _FEED_POOL = _ThreadPoolExecutor(max_workers=10, thread_name_prefix="feed")
 # the box. A single small pool caps total upstream concurrency no matter how many
 # /watch-scores requests land together.
 _WATCH_POOL = _ThreadPoolExecutor(max_workers=4, thread_name_prefix="watch")
+
+# ONE shared, bounded pool for the basketball summary fan-out (detail + team-stats
+# + box-score, 3 calls). Was a fresh per-request pool, so concurrent summary opens
+# multiplied threads on top of the request pool — same explosion the pools above
+# fix. Tasks are leaf HTTP calls (no re-submission), so a bounded shared pool is
+# deadlock-safe; results are gathered inside the block, so it's reused not closed.
+_SUMMARY_POOL = _ThreadPoolExecutor(max_workers=6, thread_name_prefix="bbsummary")
 # Only auto-compute scores for the last few days; older history is read from the
 # DB if already persisted, else computed lazily per match (so a cold first run
 # can't trigger hundreds of synchronous score computations).
@@ -2446,10 +2453,9 @@ def basketball_event_summary(canonical_id: str):
     merged object. Mirrors `/soccer/match/{id}` so the iOS layer can fetch
     everything in a single round-trip.
     """
-    from concurrent.futures import ThreadPoolExecutor
     import basketball_source as _bb
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    with nullcontext(_SUMMARY_POOL) as pool:
         f_detail = pool.submit(_bb.get_basketball_event_detail, canonical_id)
         f_stats  = pool.submit(_bb.get_basketball_team_stats, canonical_id)
         f_box    = pool.submit(_bb.get_basketball_box_score, canonical_id)
