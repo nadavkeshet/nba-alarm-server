@@ -112,10 +112,36 @@ def test_resolve_underdog_clear(monkeypatch):
 
 
 def test_resolve_underdog_none_when_even(monkeypatch):
-    monkeypatch.setattr(ss, "pre_match_win_prob", lambda eid: (0.45, 0.30, 0.25))  # gap 0.20 < 0.25
+    monkeypatch.setattr(ss, "pre_match_win_prob", lambda eid: (0.40, 0.30, 0.30))  # gap 0.10
+    monkeypatch.setattr(ss, "get_soccer_match_detail",
+                        lambda c: {"home": {"id": "1", "name": "Nowhereland"},
+                                   "away": {"id": "2", "name": "Elsewhereia"}})  # unknown → no rank gap
     assert ss.resolve_underdog("bsd-372") is None
+
+
+def test_resolve_underdog_ranking_fallback(monkeypatch):
+    # Odds too even to flag an underdog, but the FIFA-ranking gap is huge
+    # (Germany ~10 vs Curaçao ~82) — the fallback should still flag Curaçao.
+    monkeypatch.setattr(ss, "pre_match_win_prob", lambda eid: (0.44, 0.26, 0.30))
+    monkeypatch.setattr(ss, "get_soccer_match_detail",
+                        lambda c: {"home": {"id": "467", "name": "Germany"},
+                                   "away": {"id": "480", "name": "Curaçao"}})
+    dog = ss.resolve_underdog("bsd-8295")
+    assert dog is not None
+    assert dog["underdog_name"] == "Curaçao"
+    assert dog["underdog_is_home"] is False
+    assert dog["underdog_source"] == "ranking"
 
 
 def test_resolve_underdog_none_for_sofa(monkeypatch):
     # sofa-* has no BSD prediction path
     assert ss.resolve_underdog("sofa-14023956") is None
+
+
+def test_fifa_rankings_alias_bridging():
+    import fifa_rankings as fr
+    fr._reset_for_tests()
+    assert fr.rank("South Korea") == fr.rank("Korea Republic")  # alias bridge
+    assert fr.rank("Iran") == fr.rank("IR Iran")
+    assert fr.rank("Germany") and fr.rank("Curaçao")
+    assert fr.rank("Nowhereland") is None

@@ -73,20 +73,32 @@ def pre_match_win_prob(eid: int) -> tuple[float, float, float] | None:
 
 # Clear-underdog thresholds — a single source of truth for the /prediction
 # endpoint and Sensation Watch alarm creation. A match has a "clear underdog"
-# only when the favourite is meaningfully ahead AND the underdog is a genuine
-# longshot, so a 45/40 near-coin-flip is NOT treated as an upset setup.
-_UNDERDOG_MIN_GAP = 0.25
-_UNDERDOG_MAX_PROB = 0.33
+# when the favourite is meaningfully ahead AND the underdog is a longshot.
+_UNDERDOG_MIN_GAP = 0.20
+_UNDERDOG_MAX_PROB = 0.38
+# FIFA-ranking fallback: BSD's pre-match model badly underrates obvious
+# favourites for some minnow fixtures (it gave Germany only 44% vs Curaçao).
+# When the odds are too even to flag an underdog, fall back to the world
+# ranking gap so a clear mismatch on paper still counts.
+_RANK_GAP = 25
+
+
+def _underdog_payload(side: dict, *, is_home: bool, win_prob: float | None, source: str) -> dict:
+    return {
+        "underdog_is_home": is_home,
+        "underdog_team_id": str(side.get("id") or ""),
+        "underdog_name": side.get("name") or "",
+        "underdog_win_prob": round(win_prob, 4) if win_prob is not None else None,
+        "underdog_source": source,
+    }
 
 
 def resolve_underdog(canonical: str, *, detail: dict | None = None,
                      pm: tuple[float, float, float] | None = None) -> dict | None:
-    """Identify the clear underdog of a match from the BSD pre-match prediction.
-
-    Returns None when there's no prediction (e.g. sofa-* ids, or BSD has none)
-    or when there's no *clear* underdog (gap < `_UNDERDOG_MIN_GAP` or the
-    underdog's win prob > `_UNDERDOG_MAX_PROB`). Callers may pass an already
-    fetched `detail` / `pm` to avoid re-fetching. BSD-only.
+    """Identify the clear underdog of a match. Tries the BSD pre-match odds
+    first; if those are too even, falls back to the FIFA world-ranking gap.
+    Returns None when neither signal flags a clear underdog. Callers may pass an
+    already-fetched `detail` / `pm` to avoid re-fetching. BSD-only.
     """
     try:
         source, native = parse_canonical_id(canonical)
@@ -100,25 +112,34 @@ def resolve_underdog(canonical: str, *, detail: dict | None = None,
         return None
     if pm is None:
         pm = pre_match_win_prob(eid)
-    if not pm:
-        return None
-    p_home, p_draw, p_away = pm
-    underdog_is_home = p_home < p_away
-    dog_prob = min(p_home, p_away)
-    fav_prob = max(p_home, p_away)
-    if (fav_prob - dog_prob) < _UNDERDOG_MIN_GAP or dog_prob > _UNDERDOG_MAX_PROB:
-        return None
     if detail is None:
         detail = get_soccer_match_detail(canonical) or {}
     home = detail.get("home") or {}
     away = detail.get("away") or {}
-    dog = home if underdog_is_home else away
-    return {
-        "underdog_is_home": underdog_is_home,
-        "underdog_team_id": str(dog.get("id") or ""),
-        "underdog_name": dog.get("name") or "",
-        "underdog_win_prob": round(dog_prob, 4),
-    }
+
+    # 1. Odds-based clear underdog.
+    if pm:
+        p_home, _p_draw, p_away = pm
+        underdog_is_home = p_home < p_away
+        dog_prob = min(p_home, p_away)
+        fav_prob = max(p_home, p_away)
+        if (fav_prob - dog_prob) >= _UNDERDOG_MIN_GAP and dog_prob <= _UNDERDOG_MAX_PROB:
+            dog = home if underdog_is_home else away
+            return _underdog_payload(dog, is_home=underdog_is_home, win_prob=dog_prob, source="odds")
+
+    # 2. FIFA-ranking fallback for lopsided fixtures the odds model underrates.
+    import fifa_rankings
+    rh = fifa_rankings.rank(home.get("name"))
+    ra = fifa_rankings.rank(away.get("name"))
+    if rh is not None and ra is not None and abs(rh - ra) >= _RANK_GAP:
+        underdog_is_home = rh > ra  # higher rank number = lower-ranked = underdog
+        dog = home if underdog_is_home else away
+        dog_prob = None
+        if pm:
+            dog_prob = pm[0] if underdog_is_home else pm[2]
+        return _underdog_payload(dog, is_home=underdog_is_home, win_prob=dog_prob, source="ranking")
+
+    return None
 
 
 def wc_group_standings(slug: str = "world_cup") -> list[list[dict]] | None:
