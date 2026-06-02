@@ -379,6 +379,7 @@ def _init_db() -> None:
         # `SELECT favorites.team_id ...` that 500s on UndefinedColumn — the
         # handler swallows it and returns empty defaults, so NO favorites
         # (teams or players) ever come back even though the saves succeeded.
+        "ALTER TABLE favorites ADD COLUMN alt_team_ids VARCHAR",
         "ALTER TABLE favorites ADD COLUMN team_id   VARCHAR",
         "ALTER TABLE favorites ADD COLUMN team_name VARCHAR",
         "ALTER TABLE favorites ADD COLUMN td_watch  BOOLEAN DEFAULT FALSE NOT NULL",
