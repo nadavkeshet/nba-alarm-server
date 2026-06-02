@@ -229,14 +229,19 @@ class SoccerFavoritePlayerDB(_Base):
     """Persistent soccer favorite player (e.g. hat-trick watch)."""
     __tablename__ = "soccer_favorites"
 
-    user_token  = Column(String, primary_key=True)
-    player_id   = Column(String, primary_key=True)
-    player_name = Column(String, nullable=True)
-    team_id     = Column(String, nullable=True)
-    config      = Column(_JSONB, nullable=False, default=dict)
-    alert_type  = Column(String, nullable=False, default="alarm")
-    paused      = Column(Boolean, nullable=False, default=False)
-    created_at  = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    user_token   = Column(String, primary_key=True)
+    player_id    = Column(String, primary_key=True)
+    player_name  = Column(String, nullable=True)
+    team_id      = Column(String, nullable=True)
+    # Alternate team ids tracked for this player beyond the primary club — most
+    # importantly the player's NATIONAL TEAM, so favoriting e.g. Mbappé surfaces
+    # France's games too. Comma-separated; the list endpoint folds them into
+    # `team_ids` which the feed matches against.
+    alt_team_ids = Column(String, nullable=True)
+    config       = Column(_JSONB, nullable=False, default=dict)
+    alert_type   = Column(String, nullable=False, default="alarm")
+    paused       = Column(Boolean, nullable=False, default=False)
+    created_at   = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class SoccerFavoriteTeamDB(_Base):
@@ -338,6 +343,11 @@ def _init_db() -> None:
         "ALTER TABLE favorite_teams ADD COLUMN skip_euroleague_evening BOOLEAN DEFAULT FALSE NOT NULL",
         "ALTER TABLE soccer_favorite_teams ADD COLUMN alt_team_ids VARCHAR",
         "ALTER TABLE soccer_favorite_teams ADD COLUMN competitions VARCHAR",
+        # Soccer favorite PLAYERS gained alt ids (national team + provider ids).
+        # Without this the upsert handler set row.alt_team_ids on an unmapped
+        # attribute, so a player's national-team / alternate ids were silently
+        # dropped and never matched in the feed.
+        "ALTER TABLE soccer_favorites ADD COLUMN alt_team_ids VARCHAR",
         "ALTER TABLE favorite_teams ADD COLUMN alt_team_ids VARCHAR",
         "ALTER TABLE soccer_alarms ADD COLUMN match_name VARCHAR",
         # FavoritePlayerDB columns added to the model after the original
@@ -3016,6 +3026,12 @@ class SoccerFavoritePlayerRequest(BaseModel):
     # Alt provider ids for this player. The upsert handler reads it; without
     # this field the endpoint 500'd because clients (iOS) don't send it.
     team_ids: Optional[list[str]] = None
+    # National-team tracking. Clients may pass either the resolved national-team
+    # id (`country_id`) or just the nationality name (`country`); if neither is
+    # given the server resolves it from the player's detail. Any of these merges
+    # the national team into the tracked id set so e.g. France's games show up.
+    country: Optional[str] = None
+    country_id: Optional[str] = None
     config: Optional[dict] = None
     alert_type: str = "alarm"
     paused: bool = False
@@ -3062,6 +3078,13 @@ def soccer_fav_player_upsert(req: SoccerFavoritePlayerRequest):
             session.add(row)
         row.player_name = req.player_name
         alt_ids = [tid for tid in dict.fromkeys(req.team_ids or []) if tid and tid != req.team_id]
+        # Resolve the player's NATIONAL TEAM and track it alongside the club, so
+        # the favorites feed surfaces e.g. France's games for Mbappé. Entirely
+        # best-effort: a missing/unknown nationality just means no national team
+        # is added — it must never block favoriting.
+        nat_id = _resolve_national_team_id(req)
+        if nat_id and nat_id != req.team_id and nat_id not in alt_ids:
+            alt_ids.append(nat_id)
         row.team_id     = req.team_id
         row.alt_team_ids = ",".join(alt_ids) or None
         row.config      = req.config or {}
@@ -3069,6 +3092,25 @@ def soccer_fav_player_upsert(req: SoccerFavoritePlayerRequest):
         row.paused      = req.paused
         session.commit()
     return {"status": "ok", "player_id": req.player_id}
+
+
+def _resolve_national_team_id(req: "SoccerFavoritePlayerRequest") -> Optional[str]:
+    """National-team id for a favorite-player upsert. Prefers a client-supplied
+    `country_id`, then a client-supplied `country` name, then the player's
+    nationality from provider detail. Returns None on anything unexpected."""
+    try:
+        import national_team as nt
+        if req.country_id:
+            return str(req.country_id)
+        if req.country:
+            return nt.national_team_id(req.country)
+        import bzzoiro_adapter as bz
+        detail = bz.player_detail(req.player_id) or {}
+        return nt.national_team_id(detail.get("nationality"))
+    except Exception as exc:
+        log.warning("soccer fav player: national-team resolve failed (%s): %s",
+                    req.player_id, exc)
+        return None
 
 
 @app.delete("/soccer/favorites/players/{player_id}")

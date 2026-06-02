@@ -1,0 +1,4 @@
+{
+  "_comment": "Authoritative country-name -> national-team team-id overrides for favorite-player national-team tracking (see national_team.py). Keys are country names as the data provider reports a player's `nationality` (matching is accent/case/punctuation-insensitive and runs through the alias map). Values are the team id used as home/away in international fixtures (e.g. the BSD team id seen in world_cup/euros matches). Anything pinned here resolves instantly, offline and off-season; everything else is resolved at runtime from international standings + fixtures and cached. Fill these in when you want certainty for a nation.",
+  "teams": {}
+}
