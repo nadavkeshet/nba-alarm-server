@@ -1256,16 +1256,19 @@ def _run_radar_tick_for_user(
             log.warning("RADAR DEBUG: no boxscore for %s — skipping player checks", game_id)
             continue
 
-        # Log all player IDs in this boxscore vs what we're watching
+        # Log which watched players were found/missing in this boxscore
         if fav_players:
-            boxscore_ids = [
+            boxscore_ids = set(
                 str(entry.get("athlete", {}).get("id", ""))
                 for section in summary.get("boxscore", {}).get("players", [])
                 for sg in section.get("statistics", [])
                 for entry in sg.get("athletes", [])
-            ]
-            log.info("RADAR DEBUG: game=%s | watching=%s | boxscore_ids=%s",
-                     game_name, list(fav_players.keys()), boxscore_ids[:10])
+            )
+            for watched_id in fav_players:
+                if watched_id in boxscore_ids:
+                    log.info("RADAR DEBUG: MATCH  player_id=%s FOUND in boxscore of %s", watched_id, game_name)
+                else:
+                    log.warning("RADAR DEBUG: MISS   player_id=%s NOT in boxscore of %s (total=%d ids)", watched_id, game_name, len(boxscore_ids))
 
         for section in summary.get("boxscore", {}).get("players", []):
             for stats_group in section.get("statistics", []):
