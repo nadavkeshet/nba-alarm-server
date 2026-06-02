@@ -131,6 +131,7 @@ class FavoritePlayerDB(_Base):
     broadcast_only  = Column(Boolean, default=False, nullable=False)
     skip_euroleague_evening = Column(Boolean, default=False, nullable=False)
     paused          = Column(Boolean, default=False, nullable=False)
+    alt_team_ids    = Column(String,  nullable=True)   # comma-sep alternate provider ids
     created_at      = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 

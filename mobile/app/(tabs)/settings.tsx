@@ -19,7 +19,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { signal } from '../../utils/telemetry';
 import { WelcomeGuide } from '../../components/welcome-guide';
+import { HamburgerButton } from '../../components/drawer-menu';
 
 // ─── Sound definitions ────────────────────────────────────────────────────────
 
@@ -112,22 +114,16 @@ export default function SettingsScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.header}>{t('settings.title')}</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingRight: 16 }}>
+        <HamburgerButton />
+        <Text style={[styles.header, { flex: 1, marginLeft: 4 }]}>{t('settings.title')}</Text>
+      </View>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 48 }}
         keyboardShouldPersistTaps="handled"
       >
-        {/* ── App Guide button ──────────────────────────────────────── */}
-        <TouchableOpacity
-          style={styles.guideBtn}
-          onPress={() => setGuideVisible(true)}
-        >
-          <Ionicons name="information-circle-outline" size={20} color={C.orange} />
-          <Text style={styles.guideBtnText}>{t('settings.appGuide')}</Text>
-        </TouchableOpacity>
-
         {/* ── Appearance ────────────────────────────────────────────── */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>{t('settings.appearance')}</Text>
@@ -143,7 +139,7 @@ export default function SettingsScreen() {
             </Text>
             <Switch
               value={themeMode === 'dark'}
-              onValueChange={toggleTheme}
+              onValueChange={() => { signal('Settings.ThemeChanged', { theme: themeMode === 'dark' ? 'light' : 'dark' }); toggleTheme(); }}
               trackColor={{ false: C.border, true: C.accentBlue }}
               thumbColor={themeMode === 'dark' ? C.textPrimary : '#fff'}
             />
@@ -160,7 +156,7 @@ export default function SettingsScreen() {
             </Text>
             <Switch
               value={lang === 'he'}
-              onValueChange={toggleLanguage}
+              onValueChange={() => { signal('Settings.LanguageChanged', { language: lang === 'he' ? 'en' : 'he' }); toggleLanguage(); }}
               trackColor={{ false: C.border, true: C.accentBlue }}
               thumbColor={lang === 'he' ? C.textPrimary : '#fff'}
             />
@@ -243,15 +239,6 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* ── Rate Us ───────────────────────────────────────────────── */}
-        <TouchableOpacity
-          style={styles.rateBtn}
-          onPress={() => Linking.openURL('market://details?id=com.nadav.nbaalarmapp')}
-        >
-          <Ionicons name="star" size={16} color={C.gold} />
-          <Text style={styles.rateBtnText}>{t('settings.rateUs')}</Text>
-        </TouchableOpacity>
-
         {/* ── Privacy Policy ────────────────────────────────────────── */}
         <TouchableOpacity
           style={styles.privacyBtn}
@@ -260,9 +247,21 @@ export default function SettingsScreen() {
           <Text style={styles.privacyBtnText}>Privacy Policy</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={() => Linking.openURL('mailto:nadav@clutchalarm.com')}>
-          <Text style={styles.contactText}>nadav@clutchalarm.com</Text>
-        </TouchableOpacity>
+        <Text style={styles.contactTitle}>Contact Us</Text>
+        <View style={styles.contactRow}>
+          <TouchableOpacity
+            style={styles.contactIcon}
+            onPress={() => Linking.openURL('mailto:nadav@clutchalarm.com')}
+          >
+            <Ionicons name="mail" size={28} color={C.textMuted} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.contactIcon}
+            onPress={() => { signal('Instagram.Opened', { source: 'settings' }); Linking.openURL('https://www.instagram.com/clutch_alarm?igsh=NTFwcmt1djB6Nm94'); }}
+          >
+            <Ionicons name="logo-instagram" size={28} color={C.textMuted} />
+          </TouchableOpacity>
+        </View>
 
         {userToken ? (
           <TouchableOpacity
@@ -384,8 +383,14 @@ function makeStyles(C: AppColors) {
     privacyBtnText: {
       color: C.textMuted, fontSize: 12, textDecorationLine: 'underline',
     },
-    contactText: {
-      color: C.textMuted, fontSize: 12, textAlign: 'center', marginBottom: 8,
+    contactTitle: {
+      color: C.textMuted, fontSize: 12, textAlign: 'center', marginBottom: 10, fontWeight: '600', letterSpacing: 1,
+    },
+    contactRow: {
+      flexDirection: 'row', justifyContent: 'center', gap: 24, marginBottom: 8,
+    },
+    contactIcon: {
+      padding: 4,
     },
     copyTokenBtn: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center',

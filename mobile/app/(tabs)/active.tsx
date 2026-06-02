@@ -19,11 +19,17 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { SkeletonAlarmCard } from '../../components/skeleton-card';
 import { TeamBadge } from '../../components/TeamBadge';
+import { HamburgerButton } from '../../components/drawer-menu';
 
 import { SERVER_URL } from '../../config';
 import { translateGameName, teamFullToHe } from '../../utils/teamNames';
+import { listAlarms, deleteAlarm as deleteSoccerAlarm, getFavorites as getSoccerFavorites } from '../../services/soccer-service';
+import type { SoccerAlarm, SoccerAlarmType, SoccerFavTeam, SoccerFavPlayer } from '../../types/soccer';
+import { tabHeaderTitle } from '../../constants/tokens';
 
-const TROPHY_KEY = 'nba_alarm_recent_hits';
+const TROPHY_KEY        = 'nba_alarm_recent_hits';
+const ACTIVE_CACHE_KEY  = 'active_v1';
+const SOCCER_CACHE_KEY  = 'soccer_alarms_v1';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -35,6 +41,8 @@ interface GameAlarm {
   alert_type: string;
   status: string;
   started_at: string;
+  notify_at_start?: boolean;
+  threshold?: number;
 }
 
 interface PlayerAlarm {
@@ -120,6 +128,23 @@ const CONDITION_LABEL: Record<string, string> = {
   triple_double: 'active.condTriple',
 };
 
+const SOCCER_ALARM_TYPE_KEY: Record<string, string> = {
+  drama_radar:  'soccer.alarm.dramaRadar',
+  late_drama:   'soccer.alarm.lateDrama',
+  match:        'soccer.alarm.kickoff',
+  knockout_et:  'soccer.alarm.knockoutEt',
+  red_card:     'soccer.alarm.redOrPenalty',
+  comeback:     'soccer.alarm.comeback',
+  hat_trick:    'soccer.alarm.hatTrickWatch',
+  penalty:      'soccer.alarm.redOrPenalty',
+  player_alert: 'soccer.alarm.tab.player',
+  big_chance:   'soccer.alarm.dramaRadar',
+};
+
+function soccerAlarmLabel(type: SoccerAlarmType, t: (k: string) => string): string {
+  return t(SOCCER_ALARM_TYPE_KEY[type] ?? 'soccer.alarm.title');
+}
+
 // ─── Static styles for module-level components ────────────────────────────────
 // These components are defined outside ActiveScreen so they cannot access the
 // theme-computed `styles` object. Static/structural styles go here; dynamic
@@ -204,6 +229,8 @@ export default function ActiveScreen() {
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState<string | null>(null);
   const [trophies, setTrophies]   = useState<TrophyHit[]>([]);
+  const [soccerAlarms, setSoccerAlarms] = useState<SoccerAlarm[]>([]);
+  const [soccerFavs, setSoccerFavs]     = useState<{ teams: SoccerFavTeam[]; players: SoccerFavPlayer[] } | null>(null);
   const tokenRef                  = useRef<string | null>(null);
   // Tracks whether we've ever completed a load — used to skip showing the
   // skeleton on subsequent tab-focus refreshes (stale-while-revalidate)
@@ -223,6 +250,12 @@ export default function ActiveScreen() {
 
   const resolveToken = useCallback(async (): Promise<string | null> => {
     if (tokenRef.current) return tokenRef.current;
+    // Fast path: token is already stored in AsyncStorage by _layout.tsx on registration
+    try {
+      const stored = await AsyncStorage.getItem('nba_fcm_token');
+      if (stored) { tokenRef.current = stored; return stored; }
+    } catch {}
+    // Slow path: ask Firebase (first launch before token is stored)
     try {
       const token = await messaging().getToken();
       tokenRef.current = token;
@@ -293,9 +326,22 @@ export default function ActiveScreen() {
 
   const load = useCallback(async () => {
     setError(null);
-    // Only show skeleton on the very first load — on subsequent tab-focus
-    // refreshes the existing data stays visible while the fetch runs in background
+
+    // Cold-start fast path: restore both caches from AsyncStorage before any network call
+    if (!dataLoadedRef.current) {
+      try {
+        const [actRaw, socRaw] = await Promise.all([
+          AsyncStorage.getItem(ACTIVE_CACHE_KEY),
+          AsyncStorage.getItem(SOCCER_CACHE_KEY),
+        ]);
+        if (actRaw) { setData(JSON.parse(actRaw)); setLoading(false); dataLoadedRef.current = true; }
+        if (socRaw) setSoccerAlarms(JSON.parse(socRaw));
+      } catch {}
+    }
+
+    // Show skeleton only if nothing was restored from cache
     if (!dataLoadedRef.current) setLoading(true);
+
     try {
       const token = await resolveToken();
       if (!token) {
@@ -307,22 +353,44 @@ export default function ActiveScreen() {
       const raw = await resp.json();
       const d: ActiveMonitors = {
         ...raw,
-        db_alarms:       Array.isArray(raw.db_alarms)       ? raw.db_alarms       : [],
-        game_alarms:     Array.isArray(raw.game_alarms)     ? raw.game_alarms     : [],
-        player_alarms:   Array.isArray(raw.player_alarms)   ? raw.player_alarms   : [],
-        favorite_teams:  Array.isArray(raw.favorite_teams)  ? raw.favorite_teams  : [],
+        db_alarms:        Array.isArray(raw.db_alarms)       ? raw.db_alarms       : [],
+        game_alarms:      Array.isArray(raw.game_alarms)     ? raw.game_alarms     : [],
+        player_alarms:    Array.isArray(raw.player_alarms)   ? raw.player_alarms   : [],
+        favorite_teams:   Array.isArray(raw.favorite_teams)  ? raw.favorite_teams  : [],
         favorite_players: raw.favorite_players && typeof raw.favorite_players === 'object'
           ? raw.favorite_players : {},
       };
       setData(d);
+      AsyncStorage.setItem(ACTIVE_CACHE_KEY, JSON.stringify(d)).catch(() => {});
+
+      // Soccer alarms + favorites: non-blocking, persisted separately
+      listAlarms(token)
+        .then(alarms => {
+          setSoccerAlarms(alarms);
+          AsyncStorage.setItem(SOCCER_CACHE_KEY, JSON.stringify(alarms)).catch(() => {});
+        })
+        .catch(() => {});
+      getSoccerFavorites(token)
+        .then(favs => setSoccerFavs({ teams: favs.teams, players: favs.players }))
+        .catch(() => {});
     } catch (e: any) {
-      // Only surface the error when there's nothing to show — otherwise keep stale data visible
       if (!dataLoadedRef.current) setError(e?.message ?? 'Failed to load. Check your connection.');
     } finally {
       dataLoadedRef.current = true;
       setLoading(false);
     }
   }, [resolveToken]);
+
+  const cancelSoccerAlarm = useCallback(async (alarm: SoccerAlarm) => {
+    const token = await resolveToken();
+    if (!token) return;
+    showConfirm(t('active.deleteConfirm'), async () => {
+      try {
+        await deleteSoccerAlarm(alarm.id, token);
+        setSoccerAlarms(prev => prev.filter(a => a.id !== alarm.id));
+      } catch {}
+    });
+  }, [resolveToken, t]);
 
   useFocusEffect(
     useCallback(() => {
@@ -368,8 +436,11 @@ export default function ActiveScreen() {
       histCats.threes_11          && 'settings.threes11',
       histCats.quad_double_threat && 'settings.quadDouble',
     ].filter(Boolean) as string[] : [];
-    return { dbGameAlarms, liveGameAlarms, livePlayerAlarmGroups, dbPlayerAlarmGroups, activeCategories };
-  }, [data]);
+    const soccerGameAlarms   = soccerAlarms.filter(a => a.alarm_type !== 'player_alert');
+    const soccerPlayerAlarms = soccerAlarms.filter(a => a.alarm_type === 'player_alert');
+
+    return { dbGameAlarms, liveGameAlarms, livePlayerAlarmGroups, dbPlayerAlarmGroups, activeCategories, soccerGameAlarms, soccerPlayerAlarms };
+  }, [data, soccerAlarms]);
 
   const cancelGameAlarm = (alarm: GameAlarm) => {
     showConfirm(t('active.deleteConfirm'), () => {
@@ -414,7 +485,11 @@ export default function ActiveScreen() {
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
-        <Text style={styles.header}>{t('active.title')}</Text>
+        <View style={styles.header}>
+          <HamburgerButton />
+          <Text style={styles.headerTitle}>{t('active.title')}</Text>
+          <View style={{ width: 40 }} />
+        </View>
         <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
           {[0, 1, 2].map(i => (
             <View key={i} style={styles.section}>
@@ -430,7 +505,11 @@ export default function ActiveScreen() {
   if (error) {
     return (
       <SafeAreaView style={styles.container}>
-        <Text style={styles.header}>{t('active.title')}</Text>
+        <View style={styles.header}>
+          <HamburgerButton />
+          <Text style={styles.headerTitle}>{t('active.title')}</Text>
+          <View style={{ width: 40 }} />
+        </View>
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 }}>
           <Ionicons name="cloud-offline-outline" size={48} color={C.border} />
           <Text style={[styles.emptyHint, { marginTop: 12 }]}>{error}</Text>
@@ -445,13 +524,17 @@ export default function ActiveScreen() {
   const radar    = data?.global_radar;
   const hist     = data?.historical_mode;
 
-  const { dbGameAlarms, liveGameAlarms, livePlayerAlarmGroups, dbPlayerAlarmGroups, activeCategories } = derived;
-  const totalGameAlarms   = liveGameAlarms.length + dbGameAlarms.length;
-  const totalPlayerAlarms = livePlayerAlarmGroups.length + dbPlayerAlarmGroups.length;
+  const { dbGameAlarms, liveGameAlarms, livePlayerAlarmGroups, dbPlayerAlarmGroups, activeCategories, soccerGameAlarms, soccerPlayerAlarms } = derived;
+  const totalGameAlarms   = liveGameAlarms.length + dbGameAlarms.length + soccerGameAlarms.length;
+  const totalPlayerAlarms = livePlayerAlarmGroups.length + dbPlayerAlarmGroups.length + soccerPlayerAlarms.length;
 
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.header}>{t('active.title')}</Text>
+      <View style={styles.header}>
+        <HamburgerButton />
+        <Text style={styles.headerTitle}>{t('active.title')}</Text>
+        <View style={{ width: 40 }} />
+      </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
 
@@ -519,6 +602,27 @@ export default function ActiveScreen() {
                     </Text>
                   </View>
                   <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelDbAlarm(alarm)}>
+                    <Text style={styles.cancelBtnText}>{t('active.delete')}</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+              {soccerGameAlarms.map(alarm => (
+                <View key={`soccer-${alarm.id}`} style={styles.alarmCard}>
+                  <View style={styles.alarmCardLeft}>
+                    <LivePill
+                      label={alarm.is_active ? t('active.watching') : t('active.saved')}
+                      color={alarm.is_active ? C.orange : C.accentBlue}
+                      bg={alarm.is_active ? C.orangeDim : 'rgba(77,140,245,0.12)'}
+                    />
+                    <Text style={styles.alarmGame}>{soccerAlarmLabel(alarm.alarm_type, t)}</Text>
+                    {(alarm.match_name || alarm.match_id) && (
+                      <Text style={styles.alarmSub}>{alarm.match_name ?? alarm.match_id}</Text>
+                    )}
+                    <Text style={styles.alarmSub}>
+                      {alarm.alert_type === 'alarm' ? t('active.fullAlarm') : t('active.silentMode')}
+                    </Text>
+                  </View>
+                  <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelSoccerAlarm(alarm)}>
                     <Text style={styles.cancelBtnText}>{t('active.delete')}</Text>
                   </TouchableOpacity>
                 </View>
@@ -596,6 +700,39 @@ export default function ActiveScreen() {
                   </TouchableOpacity>
                 </View>
               ))}
+              {soccerPlayerAlarms.map(alarm => {
+                const playerName = (alarm.config?.player_name as string | undefined) ?? alarm.player_id;
+                const configSummary = alarm.config ? [
+                  alarm.config.goal_alerts && (alarm.config.clutch_only ? t('soccer.alarm.clutchOnly') : t('soccer.alarm.goals')),
+                  alarm.config.hat_trick && t('soccer.alarm.hatTrickWatch'),
+                  alarm.config.card_watch && [
+                    alarm.config.card_yellow && t('soccer.alarm.yellow'),
+                    alarm.config.card_red    && t('soccer.alarm.red'),
+                  ].filter(Boolean).join('+') + ' ' + t('soccer.alarm.cardWatch'),
+                ].filter(Boolean).join(' · ') : '';
+                return (
+                  <View key={`soccer-p-${alarm.id}`} style={styles.alarmCard}>
+                    <View style={styles.alarmCardLeft}>
+                      <LivePill
+                        label={alarm.is_active ? t('active.watching') : t('active.saved')}
+                        color={alarm.is_active ? C.orange : C.accentBlue}
+                        bg={alarm.is_active ? C.orangeDim : 'rgba(77,140,245,0.12)'}
+                      />
+                      <Text style={styles.alarmGame}>{playerName ?? t('active.unknownPlayer')}</Text>
+                      {!!configSummary && <Text style={styles.alarmSub}>{configSummary}</Text>}
+                      {(alarm.match_name || alarm.match_id) && (
+                        <Text style={styles.alarmSub}>{alarm.match_name ?? alarm.match_id}</Text>
+                      )}
+                      <Text style={styles.alarmSub}>
+                        {alarm.alert_type === 'alarm' ? t('active.fullAlarm') : t('active.silentMode')}
+                      </Text>
+                    </View>
+                    <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelSoccerAlarm(alarm)}>
+                      <Text style={styles.cancelBtnText}>{t('active.delete')}</Text>
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
             </View>
           )}
         </View>
@@ -640,12 +777,12 @@ export default function ActiveScreen() {
             <Text style={styles.sectionTitle}>{t('active.favTracked')}</Text>
             <View style={[styles.badge, { backgroundColor: C.blue }]}>
               <Text style={styles.badgeText}>
-                {(data?.favorite_teams.length ?? 0) + Object.keys(data?.favorite_players ?? {}).length}
+                {(data?.favorite_teams.length ?? 0) + Object.keys(data?.favorite_players ?? {}).length + (soccerFavs?.teams.length ?? 0) + (soccerFavs?.players.length ?? 0)}
               </Text>
             </View>
           </View>
 
-          {(data?.favorite_teams ?? []).length === 0 && Object.keys(data?.favorite_players ?? {}).length === 0 ? (
+          {(data?.favorite_teams ?? []).length === 0 && Object.keys(data?.favorite_players ?? {}).length === 0 && (soccerFavs?.teams ?? []).length === 0 && (soccerFavs?.players ?? []).length === 0 ? (
             <View style={styles.emptyState}>
               <Ionicons name="star-outline" size={28} color={C.border} />
               <Text style={styles.emptyHint}>{t('active.noFavorites')}</Text>
@@ -680,6 +817,26 @@ export default function ActiveScreen() {
                   <TouchableOpacity onPress={() => togglePauseFav('players', pid, p.paused ?? false)} style={[styles.favPauseBtn, p.paused ? styles.favPauseBtnOff : styles.favPauseBtnOn]}>
                     <Text style={[styles.favPauseBtnText, { color: p.paused ? C.textMuted : C.liveGreen }]}>{p.paused ? 'OFF' : 'ON'}</Text>
                   </TouchableOpacity>
+                </View>
+              ))}
+              {(soccerFavs?.teams ?? []).map(team => (
+                <View key={`sf-team-${team.team_id}`} style={styles.favItem}>
+                  <Text style={styles.favIcon}>⚽</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.favName, team.paused && { color: C.textMuted }]}>{team.team_name ?? team.team_id}</Text>
+                    <Text style={styles.rowSub}>
+                      {team.drama_threshold != null ? `Drama ≥ ${team.drama_threshold}` : 'All alerts'}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+              {(soccerFavs?.players ?? []).map(player => (
+                <View key={`sf-player-${player.player_id}`} style={styles.favItem}>
+                  <Text style={styles.favIcon}>⭐</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.favName}>{player.player_name ?? player.player_id}</Text>
+                    <Text style={styles.rowSub}>⚽ {t('soccer.alarm.tab.player')}</Text>
+                  </View>
                 </View>
               ))}
             </>
@@ -800,10 +957,14 @@ const makeStyles = (C: AppColors) => StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
 
   header: {
-    fontSize: 18, fontWeight: '900', color: C.textPrimary,
-    textAlign: 'center', paddingTop: 12, paddingBottom: 8,
-    letterSpacing: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: C.border,
   },
+  headerTitle: { ...tabHeaderTitle, color: C.textPrimary },
 
   section: {
     marginHorizontal: 14, marginTop: 14,

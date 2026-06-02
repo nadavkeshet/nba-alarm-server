@@ -5,21 +5,35 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Updates from 'expo-updates';
-import React, { useEffect, useRef, useState } from 'react';
+import * as SplashScreen from 'expo-splash-screen';
+import { useFonts } from 'expo-font';
+import {
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
+  Inter_700Bold,
+  Inter_800ExtraBold,
+} from '@expo-google-fonts/inter';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, I18nManager, NativeModules, Platform, StyleSheet, View } from 'react-native';
-
 import { SERVER_URL } from '../config';
 import ConfettiCannon from 'react-native-confetti-cannon';
 import 'react-native-reanimated';
-
 import { triggerStop } from '../alarmSoundHandler';
 import { useColorScheme } from '../hooks/use-color-scheme';
 import { PermissionsOnboarding } from '../components/permissions-onboarding';
 import { ErrorBoundary } from '../components/error-boundary';
+import { initTelemetry, signal } from '../utils/telemetry';
+
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 // Force LTR layout regardless of device locale (app content is always LTR)
 I18nManager.allowRTL(false);
 I18nManager.forceRTL(false);
+
+// Warm up the server the instant the JS bundle evaluates — overlaps with React
+// tree initialization so the server is ready before any actual data requests fire.
+void fetch(`${SERVER_URL}/health`).catch(() => {});
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -33,11 +47,37 @@ export default function RootLayout() {
   const confettiTimer   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
 
-  const fireConfetti = () => {
+  const [fontsLoaded] = useFonts({
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    Inter_700Bold,
+    Inter_800ExtraBold,
+  });
+
+  // useCallback so this can be referenced by effects that must come before the
+  // conditional `return null` (Rules of Hooks: no hooks after early return).
+  const fireConfetti = useCallback(() => {
     if (confettiTimer.current) clearTimeout(confettiTimer.current);
     setConfetti(true);
     confettiTimer.current = setTimeout(() => setConfetti(false), 3500);
-  };
+  }, []);
+
+  // Reveal UI once fonts are ready
+  useEffect(() => {
+    if (fontsLoaded) SplashScreen.hideAsync().catch(() => {});
+  }, [fontsLoaded]);
+
+  // Init TelemetryDeck + fire App.Launched on cold start
+  useEffect(() => {
+    messaging().getToken().then(token => {
+      initTelemetry(token);
+      signal('App.Launched');
+    }).catch(() => {
+      initTelemetry('anonymous');
+      signal('App.Launched');
+    });
+  }, []);
 
   // Pre-fetch OTA updates on cold start so they apply on next launch
   useEffect(() => {
@@ -59,20 +99,15 @@ export default function RootLayout() {
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     AsyncStorage.getItem(ONBOARDING_KEY).then(val => {
-      if (!val) setShowOnboarding(true);
+      if (!val) {
+        setShowOnboarding(true);
+        signal('Onboarding.Shown');
+      }
     });
   }, []);
 
-  const handleOnboardingDone = async () => {
-    await AsyncStorage.setItem(ONBOARDING_KEY, '1');
-    setShowOnboarding(false);
-  };
-
   useEffect(() => {
     // FCM token rotation — fires when the OS issues a new push token.
-    // Read the old token from AsyncStorage so the backend can migrate all
-    // user data (favorites, preferences, alarms) to the new token before
-    // the old one is invalidated.
     const unsubTokenRefresh = messaging().onTokenRefresh(async (newToken) => {
       try {
         const oldToken = await AsyncStorage.getItem('nba_fcm_token') ?? '';
@@ -90,10 +125,9 @@ export default function RootLayout() {
     });
 
     // Killed state: app launched by tapping a notification.
-    // This is the ONLY event fired for a killed-state notification tap —
-    // neither onForegroundEvent PRESS nor onBackgroundEvent PRESS fires here.
     notifee.getInitialNotification().then(initial => {
       if (initial?.notification?.data?.alert_type === 'alarm') {
+        signal('Notification.Tapped');
         NativeModules.AlarmChannel?.stopAlarmSound();
         notifee.cancelAllNotifications().catch(() => {});
         fireConfetti();
@@ -102,24 +136,19 @@ export default function RootLayout() {
 
     // Foreground + background state notification events (single handler — Notifee allows only one)
     const unsub = notifee.onForegroundEvent(async ({ type, detail }) => {
-      // User tapped the notification body → celebrate + stop alarm.
-      // Call stopAlarmSound directly (NativeModules always available in foreground)
-      // in addition to triggerStop() to cover the race where index.tsx hasn't
-      // registered its stop handler yet (e.g. app just opened via notification tap).
       if (type === EventType.PRESS && detail.notification?.data?.alert_type === 'alarm') {
+        signal('Notification.Tapped');
         NativeModules.AlarmChannel?.stopAlarmSound();
         triggerStop();
         await notifee.cancelAllNotifications();
         fireConfetti();
         return;
       }
-      // Trigger notification delivered while app is in foreground → start alarm sound
       if (type === EventType.DELIVERED && detail.notification?.data?.alert_type === 'alarm') {
         const savedSound = (await AsyncStorage.getItem('nba_alarm_sound').catch(() => null)) ?? 'classic_alarm';
         NativeModules.AlarmChannel?.startAlarmSound(savedSound);
         return;
       }
-      // User tapped DISMISS → stop sound + cancel notification
       if (type === EventType.ACTION_PRESS && detail.pressAction?.id === 'dismiss') {
         NativeModules.AlarmChannel?.stopAlarmSound();
         triggerStop();
@@ -144,7 +173,16 @@ export default function RootLayout() {
       appStateSub.remove();
       if (confettiTimer.current) clearTimeout(confettiTimer.current);
     };
-  }, []);
+  }, [fireConfetti]);
+
+  // All hooks above — safe to return early now
+  if (!fontsLoaded) return null;
+
+  const handleOnboardingDone = async () => {
+    signal('Onboarding.Finished');
+    await AsyncStorage.setItem(ONBOARDING_KEY, '1');
+    setShowOnboarding(false);
+  };
 
   return (
     <ErrorBoundary>

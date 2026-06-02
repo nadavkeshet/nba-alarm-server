@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { useColorScheme } from 'react-native';
 
 export type ThemeMode = 'dark' | 'light';
 
@@ -24,20 +25,20 @@ export const darkColors = {
 };
 
 export const lightColors = {
-  bg:          '#f0f4f8',
-  card:        '#ffffff',
-  cardAlt:     '#e8eef5',
-  border:      '#c8d8e8',
-  borderMuted: '#d8e4ef',
+  bg:          '#F5F6F9',
+  card:        '#FFFFFF',
+  cardAlt:     '#F2F3F5',
+  border:      '#E0E3E8',
+  borderMuted: '#E5E7EA',
   blue:        '#1d428a',
-  red:         '#c9082a',
-  textPrimary: '#0B1623',
-  textMuted:   '#5a7a99',
-  liveGreen:   '#1e8a30',
-  accentBlue:  '#1d5cb8',
-  gold:        '#c07800',
+  red:         '#C9082A',
+  textPrimary: '#1C1F26',
+  textMuted:   '#6B7687',
+  liveGreen:   '#3FB950',
+  accentBlue:  '#4D8CF5',
+  gold:        '#F0A500',
   orange:      '#FF6B00',
-  orangeDim:   'rgba(255,107,0,0.12)',
+  orangeDim:   'rgba(255,107,0,0.15)',
 };
 
 export type AppColors = typeof darkColors;
@@ -59,7 +60,8 @@ const ThemeContext = createContext<ThemeContextValue>({
 });
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [mode, setMode]           = useState<ThemeMode>('dark');
+  const systemScheme = useColorScheme();
+  const [mode, setMode]           = useState<ThemeMode>(systemScheme === 'light' ? 'light' : 'dark');
   const [noSpoiler, setNoSpoiler] = useState(false);
 
   useEffect(() => {

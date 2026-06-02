@@ -18,4 +18,4 @@ const PROD_URL  = "https://nba-alarm-server-production.up.railway.app";
 const DEV_URL   = "https://nba-alarm-server-dev.up.railway.app";
 
 // ↓ Switch to LOCAL_URL for local development, DEV_URL for dev server testing
-export const SERVER_URL = PROD_URL;
+export const SERVER_URL = DEV_URL;

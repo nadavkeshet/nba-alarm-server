@@ -12,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { signal } from '../utils/telemetry';
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 
@@ -54,9 +55,9 @@ export function PermissionsOnboarding({ visible, onDone }: Props) {
   useEffect(() => {
     if (!visible) return;
     notifee.requestPermission().then(settings => {
-      if (settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED) {
-        setDone(prev => ({ ...prev, notifications: true }));
-      }
+      const granted = settings.authorizationStatus >= AuthorizationStatus.AUTHORIZED;
+      signal('NotificationPermission.Decided', { granted: String(granted) });
+      if (granted) setDone(prev => ({ ...prev, notifications: true }));
     }).catch(() => {});
   }, [visible]);
 

@@ -6,5 +6,10 @@
 //   - notifee.onBackgroundEvent(...)
 import './firebaseMessaging';
 
+// Apply Inter font mapping before any screen module is loaded.
+// Metro transforms imports to sequential require() calls, so this runs before
+// expo-router/entry triggers the require chain for all screens.
+import './utils/patchFonts';
+
 // Hand off to Expo Router's default entry (loads app/_layout.tsx etc.)
 import 'expo-router/entry';
