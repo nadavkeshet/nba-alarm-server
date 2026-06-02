@@ -1144,6 +1144,9 @@ def _run_radar_tick_for_user(
     radar_cfg        = prefs.get("GlobalGameRadar", {})
     radar_alert_type = radar_cfg.get("alert_type", "silent")
     fav_teams        = {t["team_id"]: t for t in prefs.get("FavoriteTeams", [])}
+    # Followed leagues: same criteria shape as a favorite team, applied to EVERY
+    # game in the league. Keyed by league slug.
+    fav_leagues      = {lg["league"]: lg for lg in prefs.get("FavoriteLeagues", [])}
     fav_players      = prefs.get("FavoritePlayers", {})
     hist_cfg         = prefs.get("HistoricalMode", {})
     hist_enabled     = hist_cfg.get("enabled", False)
@@ -1169,6 +1172,15 @@ def _run_radar_tick_for_user(
                 if tid in fav_teams:
                     criteria = fav_teams[tid]
                     break
+            # Followed league: applies its criteria to every game in the league
+            # (after an explicit favorite-team override, before the global radar).
+            # A "Just Follow" league (alert_type=silent) is display-only — no
+            # alerts — so we only arm leagues with a real alert type.
+            if criteria is None:
+                ev_league = str(event.get("league", "nba"))
+                lg_cfg = fav_leagues.get(ev_league)
+                if lg_cfg and (lg_cfg.get("alert_type") or "silent") != "silent":
+                    criteria = lg_cfg
             if criteria is None and radar_cfg.get("enabled", False):
                 criteria = radar_cfg
 
@@ -1379,6 +1391,10 @@ def _leagues_for_user(prefs: dict) -> set[str]:
         leagues.update(radar.get("leagues") or ["nba"])
     for t in prefs.get("FavoriteTeams", []) or []:
         leagues.add(t.get("league") or "nba")
+    # Followed leagues — scan every game in them.
+    for lg in prefs.get("FavoriteLeagues", []) or []:
+        if lg.get("league"):
+            leagues.add(lg["league"])
     return leagues
 
 

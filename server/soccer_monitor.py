@@ -58,6 +58,7 @@ _get_user_language: Callable[[str], str] | None = None
 _fire_once_fn: Callable[..., bool] | None = None
 _db_engine: Any = None
 _alarm_model: Any = None  # SoccerAlarmDB class — injected to avoid circular import
+_comp_follow_model: Any = None  # SoccerFavoriteCompetitionDB — followed leagues
 
 POLL_INTERVAL = 25.0  # seconds
 
@@ -72,14 +73,17 @@ def wire(
     fire_once: Callable[..., bool],
     db_engine: Any,
     alarm_model: Any,
+    comp_follow_model: Any = None,
 ) -> None:
     """Called once by main.py during startup to inject runtime dependencies."""
     global _send_push, _get_user_language, _fire_once_fn, _db_engine, _alarm_model
+    global _comp_follow_model
     _send_push = send_push
     _get_user_language = get_user_language
     _fire_once_fn = fire_once
     _db_engine = db_engine
     _alarm_model = alarm_model
+    _comp_follow_model = comp_follow_model
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +229,32 @@ def _tick() -> None:
             except Exception as exc:
                 logger.exception("alarm %s eval failed: %s", alarm["id"], exc)
 
+    # Followed competitions (league-wide soccer alarms). Same Pass-2 fan-out as a
+    # drama_radar alarm — evaluate every live match in the comp for drama, plus a
+    # kickoff alert when notify_at_kickoff. Silent / paused follows are display-only
+    # ("Just Follow") and never alert. Synthesized into drama_radar-shaped dicts;
+    # one_shot is always False (no real alarm row to deactivate).
+    if _comp_follow_model is not None and _db_engine is not None:
+        try:
+            with Session(_db_engine) as session:
+                follows = session.query(_comp_follow_model).all()
+            for f in follows:
+                if (f.alert_type or "silent") == "silent" or getattr(f, "paused", False):
+                    continue
+                comp_radar.append({
+                    "id": f"compfollow_{f.user_token}_{f.competition_id}",
+                    "user_token": f.user_token,
+                    "alarm_type": "drama_radar",
+                    "match_id": None,
+                    "competition_id": f.competition_id,
+                    "player_id": None,
+                    "threshold": f.drama_threshold,
+                    "alert_type": f.alert_type or "alarm",
+                    "config": {"notify_at_kickoff": bool(getattr(f, "notify_at_kickoff", False))},
+                })
+        except Exception as exc:
+            logger.warning("comp-follow load failed: %s", exc)
+
     # ── Pass 2: competition-scoped drama radar
     if comp_radar:
         # Group comp-radar alarms by competition so we hit get_live_matches once per slug
@@ -252,6 +282,15 @@ def _tick() -> None:
                 for alarm in alarm_group:
                     try:
                         _evaluate_drama_radar(alarm, detail)
+                        # League-follow kickoff: one alert per match in the league.
+                        if (alarm.get("config") or {}).get("notify_at_kickoff"):
+                            st = (detail.get("status") or "").lower()
+                            if st in ("live", "1h"):
+                                _fire(alarm, "soccer_kickoff", t_soccer_body_kickoff,
+                                      (detail.get("home") or {}).get("name", ""),
+                                      (detail.get("away") or {}).get("name", ""),
+                                      detail.get("competition", ""),
+                                      signal=f"lg_kickoff_{cid}", one_shot=False)
                     except Exception as exc:
                         logger.exception("drama_radar alarm %s eval failed: %s", alarm["id"], exc)
 

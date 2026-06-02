@@ -154,6 +154,24 @@ class FavoriteTeamDB(_Base):
     created_at       = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
+class FavoriteLeagueDB(_Base):
+    """Followed basketball league — applies the SAME alert criteria as a favorite
+    team to EVERY game in the league. Survives restarts. The radar evaluates each
+    game in a followed league against these criteria when no favorite-team config
+    overrides it."""
+    __tablename__ = "favorite_leagues"
+
+    id            = Column(Integer, primary_key=True, index=True)
+    user_token    = Column(String,  nullable=False, index=True)
+    league        = Column(String,  nullable=False)   # nba|euroleague|... slug
+    score_gap        = Column(Integer, nullable=True)   # max_diff
+    start_quarter    = Column(Integer, nullable=True)
+    alert_type       = Column(String,  nullable=True, default='silent')
+    notify_at_start  = Column(Boolean, default=False, nullable=False)
+    paused           = Column(Boolean, default=False, nullable=False)
+    created_at       = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 class FiredAlertDB(_Base):
     """
     Persisted record of every radar/favorite alert fired today.
@@ -262,13 +280,19 @@ class SoccerFavoriteTeamDB(_Base):
 
 
 class SoccerFavoriteCompetitionDB(_Base):
-    """Persistent soccer favorite competition (drives Drama Radar scope per user)."""
+    """Persistent followed soccer competition. Applies the same alert criteria as
+    a favorite team to EVERY live match in the competition: a drama-radar alert
+    (score.total >= drama_threshold) and, when notify_at_kickoff, a kickoff alert.
+    alert_type='silent' (the default / "Just Follow") = display-only, no alerts."""
     __tablename__ = "soccer_favorite_competitions"
 
-    user_token      = Column(String,  primary_key=True)
-    competition_id  = Column(String,  primary_key=True)
-    drama_threshold = Column(Float,   nullable=False, default=7.0)
-    created_at      = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    user_token        = Column(String,  primary_key=True)
+    competition_id    = Column(String,  primary_key=True)
+    drama_threshold   = Column(Float,   nullable=False, default=7.0)
+    alert_type        = Column(String,  nullable=True, default="silent")
+    notify_at_kickoff = Column(Boolean, nullable=False, default=False)
+    paused            = Column(Boolean, nullable=False, default=False)
+    created_at        = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 class WatchScoreCacheDB(_Base):
@@ -358,6 +382,10 @@ def _init_db() -> None:
         "ALTER TABLE favorites ADD COLUMN team_id   VARCHAR",
         "ALTER TABLE favorites ADD COLUMN team_name VARCHAR",
         "ALTER TABLE favorites ADD COLUMN td_watch  BOOLEAN DEFAULT FALSE NOT NULL",
+        # Followed-competition alert criteria (league-wide soccer alarms).
+        "ALTER TABLE soccer_favorite_competitions ADD COLUMN alert_type VARCHAR DEFAULT 'silent'",
+        "ALTER TABLE soccer_favorite_competitions ADD COLUMN notify_at_kickoff BOOLEAN DEFAULT FALSE NOT NULL",
+        "ALTER TABLE soccer_favorite_competitions ADD COLUMN paused BOOLEAN DEFAULT FALSE NOT NULL",
     ]
     for sql in migrations:
         try:
@@ -712,6 +740,7 @@ def _get_all_users_for_radar() -> list[dict]:
         with Session(engine) as session:
             all_players: list[FavoritePlayerDB]  = session.query(FavoritePlayerDB).all()
             all_teams:   list[FavoriteTeamDB]    = session.query(FavoriteTeamDB).all()
+            all_leagues: list[FavoriteLeagueDB]  = session.query(FavoriteLeagueDB).all()
             all_prefs:   list[UserPreferenceDB]  = session.query(UserPreferenceDB).all()
 
         # Group by token in Python — no extra DB round-trips
@@ -723,14 +752,19 @@ def _get_all_users_for_radar() -> list[dict]:
         for t in all_teams:
             teams_by_token.setdefault(t.user_token, []).append(t)
 
+        leagues_by_token: dict[str, list] = {}
+        for lg in all_leagues:
+            leagues_by_token.setdefault(lg.user_token, []).append(lg)
+
         prefs_by_token: dict[str, UserPreferenceDB] = {p.user_token: p for p in all_prefs}
 
-        all_tokens = set(players_by_token) | set(teams_by_token) | set(prefs_by_token)
+        all_tokens = set(players_by_token) | set(teams_by_token) | set(leagues_by_token) | set(prefs_by_token)
 
         users: list[dict] = []
         for token in all_tokens:
             players = players_by_token.get(token, [])
             teams   = teams_by_token.get(token, [])
+            leagues = leagues_by_token.get(token, [])
             pref    = prefs_by_token.get(token)
 
             fav_players = {
@@ -758,6 +792,17 @@ def _get_all_users_for_radar() -> list[dict]:
                     "notify_at_start": getattr(t, 'notify_at_start', False),
                 }
                 for t in teams
+            ]
+            fav_leagues = [
+                {
+                    "league":          lg.league,
+                    "max_diff":        lg.score_gap or 5,
+                    "start_quarter":   lg.start_quarter or 4,
+                    "alert_type":      lg.alert_type or "silent",
+                    "notify_at_start": getattr(lg, 'notify_at_start', False),
+                    "paused":          getattr(lg, 'paused', False),
+                }
+                for lg in leagues if not getattr(lg, 'paused', False)
             ]
             radar_cfg = {
                 "enabled":       pref.radar_enabled       if pref else False,
@@ -787,6 +832,7 @@ def _get_all_users_for_radar() -> list[dict]:
                 "prefs": {
                     "FavoritePlayers": fav_players,
                     "FavoriteTeams":   fav_teams,
+                    "FavoriteLeagues": fav_leagues,
                     "GlobalGameRadar": radar_cfg,
                     "HistoricalMode":  hist_cfg,
                 },
@@ -1408,6 +1454,7 @@ async def lifespan(_app: FastAPI):
             fire_once=_fire_once,
             db_engine=engine,
             alarm_model=SoccerAlarmDB,
+            comp_follow_model=SoccerFavoriteCompetitionDB,
         )
         soccer_monitor.start_soccer_radar()
         log.info("soccer radar wired and started")
@@ -1798,6 +1845,7 @@ def radar_status():
 _SETTINGS_DEFAULTS = {
     "GlobalGameRadar": {"enabled": False, "max_diff": 5, "start_quarter": 4, "alert_type": "silent"},
     "FavoriteTeams":   [],
+    "FavoriteLeagues": [],
     "FavoritePlayers": {},
     "HistoricalMode":  {
         "enabled": False,
@@ -1815,6 +1863,7 @@ def get_settings(user_token: str = ""):
         with Session(engine) as session:
             players = session.query(FavoritePlayerDB).filter_by(user_token=user_token).all()
             teams   = session.query(FavoriteTeamDB).filter_by(user_token=user_token).all()
+            leagues = session.query(FavoriteLeagueDB).filter_by(user_token=user_token).all()
             pref    = session.get(UserPreferenceDB, user_token)
 
             fav_players = {
@@ -1850,6 +1899,17 @@ def get_settings(user_token: str = ""):
                 }
                 for t in teams
             ]
+            fav_leagues = [
+                {
+                    "league":          lg.league,
+                    "max_diff":        lg.score_gap or 5,
+                    "start_quarter":   lg.start_quarter or 4,
+                    "alert_type":      lg.alert_type or "silent",
+                    "notify_at_start": getattr(lg, 'notify_at_start', False),
+                    "paused":          getattr(lg, 'paused', False),
+                }
+                for lg in leagues
+            ]
             radar_cfg = _SETTINGS_DEFAULTS["GlobalGameRadar"].copy()
             radar_cfg["leagues"] = ["nba"]
             hist_cfg  = {
@@ -1876,6 +1936,7 @@ def get_settings(user_token: str = ""):
         return {
             "FavoritePlayers": fav_players,
             "FavoriteTeams":   fav_teams,
+            "FavoriteLeagues": fav_leagues,
             "GlobalGameRadar": radar_cfg,
             "HistoricalMode":  hist_cfg,
         }
@@ -2011,6 +2072,63 @@ def remove_team(team_id: str, user_token: str = ""):
                     session.commit()
         except Exception as exc:
             log.error("DB: remove_team failed – %s", exc)
+    return {"status": "removed"}
+
+
+class FavoriteLeague(BaseModel):
+    """Follow a basketball league — same criteria shape as FavoriteTeam, applied
+    to every game in the league."""
+    user_token:      str = ""
+    league:          str
+    max_diff:        int = 5
+    start_quarter:   int = 4
+    alert_type:      str = "silent"
+    notify_at_start: bool = False
+
+
+@app.post("/settings/leagues")
+def upsert_league(req: FavoriteLeague):
+    league = req.league if req.league in _VALID_LEAGUES else None
+    if league is None:
+        raise HTTPException(status_code=400, detail=f"unknown basketball league '{req.league}'")
+    if engine is not None and req.user_token:
+        try:
+            with Session(engine) as session:
+                existing = session.query(FavoriteLeagueDB).filter_by(
+                    user_token=req.user_token, league=league
+                ).first()
+                if existing:
+                    existing.score_gap       = req.max_diff
+                    existing.start_quarter   = req.start_quarter
+                    existing.alert_type      = req.alert_type
+                    existing.notify_at_start = req.notify_at_start
+                    existing.paused          = False
+                else:
+                    session.add(FavoriteLeagueDB(
+                        user_token=req.user_token, league=league,
+                        score_gap=req.max_diff, start_quarter=req.start_quarter,
+                        alert_type=req.alert_type, notify_at_start=req.notify_at_start,
+                    ))
+                session.commit()
+        except Exception as exc:
+            log.error("DB: upsert_league failed – %s", exc)
+    _maybe_start_radar()
+    return {"status": "updated"}
+
+
+@app.delete("/settings/leagues/{league}")
+def remove_league(league: str, user_token: str = ""):
+    if engine is not None and user_token:
+        try:
+            with Session(engine) as session:
+                row = session.query(FavoriteLeagueDB).filter_by(
+                    user_token=user_token, league=league
+                ).first()
+                if row:
+                    session.delete(row)
+                    session.commit()
+        except Exception as exc:
+            log.error("DB: remove_league failed – %s", exc)
     return {"status": "removed"}
 
 
@@ -3354,6 +3472,8 @@ class SoccerFavoriteCompetitionRequest(BaseModel):
     user_token: str
     competition_id: str
     drama_threshold: float = 7.0
+    alert_type: str = "silent"
+    notify_at_kickoff: bool = False
 
 
 def _require_token(user_token: str) -> None:
@@ -3527,7 +3647,10 @@ def soccer_fav_competition_upsert(req: SoccerFavoriteCompetitionRequest):
                 competition_id=req.competition_id,
             )
             session.add(row)
-        row.drama_threshold = req.drama_threshold
+        row.drama_threshold   = req.drama_threshold
+        row.alert_type        = req.alert_type
+        row.notify_at_kickoff = req.notify_at_kickoff
+        row.paused            = False
         session.commit()
     return {"status": "ok", "competition_id": req.competition_id}
 
@@ -3552,9 +3675,12 @@ def soccer_fav_competitions_list(user_token: str = ""):
             SoccerFavoriteCompetitionDB.user_token == user_token,
         ).order_by(SoccerFavoriteCompetitionDB.created_at.desc()).all()
         out = [{
-            "competition_id":  r.competition_id,
-            "drama_threshold": r.drama_threshold,
-            "created_at":      r.created_at.isoformat() if r.created_at else None,
+            "competition_id":    r.competition_id,
+            "drama_threshold":   r.drama_threshold,
+            "alert_type":        getattr(r, "alert_type", None) or "silent",
+            "notify_at_kickoff": bool(getattr(r, "notify_at_kickoff", False)),
+            "paused":            bool(getattr(r, "paused", False)),
+            "created_at":        r.created_at.isoformat() if r.created_at else None,
         } for r in rows]
     return {"competitions": out}
 
@@ -4142,8 +4268,11 @@ def active_monitors(user_token: str = ""):
                                      .filter(SoccerFavoriteCompetitionDB.user_token == user_token)
                                      .all())
                     soccer_fav_comps = [{
-                        "competition_id":  r.competition_id,
-                        "drama_threshold": r.drama_threshold,
+                        "competition_id":    r.competition_id,
+                        "drama_threshold":   r.drama_threshold,
+                        "alert_type":        getattr(r, "alert_type", None) or "silent",
+                        "notify_at_kickoff": bool(getattr(r, "notify_at_kickoff", False)),
+                        "paused":            bool(getattr(r, "paused", False)),
                     } for r in c_rows]
             except Exception as fav_err:
                 log.warning("DB error fetching soccer favorites: %s", fav_err)
