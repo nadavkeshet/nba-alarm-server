@@ -2216,6 +2216,29 @@ from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
 # the (small) box from thrashing when a cold scroll-back lands.
 _FEED_POOL = _ThreadPoolExecutor(max_workers=10, thread_name_prefix="feed")
 
+# ONE shared, bounded pool for watch-score computation. Each compute makes 2-3
+# BSD HTTP calls (sometimes a 20s play-by-play fetch), so a per-request pool meant
+# a first run asking for many dates spawned hundreds of threads at once and OOM'd
+# the box. A single small pool caps total upstream concurrency no matter how many
+# /watch-scores requests land together.
+_WATCH_POOL = _ThreadPoolExecutor(max_workers=4, thread_name_prefix="watch")
+# Only auto-compute scores for the last few days; older history is read from the
+# DB if already persisted, else computed lazily per match (so a cold first run
+# can't trigger hundreds of synchronous score computations).
+_WATCH_AUTO_DAYS = 3
+
+
+def _watch_date_is_recent(game_date: str) -> bool:
+    try:
+        from monitor import _eastern_today
+        from datetime import date as _date
+        today = _eastern_today()
+        td = _date(int(today[0:4]), int(today[4:6]), int(today[6:8]))
+        cutoff = (td - timedelta(days=_WATCH_AUTO_DAYS)).strftime("%Y%m%d")
+        return game_date >= cutoff
+    except Exception:
+        return True
+
 # Result cache for NON-empty feed days. Past dates are immutable (final scores)
 # so they're cached for hours — this is the fix for "loading old games" being
 # slow/crashy: scrolling back used to re-fetch upstream AND re-normalize every
@@ -3653,6 +3676,7 @@ def watch_scores(date: str = "", league: str = "nba"):
     from monitor import _eastern_today
     from concurrent.futures import ThreadPoolExecutor
     game_date = date if date else _eastern_today()
+    recent = _watch_date_is_recent(game_date)
 
     events = get_games_for_date(game_date, league=league)
 
@@ -3690,8 +3714,13 @@ def watch_scores(date: str = "", league: str = "nba"):
                 results[key] = persisted[key]
                 continue
 
-            gid = str(event.get("id") or "")
-            todo.append((home_abbr, away_abbr, gid, state))
+            # Already-persisted scores are returned above. Only AUTO-compute
+            # misses for recent days; older history stays read-only here and is
+            # computed lazily per match — this is what stops a cold first run
+            # from triggering a mass synchronous compute that OOM'd the box.
+            if recent:
+                gid = str(event.get("id") or "")
+                todo.append((home_abbr, away_abbr, gid, state))
         except Exception as exc:
             log.warning("watch-scores entry failed: %s", exc)
             continue
@@ -3717,8 +3746,10 @@ def watch_scores(date: str = "", league: str = "nba"):
         return (home_abbr, away_abbr, state, result)
 
     if todo:
-        with ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool:
-            for home_abbr, away_abbr, state, result in pool.map(_compute, todo):
+        # Shared, bounded pool (NOT a fresh per-request pool) so concurrent
+        # /watch-scores requests on a cold first run can't explode the thread /
+        # connection count and OOM the box.
+        for home_abbr, away_abbr, state, result in _WATCH_POOL.map(_compute, todo):
                 if not result:
                     continue
                 live = (state == "in")
