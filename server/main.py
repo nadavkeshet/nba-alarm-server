@@ -2544,6 +2544,76 @@ def soccer_match_detail(canonical_id: str):
     return detail
 
 
+@app.get("/soccer/match/{canonical_id}/prediction")
+def soccer_match_prediction(canonical_id: str):
+    """Pre-match prediction for the alarm sheet: win probabilities, the clear
+    underdog if any (Sensation Watch), and a heuristic 'alert chance' for the
+    Drama Radar slider. BSD-only — degrades to has_prediction=false for sofa-*
+    ids or when no prediction exists, so the client just hides that UI.
+    """
+    import soccer_source as _ss
+    import drama_engine as _de
+
+    empty = {
+        "match_id": canonical_id, "has_prediction": False,
+        "win_prob": None, "underdog": None, "favorite": None,
+        "has_clear_underdog": False, "alert_chance": None, "stakes": None,
+    }
+    detail = _ss.get_soccer_match_detail(canonical_id)
+    if detail is None:
+        return empty
+
+    stakes = _de._stakes_multiplier({
+        "competition": detail.get("competition"),
+        "round_name": detail.get("round_name"),
+        "is_derby": bool(detail.get("is_derby")),
+    })
+    try:
+        source, native = _ss.parse_canonical_id(canonical_id)
+        eid = int(native) if source == "bsd" else None
+    except (ValueError, TypeError):
+        eid = None
+    pm = _ss.pre_match_win_prob(eid) if eid is not None else None
+    if not pm:
+        return {**empty, "stakes": round(stakes, 3)}
+
+    p_home, p_draw, p_away = pm
+    # Heuristic alert chance (NOT a calibrated probability): a tight 1X2 market
+    # in a high-stakes, draw-prone match is more likely to produce drama.
+    closeness = max(0.0, 1.0 - abs(p_home - p_away))
+    raw = (0.55 * closeness
+           + 0.25 * min(1.0, max(0.0, (stakes - 0.85) / 1.3))
+           + 0.20 * min(1.0, p_draw / 0.30))
+    chance = max(0.0, min(1.0, raw))
+    band = "high" if chance >= 0.66 else ("medium" if chance >= 0.33 else "low")
+
+    underdog_is_home = p_home < p_away
+    home = detail.get("home") or {}
+    away = detail.get("away") or {}
+    fav_side = home if not underdog_is_home else away
+    dog = _ss.resolve_underdog(canonical_id, detail=detail, pm=pm)
+    return {
+        "match_id": canonical_id,
+        "has_prediction": True,
+        "win_prob": {"home": round(p_home, 4), "draw": round(p_draw, 4), "away": round(p_away, 4)},
+        "underdog": ({
+            "is_home": dog["underdog_is_home"],
+            "team_id": dog["underdog_team_id"],
+            "team_name": dog["underdog_name"],
+            "win_prob": dog["underdog_win_prob"],
+        } if dog else None),
+        "favorite": {
+            "is_home": not underdog_is_home,
+            "team_id": str(fav_side.get("id") or ""),
+            "team_name": fav_side.get("name") or "",
+            "win_prob": round(max(p_home, p_away), 4),
+        },
+        "has_clear_underdog": dog is not None,
+        "alert_chance": {"value": round(chance, 2), "band": band},
+        "stakes": round(stakes, 3),
+    }
+
+
 @app.get("/soccer/live/{canonical_id}")
 def soccer_live_snapshot(canonical_id: str):
     """Lightweight WebSocket-only live state. Zero REST calls — returns the
@@ -2885,6 +2955,10 @@ _SOCCER_ALARM_TYPES = {
     "penalty",        # penalty awarded in any tracked match
     "drama_radar",    # Drama Engine threshold
     "player_alert",   # per-player goal/card/hattrick watch (config carries toggles)
+    # v3.1 modular types — config carries the sub-options:
+    "match_moments",  # config flags kickoff/halftime/extra_time/penalties (multi-fire)
+    "card_penalty",   # config flags red_card/penalty (fire on any such event)
+    "sensation",      # underdog leading — config stores the underdog (resolved at creation)
 }
 
 
@@ -2916,6 +2990,29 @@ def soccer_alarm_create(req: SoccerAlarmRequest):
         raise HTTPException(status_code=400, detail="match_id is required for alarm_type='match'.")
     if req.alarm_type in ("hat_trick", "player_alert") and not req.player_id:
         raise HTTPException(status_code=400, detail=f"player_id is required for alarm_type='{req.alarm_type}'.")
+
+    # ── v3.1 modular validation / enrichment ────────────────────────────────
+    cfg = dict(req.config or {})
+    if req.alarm_type == "late_drama":
+        # Clamp to sane bounds; empty config reproduces the legacy ≥75'/≤1 behavior.
+        cfg["max_diff"] = max(0, min(3, int(cfg.get("max_diff", 1))))
+        cfg["last_minutes"] = max(1, min(45, int(cfg.get("last_minutes", 15))))
+        req.config = cfg
+    elif req.alarm_type == "match_moments":
+        if not any(bool(cfg.get(k)) for k in ("kickoff", "halftime", "extra_time", "penalties")):
+            raise HTTPException(status_code=422, detail="select at least one moment.")
+    elif req.alarm_type == "card_penalty":
+        if not (bool(cfg.get("red_card")) or bool(cfg.get("penalty"))):
+            raise HTTPException(status_code=422, detail="select red card and/or penalty.")
+    elif req.alarm_type == "sensation":
+        if not req.match_id:
+            raise HTTPException(status_code=400, detail="match_id is required for alarm_type='sensation'.")
+        import soccer_source as _ss
+        dog = _ss.resolve_underdog(req.match_id)
+        if dog is None:
+            raise HTTPException(status_code=422, detail="no clear underdog for this match.")
+        cfg.update(dog)  # underdog_is_home / team_id / name / win_prob
+        req.config = cfg
 
     with Session(engine) as session:
         # Idempotency: if an active alarm already exists for the same (user, type, match, player),

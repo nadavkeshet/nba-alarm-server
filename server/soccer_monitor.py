@@ -35,10 +35,12 @@ import drama_engine
 from i18n import (
     t_title,
     t_soccer_body_kickoff,
+    t_soccer_body_halftime,
     t_soccer_body_knockout_et,
     t_soccer_body_late_drama,
     t_soccer_body_penalty,
     t_soccer_body_red_card,
+    t_soccer_body_sensation,
     t_soccer_body_drama_radar,
     t_soccer_body_player_goal,
     t_soccer_body_player_brace,
@@ -277,11 +279,76 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
         minute = match.get("minute") or 0
         home_score = (match.get("home") or {}).get("score") or 0
         away_score = (match.get("away") or {}).get("score") or 0
-        if minute >= 75 and abs(home_score - away_score) <= 1 and status in ("live", "1h", "2h"):
+        # Configurable: max_diff (0–3, default 1), last_minutes (1–45, default 15).
+        # Empty config reproduces the legacy ≥75'/≤1 behavior. Explicit None
+        # checks so a chosen max_diff of 0 (tied only) isn't coerced to 1.
+        cfg = alarm.get("config") or {}
+        md = cfg.get("max_diff")
+        max_diff = 1 if md is None else max(0, min(3, int(md)))
+        lm = cfg.get("last_minutes")
+        last_minutes = 15 if lm is None else max(1, min(45, int(lm)))
+        min_minute = max(0, 90 - last_minutes)
+        if minute >= min_minute and abs(home_score - away_score) <= max_diff and status in ("live", "1h", "2h"):
             _fire(alarm, "soccer_late_drama",
                   lambda h, a, c, lang: t_soccer_body_late_drama(h, a, c, minute, lang),
                   home_name, away_name, competition,
                   signal="late_drama", one_shot=True)
+        return
+
+    if alarm_type == "match_moments":
+        # Modular kickoff/halftime/extra-time/penalties. Each enabled moment
+        # fires once via its own dedup signal; one_shot=False so later moments
+        # still fire. The row is deactivated at full-time by the terminal-status
+        # sweep in _tick, so no per-moment one_shot is needed.
+        cfg = alarm.get("config") or {}
+        if cfg.get("kickoff") and status in ("live", "1h"):
+            _fire(alarm, "soccer_kickoff", t_soccer_body_kickoff,
+                  home_name, away_name, competition, signal="mm_kickoff", one_shot=False)
+        if cfg.get("halftime") and status == "ht":
+            _fire(alarm, "soccer_halftime", t_soccer_body_halftime,
+                  home_name, away_name, competition, signal="mm_halftime", one_shot=False)
+        if cfg.get("extra_time") and status in ("et", "pens"):
+            _fire(alarm, "soccer_knockout_et", t_soccer_body_knockout_et,
+                  home_name, away_name, competition, signal="mm_et", one_shot=False)
+        if cfg.get("penalties") and status == "pens":
+            _fire(alarm, "soccer_knockout_et", t_soccer_body_knockout_et,
+                  home_name, away_name, competition, signal="mm_pens", one_shot=False)
+        return
+
+    if alarm_type == "card_penalty":
+        # Modular red-card / penalty. Fire on ANY such event (no close-game gate);
+        # per-event dedup signal means each distinct event notifies exactly once.
+        cfg = alarm.get("config") or {}
+        if cfg.get("red_card"):
+            red = _find_recent_red_card(match)
+            if red:
+                _fire(alarm, "soccer_red_card",
+                      lambda h, a, c, lang: t_soccer_body_red_card(h, a, c, red["minute"], lang),
+                      home_name, away_name, competition,
+                      signal=f"cp_red_{red.get('minute', 0)}", one_shot=False)
+        if cfg.get("penalty") and _recent_incident(match, types=("penalty",), window_min=2):
+            minute = match.get("minute") or 0
+            _fire(alarm, "soccer_penalty",
+                  t_soccer_body_penalty, home_name, away_name, competition,
+                  signal=f"cp_pen_{minute}", one_shot=False)
+        return
+
+    if alarm_type == "sensation":
+        # Underdog leading. The underdog side is resolved + stored in config at
+        # creation; here we just check whether that side is ahead.
+        cfg = alarm.get("config") or {}
+        underdog_is_home = bool(cfg.get("underdog_is_home"))
+        underdog_name = cfg.get("underdog_name") or (home_name if underdog_is_home else away_name)
+        if status in ("live", "1h", "2h", "et"):
+            hs = (match.get("home") or {}).get("score") or 0
+            as_ = (match.get("away") or {}).get("score") or 0
+            leading = (hs > as_) if underdog_is_home else (as_ > hs)
+            if leading:
+                minute = match.get("minute") or 0
+                _fire(alarm, "soccer_sensation",
+                      lambda h, a, c, lang: t_soccer_body_sensation(underdog_name, c, minute, lang),
+                      home_name, away_name, competition,
+                      signal="sensation", one_shot=True)
         return
 
     if alarm_type == "knockout_et":

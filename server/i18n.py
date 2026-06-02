@@ -152,6 +152,8 @@ _TITLES = {
         # Soccer titles (v3)
         "soccer_late_drama":   "⚡ Late Drama Brewing",
         "soccer_kickoff":      "🟢 Match Kicking Off",
+        "soccer_halftime":     "⏸ Half-Time",
+        "soccer_sensation":    "😱 Sensation Brewing",
         "soccer_knockout_et":  "⏱ Extra Time Underway!",
         "soccer_penalty":      "🎯 Penalty Awarded",
         "soccer_red_card":     "🟥 Red Card Drama",
@@ -183,6 +185,8 @@ _TITLES = {
         # Soccer titles (v3)
         "soccer_late_drama":   "⚡ דרמה לקראת הסיום",
         "soccer_kickoff":      "🟢 המשחק יוצא לדרך",
+        "soccer_halftime":     "⏸ מחצית",
+        "soccer_sensation":    "😱 הפתעה בדרך",
         "soccer_knockout_et":  "⏱ הארכה במשחק!",
         "soccer_penalty":      "🎯 פנדל!",
         "soccer_red_card":     "🟥 דרמת כרטיס אדום",
@@ -342,6 +346,23 @@ def t_soccer_body_kickoff(home: str, away: str, competition: str, lang: str) -> 
     if lang == "he":
         return f"{m}\n{comp} · המשחק התחיל"
     return f"{m}\n{comp} · kicking off now"
+
+
+def t_soccer_body_halftime(home: str, away: str, competition: str, lang: str) -> str:
+    m = soccer_match_label(home, away, lang)
+    comp = soccer_competition_name(competition, lang)
+    if lang == "he":
+        return f"{m}\n{comp} · מחצית"
+    return f"{m}\n{comp} · half-time"
+
+
+def t_soccer_body_sensation(underdog_name: str, competition: str, minute: int, lang: str) -> str:
+    """Names the underdog and that they're ahead, without the exact scoreline —
+    the 1-bit 'underdog leading' spoiler is the whole point of the alert."""
+    comp = soccer_competition_name(competition, lang)
+    if lang == "he":
+        return f"{underdog_name} מובילים 😱\n{comp} · דקה {minute} · המאאוטסיידר בהובלה"
+    return f"{underdog_name} are ahead 😱\n{comp} · {minute}' · the underdog is leading"
 
 
 def t_soccer_body_knockout_et(home: str, away: str, competition: str, lang: str) -> str:

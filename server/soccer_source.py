@@ -71,6 +71,56 @@ def pre_match_win_prob(eid: int) -> tuple[float, float, float] | None:
         return None
 
 
+# Clear-underdog thresholds — a single source of truth for the /prediction
+# endpoint and Sensation Watch alarm creation. A match has a "clear underdog"
+# only when the favourite is meaningfully ahead AND the underdog is a genuine
+# longshot, so a 45/40 near-coin-flip is NOT treated as an upset setup.
+_UNDERDOG_MIN_GAP = 0.25
+_UNDERDOG_MAX_PROB = 0.33
+
+
+def resolve_underdog(canonical: str, *, detail: dict | None = None,
+                     pm: tuple[float, float, float] | None = None) -> dict | None:
+    """Identify the clear underdog of a match from the BSD pre-match prediction.
+
+    Returns None when there's no prediction (e.g. sofa-* ids, or BSD has none)
+    or when there's no *clear* underdog (gap < `_UNDERDOG_MIN_GAP` or the
+    underdog's win prob > `_UNDERDOG_MAX_PROB`). Callers may pass an already
+    fetched `detail` / `pm` to avoid re-fetching. BSD-only.
+    """
+    try:
+        source, native = parse_canonical_id(canonical)
+    except ValueError:
+        return None
+    if source != "bsd":
+        return None
+    try:
+        eid = int(native)
+    except (TypeError, ValueError):
+        return None
+    if pm is None:
+        pm = pre_match_win_prob(eid)
+    if not pm:
+        return None
+    p_home, p_draw, p_away = pm
+    underdog_is_home = p_home < p_away
+    dog_prob = min(p_home, p_away)
+    fav_prob = max(p_home, p_away)
+    if (fav_prob - dog_prob) < _UNDERDOG_MIN_GAP or dog_prob > _UNDERDOG_MAX_PROB:
+        return None
+    if detail is None:
+        detail = get_soccer_match_detail(canonical) or {}
+    home = detail.get("home") or {}
+    away = detail.get("away") or {}
+    dog = home if underdog_is_home else away
+    return {
+        "underdog_is_home": underdog_is_home,
+        "underdog_team_id": str(dog.get("id") or ""),
+        "underdog_name": dog.get("name") or "",
+        "underdog_win_prob": round(dog_prob, 4),
+    }
+
+
 def wc_group_standings(slug: str = "world_cup") -> list[list[dict]] | None:
     """All groups' live standings for a grouped competition (the World Cup) as a
     list of groups, each a list of normalized rows {team_id, position, points,
