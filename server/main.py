@@ -1356,9 +1356,32 @@ def _seed_soccer_search_index() -> None:
         log.warning("soccer search index seeding failed: %s", e)
 
 
+# Max concurrent sync (`def`) route handlers. FastAPI runs every non-async
+# endpoint on AnyIO's worker threadpool, which defaults to only 40 tokens — so a
+# first-run burst of ~100 clients could park all 40 on slow upstream waits and
+# queue everything behind them, including /health (observed: health checks timing
+# out under stampedes). Upstream fan-out is separately bounded by the shared
+# _FEED_POOL/_WATCH_POOL/_DETAIL_POOL/_SUMMARY_POOL, so the route handlers
+# themselves are mostly fast cache reads or short pool waits; raising this cap
+# just lets more be in flight at once without exploding upstream concurrency.
+_SYNC_THREAD_LIMIT = int(os.environ.get("SYNC_THREAD_LIMIT", "96"))
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # ── Startup ──
+    # Raise the sync-route concurrency cap before any traffic arrives. Must run
+    # inside the event loop (it is — lifespan is async), and we only ever raise
+    # the limit, never lower it below borrowed tokens. Single uvicorn worker is
+    # deliberate: extra workers would each re-run this lifespan and duplicate the
+    # radar jobs / BSD websocket below, double-firing alarm notifications.
+    try:
+        import anyio.to_thread
+        anyio.to_thread.current_default_thread_limiter().total_tokens = _SYNC_THREAD_LIMIT
+        log.info("sync-route thread limiter raised to %d", _SYNC_THREAD_LIMIT)
+    except Exception as lim_exc:
+        log.warning("could not raise sync-route thread limiter: %s", lim_exc)
+
     _init_db()
     _migrate_team_ids_to_365()  # legacy ESPN/API-Basketball → 365scores
     _load_fired_alerts_from_db()   # hydrate dedup set before radar starts
@@ -1428,6 +1451,15 @@ app.add_middleware(
 
 
 # ── Health ─────────────────────────────────────────────────────────────────────
+
+@app.get("/livez")
+async def livez():
+    """Ultra-light liveness probe. Async, so it runs directly on the event loop
+    and never queues behind the sync-route threadpool — a sync-route burst can't
+    make the app look dead. Point platform/uptime health checks here; use /health
+    for the richer DB + soccer-readiness diagnostics."""
+    return {"status": "ok"}
+
 
 @app.get("/health")
 def health():
