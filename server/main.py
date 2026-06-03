@@ -3516,23 +3516,35 @@ def soccer_fav_player_upsert(req: SoccerFavoritePlayerRequest):
     return {"status": "ok", "player_id": req.player_id}
 
 
-def _resolve_national_team_id(req: "SoccerFavoritePlayerRequest") -> Optional[str]:
-    """National-team id for a favorite-player upsert. Prefers a client-supplied
-    `country_id`, then a client-supplied `country` name, then the player's
-    nationality from provider detail. Returns None on anything unexpected."""
+def _resolve_national_team_for_player(
+    player_id: str,
+    *,
+    country: Optional[str] = None,
+    country_id: Optional[str] = None,
+) -> Optional[str]:
+    """National-team id for a player. Prefers a client-supplied `country_id`,
+    then a `country` name, then the player's nationality from provider detail.
+    Returns None on anything unexpected — callers treat that as "no national
+    team to track", never as an error."""
     try:
         import national_team as nt
-        if req.country_id:
-            return str(req.country_id)
-        if req.country:
-            return nt.national_team_id(req.country)
+        if country_id:
+            return str(country_id)
+        if country:
+            return nt.national_team_id(country)
         import bzzoiro_adapter as bz
-        detail = bz.player_detail(req.player_id) or {}
+        detail = bz.player_detail(player_id) or {}
         return nt.national_team_id(detail.get("nationality"))
     except Exception as exc:
         log.warning("soccer fav player: national-team resolve failed (%s): %s",
-                    req.player_id, exc)
+                    player_id, exc)
         return None
+
+
+def _resolve_national_team_id(req: "SoccerFavoritePlayerRequest") -> Optional[str]:
+    """National-team id for a favorite-player upsert request."""
+    return _resolve_national_team_for_player(
+        req.player_id, country=req.country, country_id=req.country_id)
 
 
 @app.delete("/soccer/favorites/players/{player_id}")
@@ -3554,6 +3566,25 @@ def soccer_fav_players_list(user_token: str = ""):
         rows = session.query(SoccerFavoritePlayerDB).filter(
             SoccerFavoritePlayerDB.user_token == user_token,
         ).order_by(SoccerFavoritePlayerDB.created_at.desc()).all()
+        # Self-heal: favorites saved before national-team resolution worked (or
+        # before a player's nationality was resolvable) carry only the club id.
+        # Backfill the national team for any row with no alternate ids yet so the
+        # feed starts surfacing e.g. France's games for an already-favorited
+        # Mbappé without the user re-adding. Best-effort; never break listing.
+        _changed = False
+        for r in rows:
+            if getattr(r, "alt_team_ids", None):
+                continue
+            nat_id = _resolve_national_team_for_player(r.player_id)
+            if nat_id and nat_id != r.team_id:
+                r.alt_team_ids = nat_id
+                _changed = True
+        if _changed:
+            try:
+                session.commit()
+            except Exception as exc:
+                log.warning("fav players national-team backfill commit failed: %s", exc)
+                session.rollback()
         out = [{
             "player_id":   r.player_id,
             "player_name": r.player_name,

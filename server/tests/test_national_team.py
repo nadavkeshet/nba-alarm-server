@@ -1,6 +1,18 @@
 import json
+import sys
+import types
 
 import national_team as nt
+
+
+def _fake_soccer_source(standings, *, matches=None):
+    """A stand-in `soccer_source` module so standings/fixtures parsing can be
+    exercised without hitting the provider."""
+    mod = types.ModuleType("soccer_source")
+    mod.BSD_COMPETITION_IDS = {"world_cup": 27}
+    mod.bsd = types.SimpleNamespace(league_standings=lambda cid: standings)
+    mod.get_soccer_matches = lambda *a, **k: (matches or [])
+    return mod
 
 
 def test_norm_strips_accents_case_and_punctuation():
@@ -42,6 +54,49 @@ def test_unknown_nationality_returns_none(monkeypatch):
     assert nt.national_team_id("Atlantis") is None
     assert nt.national_team_id(None) is None
     assert nt.national_team_id("") is None
+
+
+def test_standings_names_parses_dict_of_groups(monkeypatch):
+    # Regression: BSD world_cup standings nest rows under `groups` as a DICT
+    # keyed by group name. The old parser did `for grp in groups:` (iterating the
+    # string keys) and crashed with `'str' object has no attribute 'get'`, so the
+    # whole index came back empty and France never resolved.
+    raw = {"grouped": True, "groups": {
+        "Group I": [
+            {"position": 1, "team_id": 485, "team_name": "France"},
+            {"position": 2, "team_id": 486, "team_name": "Senegal"},
+        ],
+        "Group A": [{"position": 1, "team_id": 463, "team_name": "Brazil"}],
+    }}
+    monkeypatch.setitem(sys.modules, "soccer_source", _fake_soccer_source(raw))
+    out = nt._standings_names("world_cup")
+    assert out == {"france": "485", "senegal": "486", "brazil": "463"}
+
+
+def test_standings_names_parses_list_and_flat_shapes(monkeypatch):
+    # List of group objects wrapping rows, plus a nested `team` object.
+    raw_list = {"standings": [
+        {"rows": [{"team_id": 1, "team_name": "Italy"}]},
+        {"standings": [{"team": {"id": 2, "name": "Spain"}}]},
+    ]}
+    monkeypatch.setitem(sys.modules, "soccer_source", _fake_soccer_source(raw_list))
+    assert nt._standings_names("world_cup") == {"italy": "1", "spain": "2"}
+
+
+def test_resolution_works_for_both_country_spellings(monkeypatch):
+    # The dynamic index keys fixtures under their normalized name AND aliased
+    # form, so a "USA" fixture resolves whether the player's nationality reads
+    # "USA" or the spelled-out "United States".
+    raw = {"groups": {"Group D": [
+        {"team_id": 457, "team_name": "USA"},
+        {"team_id": 485, "team_name": "France"},
+    ]}}
+    monkeypatch.setattr(nt, "_OVERRIDE_PATH", nt._OVERRIDE_PATH.parent / "nope.json")
+    monkeypatch.setitem(sys.modules, "soccer_source", _fake_soccer_source(raw))
+    nt._reset_caches_for_tests()
+    assert nt.national_team_id("USA") == "457"
+    assert nt.national_team_id("United States") == "457"
+    assert nt.national_team_id("France") == "485"
 
 
 def test_dynamic_index_failure_is_swallowed(monkeypatch):

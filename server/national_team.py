@@ -118,10 +118,20 @@ def _standings_names(slug: str) -> dict[str, str]:
             return out
         raw = ss.bsd.league_standings(comp_id) or {}
         groups = raw.get("groups") or raw.get("standings") or []
-        for grp in groups:
-            rows = (grp.get("rows") or grp.get("standings") or grp.get("table")
-                    or grp.get("teams") or []) if isinstance(grp, dict) else grp
+        # `groups` comes in three shapes across feeds/competitions:
+        #   • dict keyed by group name -> list of rows  (BSD world_cup: {"Group A": [...]})
+        #   • list of group objects each wrapping rows  ({"rows"/"standings"/...: [...]})
+        #   • a flat list of rows
+        group_iter = groups.values() if isinstance(groups, dict) else groups
+        for grp in group_iter:
+            if isinstance(grp, dict):
+                rows = (grp.get("rows") or grp.get("standings") or grp.get("table")
+                        or grp.get("teams") or [])
+            else:
+                rows = grp  # already a list of rows
             for r in rows or []:
+                if not isinstance(r, dict):
+                    continue
                 team = r.get("team") or {}
                 tid = r.get("team_id") or team.get("id")
                 name = team.get("name") or r.get("team_name")
@@ -163,6 +173,9 @@ def _dynamic_index() -> dict[str, str]:
         for src in (_standings_names(slug), _fixtures_names(slug)):
             for name, tid in src.items():
                 idx.setdefault(name, tid)
+                # Also key under the aliased form so either spelling resolves
+                # (fixture "USA" becomes reachable as "united states" and vice versa).
+                idx.setdefault(_ALIASES.get(name, name), tid)
     if idx:
         _index_cache, _index_exp = idx, now + _INDEX_TTL
     return idx
@@ -173,14 +186,21 @@ def national_team_id(nationality: str | None) -> str | None:
     """Best-effort national-team id for a nationality name (e.g. "France").
     Returns None if it can't be resolved — callers must treat that as "no
     national team to track", never as an error."""
+    raw = _norm(nationality)
     key = _alias(nationality)
     if not key:
         return None
+    # Try the aliased name first, then the raw normalized name. The alias bridges
+    # nationality vs fixture naming (e.g. "USA" -> "United States"), but some feeds
+    # name the team the other way ("USA"), so attempting both avoids false misses.
     ov = _overrides()
     if key in ov:
         return ov[key]
+    if raw in ov:
+        return ov[raw]
     try:
-        return _dynamic_index().get(key)
+        idx = _dynamic_index()
+        return idx.get(key) or idx.get(raw)
     except Exception as exc:  # pragma: no cover - defensive
         log.warning("national_team: resolve(%s) failed: %s", nationality, exc)
         return None
