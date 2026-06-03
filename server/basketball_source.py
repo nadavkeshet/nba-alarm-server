@@ -376,7 +376,32 @@ def get_s365_basketball_standings(slug: str) -> dict | None:
     try:
         from score365.client import Client365
         with Client365() as client:
-            data = client.get("/standings/", params={"competitions": str(comp_id)})
+            # 365 returns only the CURRENT stage by default — for split leagues
+            # (e.g. the Israeli Winner League's relegation/championship playoffs at
+            # season's end) that's a 4-team playoff group, not the league table. So
+            # explicitly request the regular-season stage (stageNum=1) of the
+            # current season, which holds the full table; fall back to the default
+            # current stage if that lookup fails.
+            season_num = None
+            try:
+                comp_data = client.get("/competitions/", params={"competitions": str(comp_id)})
+                season_num = ((comp_data or {}).get("competitions") or [{}])[0].get("currentSeasonNum")
+            except Exception:
+                pass
+            data = None
+            if season_num is not None:
+                try:
+                    full = client.get("/standings/", params={
+                        "competitions": str(comp_id),
+                        "seasonNum": str(season_num),
+                        "stageNum": "1",
+                    })
+                    if ((full or {}).get("standings") or [{}])[0].get("rows"):
+                        data = full
+                except Exception:
+                    pass
+            if data is None:
+                data = client.get("/standings/", params={"competitions": str(comp_id)})
     except Exception as exc:
         logger.warning("s365 basketball standings failed for %s: %s", slug, exc)
         return None
