@@ -1,0 +1,69 @@
+"""The competition drama-radar must compute the Drama Engine score ONCE per
+match and share it across every follower — not recompute (and re-write the DB
+snapshot) per subscriber. These guard that optimization + its correctness."""
+import soccer_monitor as sm
+
+
+class _Score:
+    def __init__(self, total):
+        self.total = total
+        self.state = self.momentum = self.events = self.stakes = 0.0
+
+
+def _wire(monkeypatch):
+    sent = []
+    fired = set()
+    monkeypatch.setattr(sm, "_send_push",
+                        lambda token, title, body, *, alert_type="alarm": sent.append((token, alert_type)))
+    monkeypatch.setattr(sm, "_fire_once_fn",
+                        lambda key, token: (key + token not in fired) and (fired.add(key + token) or True))
+    monkeypatch.setattr(sm, "_get_user_language", lambda t: "en")
+    monkeypatch.setattr(sm, "_db_engine", None)
+    monkeypatch.setattr(sm, "_alarm_model", None)
+    return sent
+
+
+def _live_match(total_hint=8.0):
+    return {"id": "bsd-1", "status": "live", "minute": 80, "competition": "premier_league",
+            "home": {"name": "Home", "score": 2}, "away": {"name": "Away", "score": 2}}
+
+
+def test_score_computed_once_for_many_followers(monkeypatch):
+    sent = _wire(monkeypatch)
+    calls = {"compute": 0, "snapshot": 0}
+    monkeypatch.setattr(sm.drama_engine, "context_from_match_detail", lambda d: {})
+    monkeypatch.setattr(sm.drama_engine, "compute_drama",
+                        lambda ctx: (calls.__setitem__("compute", calls["compute"] + 1), _Score(8.0))[1])
+    monkeypatch.setattr(sm, "_log_drama_snapshot",
+                        lambda *a: calls.__setitem__("snapshot", calls["snapshot"] + 1))
+
+    match = _live_match()
+    score = sm._match_drama(match)                 # comp-radar pass: compute ONCE
+    followers = [
+        {"id": 1, "user_token": "u1", "threshold": 6.0, "alert_type": "alarm"},  # fires
+        {"id": 2, "user_token": "u2", "threshold": 7.5, "alert_type": "alarm"},  # fires
+        {"id": 3, "user_token": "u3", "threshold": 9.0, "alert_type": "alarm"},  # below
+    ]
+    for f in followers:
+        sm._evaluate_drama_radar(f, match, score=score)
+
+    assert calls["compute"] == 1     # computed exactly once for all 3 followers
+    assert calls["snapshot"] == 1    # one DB snapshot, not one per subscriber
+    assert len(sent) == 2            # only the two whose threshold the score met
+
+
+def test_match_drama_none_when_not_live(monkeypatch):
+    monkeypatch.setattr(sm.drama_engine, "compute_drama", lambda ctx: _Score(9.0))
+    monkeypatch.setattr(sm, "_log_drama_snapshot", lambda *a: None)
+    assert sm._match_drama({"status": "scheduled", "id": "x"}) is None
+    assert sm._match_drama({"status": "ft", "id": "x"}) is None
+
+
+def test_evaluate_without_precomputed_still_computes(monkeypatch):
+    sent = _wire(monkeypatch)
+    monkeypatch.setattr(sm.drama_engine, "context_from_match_detail", lambda d: {})
+    monkeypatch.setattr(sm.drama_engine, "compute_drama", lambda ctx: _Score(8.5))
+    monkeypatch.setattr(sm, "_log_drama_snapshot", lambda *a: None)
+    match = _live_match()
+    sm._evaluate_drama_radar({"id": 9, "user_token": "u", "threshold": 7.0, "alert_type": "alarm"}, match)
+    assert len(sent) == 1

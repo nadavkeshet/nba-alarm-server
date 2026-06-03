@@ -279,9 +279,14 @@ def _tick() -> None:
                     continue
                 if detail is None:
                     continue
+                # Compute the drama score ONCE per match — shared across every
+                # follower of this competition instead of recomputed (and the DB
+                # snapshot re-written) per subscriber.
+                match_score = _match_drama(detail)
                 for alarm in alarm_group:
                     try:
-                        _evaluate_drama_radar(alarm, detail)
+                        if match_score is not None:
+                            _evaluate_drama_radar(alarm, detail, score=match_score)
                         # League-follow kickoff: one alert per match in the league.
                         if (alarm.get("config") or {}).get("notify_at_kickoff"):
                             st = (detail.get("status") or "").lower()
@@ -574,20 +579,31 @@ def _evaluate_player_alert(alarm: dict, match: dict) -> None:
 _DEFAULT_DRAMA_THRESHOLD = 7.0
 
 
-def _evaluate_drama_radar(alarm: dict, match: dict) -> None:
-    """Compute the Drama Engine score for `match` and fire if it crosses
-    the user's threshold. Persists a row to `drama_snapshots` either way
-    so we can tune weights from real data over time."""
+def _match_drama(match: dict):
+    """Compute the Drama Engine score for a match ONCE per tick (and log one
+    snapshot). Returns the score, or None when the match isn't in a live-like
+    phase. The competition-radar pass computes this once per match and shares it
+    across every follower, instead of recomputing — and re-writing the DB
+    snapshot — once per subscriber (which doesn't scale)."""
     status = (match.get("status") or "").lower()
     # Only meaningful during a live or live-like phase
     if status not in {"live", "ht", "et", "pens", "1h", "2h"}:
-        return
-
+        return None
     ctx = drama_engine.context_from_match_detail(match)
     score = drama_engine.compute_drama(ctx)
-
     # Persist snapshot (best-effort — never block firing on log failure)
     _log_drama_snapshot(match.get("id"), match.get("minute") or 0, score)
+    return score
+
+
+def _evaluate_drama_radar(alarm: dict, match: dict, *, score=None) -> None:
+    """Fire if the match's Drama Engine score crosses the user's threshold.
+    `score` may be precomputed (the comp-radar pass shares one score across all
+    followers); when omitted it's computed for this single alarm."""
+    if score is None:
+        score = _match_drama(match)
+    if score is None:
+        return
 
     threshold = alarm.get("threshold") if alarm.get("threshold") is not None else _DEFAULT_DRAMA_THRESHOLD
     if score.total < threshold:
