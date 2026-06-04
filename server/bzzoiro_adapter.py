@@ -79,6 +79,7 @@ _TTL_SECONDS: dict[str, float] = {
     "player_match_stats": 300.0,
     "event":              120.0,
     "team":               86400.0,
+    "worldcup_squad":     6 * 3600.0,  # squads change rarely; 6h is plenty
     "team_events":        600.0,   # a team's season fixtures move at most daily
 }
 
@@ -291,6 +292,19 @@ def event(event_id: int | str) -> dict | None:
 
 def team(team_id: int | str) -> dict | None:
     return _cached_get("team", f"/teams/{team_id}/")
+
+
+def worldcup_squad(team_id: int | str, *, status: str = "official") -> list[dict]:
+    """Current-World-Cup squad call-ups for one national team.
+
+    BSD covers only the current FIFA World Cup edition. `status="official"`
+    is the final 26-man squad. Returns [] for an unknown team / unannounced
+    squad (never raises for those — callers treat empty as "no squad yet")."""
+    params = {"team": team_id, "status": status, "limit": 200}
+    data = _cached_get("worldcup_squad", "/worldcup/squads/", params, team_id, status)
+    if isinstance(data, dict):
+        return data.get("results") or []
+    return data or []
 
 
 def event_stats(event_id: int) -> dict | None:

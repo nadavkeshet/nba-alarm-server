@@ -121,3 +121,18 @@ def test_get_team_xg_handles_missing_data() -> None:
     assert bz.get_team_xg({}) is None
     assert bz.get_team_xg({"stats": {}}) is None
     assert bz.get_team_xg({"stats": {"home": {}, "away": {}}}) is None
+
+
+REF_WC_TEAM_ID = 930  # Czechia — 26 official call-ups (verified 2026-06-04)
+
+
+@skip_if_no_token
+def test_worldcup_squad_returns_official_callups() -> None:
+    rows = bz.worldcup_squad(REF_WC_TEAM_ID)
+    assert isinstance(rows, list)
+    assert len(rows) == 26
+    sample = rows[0]
+    assert "player_id" in sample
+    assert "position" in sample
+    assert sample["status"] == "official"
+    assert all(r["team_id"] == REF_WC_TEAM_ID for r in rows)
