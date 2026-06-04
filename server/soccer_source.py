@@ -1572,6 +1572,60 @@ def get_sofa_standings(slug: str) -> dict | None:
 # coverage is thin.
 
 
+# Position display order for national-team squads (GK → DF → MF → FW).
+_SQUAD_POS_ORDER = {"GK": 0, "DF": 1, "MF": 2, "FW": 3}
+
+
+def national_team_squad(team_id: int | str) -> dict:
+    """Official World Cup squad for one national team, each player merged to
+    the club team they currently play for.
+
+    Shape: {team_id, count, players: [{player_id, name, jersey_number,
+    position, club, club_country, current_team_id, club_crest, caps, goals,
+    age}]}. The club id comes from bsd.player_detail(player_id).current_team_id
+    — the same resolver the favorites national-team flow uses. A failed
+    player_detail degrades that row to current_team_id=None (club shown as a
+    plain name, never an error)."""
+    rows = bsd.worldcup_squad(team_id) or []
+    if not rows:
+        return {"team_id": team_id, "count": 0, "players": []}
+
+    def _enrich(row: dict) -> dict:
+        pid = row.get("player_id")
+        club_id = None
+        club_crest = None
+        if pid is not None:
+            try:
+                det = bsd.player_detail(pid) or {}
+                club_id = det.get("current_team_id")
+                if club_id is not None:
+                    club_crest = _bsd_team_image_url(club_id)
+            except Exception as exc:
+                logger.warning("squad: player_detail(%s) failed: %s", pid, exc)
+        return {
+            "player_id":       pid,
+            "name":            row.get("name"),
+            "jersey_number":   row.get("jersey_number"),
+            "position":        row.get("position"),
+            "club":            row.get("club"),
+            "club_country":    row.get("club_country"),
+            "current_team_id": club_id,
+            "club_crest":      club_crest,
+            "caps":            row.get("caps"),
+            "goals":           row.get("goals"),
+            "age":             row.get("age"),
+        }
+
+    with _nullcontext(_DETAIL_POOL) as pool:
+        players = list(pool.map(_enrich, rows))
+
+    players.sort(key=lambda p: (
+        _SQUAD_POS_ORDER.get((p.get("position") or "").upper(), 9),
+        p.get("jersey_number") if p.get("jersey_number") is not None else 999,
+    ))
+    return {"team_id": team_id, "count": len(players), "players": players}
+
+
 def get_team_season(team_id: str, league_slug: str | None = None, name: str | None = None) -> list[dict]:
     source = PRIMARY_SOURCE.get(league_slug or "", "bsd")
     if source == "sofascore":
