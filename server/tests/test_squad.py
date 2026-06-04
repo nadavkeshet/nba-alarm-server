@@ -71,3 +71,23 @@ def test_squad_handles_missing_player_id(monkeypatch):
     assert p["current_team_id"] is None
     assert p["club_crest"] is None
     assert p["name"] == "Mystery"
+
+
+def test_squad_route(monkeypatch):
+    from fastapi.testclient import TestClient
+    import main
+
+    fake = {"team_id": 930, "count": 1, "players": [
+        {"player_id": 3700, "name": "David Zima", "jersey_number": 4,
+         "position": "DF", "club": "SK Slavia Praha", "club_country": "Czechia",
+         "current_team_id": 120, "club_crest": "https://x/120/",
+         "caps": 5, "goals": 0, "age": 25}]}
+    import soccer_source
+    monkeypatch.setattr(soccer_source, "national_team_squad", lambda tid: fake)
+
+    client = TestClient(main.app)
+    r = client.get("/soccer/team/930/squad")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 1
+    assert body["players"][0]["current_team_id"] == 120

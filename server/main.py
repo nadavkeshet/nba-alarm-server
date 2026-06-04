@@ -3044,6 +3044,19 @@ def soccer_team_matches(team_id: str, league: str = "", name: str = ""):
     return _ss.get_team_season(team_id, league or None, name or None)
 
 
+@app.get("/soccer/team/{team_id}/squad")
+def soccer_team_squad(team_id: str):
+    """Official World Cup squad for a national team, each player merged to the
+    club they currently play for. Empty for non-World-Cup ids / unannounced
+    squads (BSD covers the current WC edition only)."""
+    import soccer_source as _ss
+    try:
+        tid = int(team_id)
+    except ValueError:
+        return {"team_id": team_id, "count": 0, "players": []}
+    return _ss.national_team_squad(tid)
+
+
 @app.get("/soccer/match/{canonical_id}/lineups")
 def soccer_match_lineups(canonical_id: str):
     """Confirmed / predicted lineups for a soccer match. Supports both BSD- and
