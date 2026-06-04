@@ -1602,6 +1602,8 @@ def national_team_squad(team_id: int | str) -> dict:
                     club_crest = _bsd_team_image_url(club_id)
             except Exception as exc:
                 logger.warning("squad: player_detail(%s) failed: %s", pid, exc)
+        else:
+            logger.debug("squad: row has no player_id, skipping club merge: %s", row.get("name"))
         return {
             "player_id":       pid,
             "name":            row.get("name"),
@@ -1616,6 +1618,7 @@ def national_team_squad(team_id: int | str) -> dict:
             "age":             row.get("age"),
         }
 
+    # Exceptions are absorbed inside _enrich, so pool.map never raises here.
     with _nullcontext(_DETAIL_POOL) as pool:
         players = list(pool.map(_enrich, rows))
 

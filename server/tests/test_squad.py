@@ -54,3 +54,20 @@ def test_squad_empty_upstream(monkeypatch):
     monkeypatch.setattr(ss.bsd, "worldcup_squad", lambda tid, **k: [])
     out = ss.national_team_squad(999)
     assert out == {"team_id": 999, "count": 0, "players": []}
+
+
+def test_squad_handles_missing_player_id(monkeypatch):
+    row = {"player_id": None, "name": "Mystery", "position": "FW",
+           "jersey_number": 99, "club": "FC Y", "club_country": "Spain",
+           "caps": 0, "goals": 0, "age": 20, "status": "official"}
+    monkeypatch.setattr(ss.bsd, "worldcup_squad", lambda tid, **k: [row])
+    # player_detail must never be called for a None player_id
+    def fail(pid):
+        raise AssertionError("player_detail should not be called for None pid")
+    monkeypatch.setattr(ss.bsd, "player_detail", fail)
+
+    out = ss.national_team_squad(930)
+    p = out["players"][0]
+    assert p["current_team_id"] is None
+    assert p["club_crest"] is None
+    assert p["name"] == "Mystery"
