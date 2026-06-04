@@ -3057,7 +3057,19 @@ def soccer_match_lineups(canonical_id: str):
         result = _bsd_soccer.event_lineups(event_id)
         if result is None:
             return {"lineup_status": "unavailable", "lineups": None, "event_id": event_id}
-        return _normalize_lineups(result)
+        # Merge real post-match player ratings (0–10) keyed by player_id. Only
+        # finished/live matches have them; upcoming matches return an empty list.
+        ratings: dict[int, float] = {}
+        try:
+            ps = _bsd_soccer.event_player_stats(event_id) or {}
+            for r in (ps.get("player_stats") or []):
+                pid = r.get("player_id")
+                rat = r.get("rating")
+                if pid is not None and rat is not None:
+                    ratings[int(pid)] = float(rat)
+        except Exception as exc:
+            log.warning("player-stats merge failed for %s: %s", event_id, exc)
+        return _normalize_lineups(result, ratings)
 
     if canonical_id.startswith("sofa-"):
         try:
@@ -3073,24 +3085,33 @@ def soccer_match_lineups(canonical_id: str):
     return {"lineup_status": "unavailable", "lineups": None, "event_id": None}
 
 
-def _normalize_lineups(raw: dict) -> dict:
-    """Ensure every lineup player has an `ai_score` key that iOS expects.
-    BSD may return the rating as 'rating', 'score', 'ai_score', etc.
+def _normalize_lineups(raw: dict, ratings: dict[int, float] | None = None) -> dict:
+    """Attach a real post-match `rating` (0–10) to each lineup player when it's
+    available (from event player-stats, keyed by player_id), plus keep the
+    `ai_score` pre-match prediction and a `photo_url`.
     """
+    ratings = ratings or {}
+
     def _fix_players(players: list) -> list:
         out = []
         for p in (players or []):
-            score = (p.get("ai_score") or p.get("rating") or p.get("score")
+            score = (p.get("ai_score") or p.get("score")
                      or p.get("performance_score") or p.get("match_rating"))
             try:
                 score = float(score) if score is not None else None
             except (TypeError, ValueError):
                 score = None
             pid = p.get("id") or p.get("player_id")
+            rating = None
+            try:
+                if pid is not None:
+                    rating = ratings.get(int(pid))
+            except (TypeError, ValueError):
+                rating = None
             photo = p.get("photo_url") or (
                 f"https://sports.bzzoiro.com/img/player/{pid}/" if pid else None
             )
-            out.append({**p, "ai_score": score, "photo_url": photo})
+            out.append({**p, "ai_score": score, "rating": rating, "photo_url": photo})
         return out
 
     def _fix_side(side: dict) -> dict:

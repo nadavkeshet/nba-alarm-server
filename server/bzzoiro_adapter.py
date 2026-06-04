@@ -70,6 +70,7 @@ _TTL_SECONDS: dict[str, float] = {
     "event_stats":     120.0,
     "event_incidents": 120.0,
     "event_lineups":   300.0,   # lineups don't change mid-match
+    "event_player_stats": 120.0,  # per-player match ratings (incl. rating field)
     "event_prediction": 600.0,  # pre-match; ten minutes is fine
     "league_detail":   3600.0,
     "player_search":      60.0,
@@ -326,6 +327,12 @@ def event_lineups(event_id: int) -> dict | None:
     Each lineup side: { team_id, team_name, formation, confidence, players, substitutes }
     """
     return _cached_get("event_lineups", f"/events/{event_id}/lineups/", None, event_id)
+
+
+def event_player_stats(event_id: int) -> dict | None:
+    """Per-player match statistics — includes a real `rating` (0–10) for every
+    player in a finished/live match. Empty for upcoming matches."""
+    return _cached_get("event_player_stats", f"/events/{event_id}/player-stats/", None, event_id)
 
 
 def event_prediction(event_id: int) -> dict | None:
