@@ -277,6 +277,11 @@ class SoccerFavoriteTeamDB(_Base):
     alert_type        = Column(String,  nullable=False, default="alarm")
     paused            = Column(Boolean, nullable=False, default=False)
     notify_at_kickoff = Column(Boolean, nullable=False, default=False)
+    # Full per-match criteria (drama_radar/late_drama/match_moments/card_penalty/
+    # sensation), same shape as a per-match alarm config. When present the monitor
+    # applies ALL enabled criteria to the team's matches; when null it falls back
+    # to the legacy drama_threshold + notify_at_kickoff behavior.
+    config            = Column(_JSONB,  nullable=True)
     created_at        = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
@@ -293,6 +298,9 @@ class SoccerFavoriteCompetitionDB(_Base):
     alert_type        = Column(String,  nullable=True, default="silent")
     notify_at_kickoff = Column(Boolean, nullable=False, default=False)
     paused            = Column(Boolean, nullable=False, default=False)
+    # Full per-match criteria applied to EVERY match in the competition (same
+    # shape as a per-match alarm config). Null → legacy drama+kickoff behavior.
+    config            = Column(_JSONB,  nullable=True)
     created_at        = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
@@ -388,6 +396,9 @@ def _init_db() -> None:
         "ALTER TABLE soccer_favorite_competitions ADD COLUMN alert_type VARCHAR DEFAULT 'silent'",
         "ALTER TABLE soccer_favorite_competitions ADD COLUMN notify_at_kickoff BOOLEAN DEFAULT FALSE NOT NULL",
         "ALTER TABLE soccer_favorite_competitions ADD COLUMN paused BOOLEAN DEFAULT FALSE NOT NULL",
+        # Full per-match criteria for team/league follows (1:1 with match alerts).
+        "ALTER TABLE soccer_favorite_teams ADD COLUMN config JSONB",
+        "ALTER TABLE soccer_favorite_competitions ADD COLUMN config JSONB",
     ]
     for sql in migrations:
         try:
@@ -1457,6 +1468,7 @@ async def lifespan(_app: FastAPI):
             db_engine=engine,
             alarm_model=SoccerAlarmDB,
             comp_follow_model=SoccerFavoriteCompetitionDB,
+            team_follow_model=SoccerFavoriteTeamDB,
         )
         soccer_monitor.start_soccer_radar()
         log.info("soccer radar wired and started")
@@ -3468,6 +3480,10 @@ class SoccerFavoriteTeamRequest(BaseModel):
     alert_type: str = "alarm"
     paused: bool = False
     notify_at_kickoff: bool = False
+    # Full per-match criteria (drama_radar/late_drama/match_moments/card_penalty/
+    # sensation) applied to every one of the team's matches. Optional — absent
+    # keeps the legacy drama_threshold + notify_at_kickoff behavior.
+    config: Optional[dict] = None
 
 
 class SoccerFavoriteCompetitionRequest(BaseModel):
@@ -3476,6 +3492,7 @@ class SoccerFavoriteCompetitionRequest(BaseModel):
     drama_threshold: float = 7.0
     alert_type: str = "silent"
     notify_at_kickoff: bool = False
+    config: Optional[dict] = None
 
 
 def _require_token(user_token: str) -> None:
@@ -3623,6 +3640,7 @@ def soccer_fav_team_upsert(req: SoccerFavoriteTeamRequest):
         row.alert_type        = req.alert_type
         row.paused            = req.paused
         row.notify_at_kickoff = req.notify_at_kickoff
+        row.config            = req.config
         session.commit()
     return {"status": "ok", "team_id": req.team_id}
 
@@ -3662,6 +3680,7 @@ def soccer_fav_teams_list(user_token: str = ""):
                 "alert_type":        r.alert_type,
                 "paused":            r.paused,
                 "notify_at_kickoff": r.notify_at_kickoff,
+                "config":            r.config,
                 "created_at":        r.created_at.isoformat() if r.created_at else None,
             })
     return {"teams": out}
@@ -3684,6 +3703,7 @@ def soccer_fav_competition_upsert(req: SoccerFavoriteCompetitionRequest):
         row.alert_type        = req.alert_type
         row.notify_at_kickoff = req.notify_at_kickoff
         row.paused            = False
+        row.config            = req.config
         session.commit()
     return {"status": "ok", "competition_id": req.competition_id}
 
@@ -3713,6 +3733,7 @@ def soccer_fav_competitions_list(user_token: str = ""):
             "alert_type":        getattr(r, "alert_type", None) or "silent",
             "notify_at_kickoff": bool(getattr(r, "notify_at_kickoff", False)),
             "paused":            bool(getattr(r, "paused", False)),
+            "config":            getattr(r, "config", None),
             "created_at":        r.created_at.isoformat() if r.created_at else None,
         } for r in rows]
     return {"competitions": out}

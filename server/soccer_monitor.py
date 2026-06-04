@@ -59,6 +59,7 @@ _fire_once_fn: Callable[..., bool] | None = None
 _db_engine: Any = None
 _alarm_model: Any = None  # SoccerAlarmDB class — injected to avoid circular import
 _comp_follow_model: Any = None  # SoccerFavoriteCompetitionDB — followed leagues
+_team_follow_model: Any = None  # SoccerFavoriteTeamDB — followed teams
 
 POLL_INTERVAL = 25.0  # seconds
 
@@ -74,16 +75,18 @@ def wire(
     db_engine: Any,
     alarm_model: Any,
     comp_follow_model: Any = None,
+    team_follow_model: Any = None,
 ) -> None:
     """Called once by main.py during startup to inject runtime dependencies."""
     global _send_push, _get_user_language, _fire_once_fn, _db_engine, _alarm_model
-    global _comp_follow_model
+    global _comp_follow_model, _team_follow_model
     _send_push = send_push
     _get_user_language = get_user_language
     _fire_once_fn = fire_once
     _db_engine = db_engine
     _alarm_model = alarm_model
     _comp_follow_model = comp_follow_model
+    _team_follow_model = team_follow_model
 
 
 # ---------------------------------------------------------------------------
@@ -229,75 +232,182 @@ def _tick() -> None:
             except Exception as exc:
                 logger.exception("alarm %s eval failed: %s", alarm["id"], exc)
 
-    # Followed competitions (league-wide soccer alarms). Same Pass-2 fan-out as a
-    # drama_radar alarm — evaluate every live match in the comp for drama, plus a
-    # kickoff alert when notify_at_kickoff. Silent / paused follows are display-only
-    # ("Just Follow") and never alert. Synthesized into drama_radar-shaped dicts;
-    # one_shot is always False (no real alarm row to deactivate).
-    if _comp_follow_model is not None and _db_engine is not None:
+    # ── Pass 2: competition-scoped evaluation.
+    # Three sources, all fanned out per competition so each comp's live matches
+    # are fetched once and its drama score computed once:
+    #   • real comp-scoped drama_radar alarm rows (match_id None) from `alarms`
+    #   • followed competitions — FULL criteria applied to every match in the comp
+    #   • followed teams — FULL criteria applied to the team's matches only
+    # Followed team/comp criteria mirror a per-match alarm 1:1 (drama_radar,
+    # late_drama, match_moments, card_penalty, sensation); silent / paused follows
+    # are display-only ("Just Follow") and never alert.
+    drama_by_comp: dict[str, list[dict]] = defaultdict(list)
+    for a in comp_radar:
+        if a.get("competition_id"):
+            drama_by_comp[a["competition_id"]].append(a)
+
+    specs_by_comp: dict[str, list[dict]] = defaultdict(list)
+    for spec in _load_follow_specs():
+        for slug in spec["competitions"]:
+            if slug:
+                specs_by_comp[slug].append(spec)
+
+    for comp_slug in set(drama_by_comp) | set(specs_by_comp):
+        try:
+            live_matches = ss.get_live_matches([comp_slug])
+        except Exception as exc:
+            logger.warning("pass2: live fetch failed for %s: %s", comp_slug, exc)
+            continue
+        for slim_match in live_matches:
+            cid = slim_match.get("id")
+            if not cid:
+                continue
+            try:
+                detail = ss.get_soccer_match_detail(cid)
+            except Exception as exc:
+                logger.warning("pass2: detail fetch failed for %s: %s", cid, exc)
+                continue
+            if detail is None:
+                continue
+            # Drama score computed ONCE per match — shared across every consumer.
+            match_score = _match_drama(detail)
+            home_id = str((detail.get("home") or {}).get("id") or "")
+            away_id = str((detail.get("away") or {}).get("id") or "")
+
+            # Real comp-scoped drama_radar alarm rows.
+            for alarm in drama_by_comp.get(comp_slug, []):
+                try:
+                    if match_score is not None:
+                        _evaluate_drama_radar(alarm, detail, score=match_score)
+                except Exception as exc:
+                    logger.exception("drama_radar alarm %s eval failed: %s", alarm["id"], exc)
+
+            # Team / competition follows → full per-match criteria.
+            for spec in specs_by_comp.get(comp_slug, []):
+                tids = spec.get("team_ids")
+                if tids is not None and home_id not in tids and away_id not in tids:
+                    continue  # team follow: only the team's own matches
+                for alarm in _expand_follow_criteria(spec, cid, detail):
+                    try:
+                        if alarm["alarm_type"] == "drama_radar":
+                            if match_score is not None:
+                                _evaluate_drama_radar(alarm, detail, score=match_score)
+                        else:
+                            _evaluate_alarm(alarm, detail)
+                    except Exception as exc:
+                        logger.exception("follow %s criterion %s eval failed: %s",
+                                         spec["id"], alarm["alarm_type"], exc)
+
+
+def _load_follow_specs() -> list[dict]:
+    """Active team + competition follows as evaluation specs. Each:
+    {id, user_token, competitions:[slug], team_ids:set|None, alert_type,
+     threshold, notify_at_kickoff, config}. A None team_ids means "every match
+     in the competition" (a league follow); a set scopes to the team's matches."""
+    specs: list[dict] = []
+    if _db_engine is None:
+        return specs
+    from sqlalchemy.orm import Session
+
+    def _row_spec(*, sid, token, comps, team_ids, alert_type, threshold,
+                  notify_at_kickoff, config):
+        return {
+            "id": sid, "user_token": token, "competitions": comps,
+            "team_ids": team_ids, "alert_type": alert_type or "alarm",
+            "threshold": threshold,
+            "notify_at_kickoff": bool(notify_at_kickoff),
+            "config": config or {},
+        }
+
+    if _comp_follow_model is not None:
         try:
             with Session(_db_engine) as session:
-                follows = session.query(_comp_follow_model).all()
-            for f in follows:
+                rows = session.query(_comp_follow_model).all()
+            for f in rows:
                 if (f.alert_type or "silent") == "silent" or getattr(f, "paused", False):
                     continue
-                comp_radar.append({
-                    "id": f"compfollow_{f.user_token}_{f.competition_id}",
-                    "user_token": f.user_token,
-                    "alarm_type": "drama_radar",
-                    "match_id": None,
-                    "competition_id": f.competition_id,
-                    "player_id": None,
-                    "threshold": f.drama_threshold,
-                    "alert_type": f.alert_type or "alarm",
-                    "config": {"notify_at_kickoff": bool(getattr(f, "notify_at_kickoff", False))},
-                })
+                specs.append(_row_spec(
+                    sid=f"compfollow_{f.user_token}_{f.competition_id}",
+                    token=f.user_token, comps=[f.competition_id], team_ids=None,
+                    alert_type=f.alert_type, threshold=f.drama_threshold,
+                    notify_at_kickoff=getattr(f, "notify_at_kickoff", False),
+                    config=getattr(f, "config", None)))
         except Exception as exc:
             logger.warning("comp-follow load failed: %s", exc)
 
-    # ── Pass 2: competition-scoped drama radar
-    if comp_radar:
-        # Group comp-radar alarms by competition so we hit get_live_matches once per slug
-        by_comp: dict[str, list[dict]] = defaultdict(list)
-        for a in comp_radar:
-            by_comp[a["competition_id"]].append(a)
+    if _team_follow_model is not None:
+        try:
+            with Session(_db_engine) as session:
+                rows = session.query(_team_follow_model).all()
+            for f in rows:
+                if (f.alert_type or "silent") == "silent" or getattr(f, "paused", False):
+                    continue
+                comps = [c for c in (f.competitions or "").split(",") if c]
+                if not comps and f.competition_id:
+                    comps = [f.competition_id]
+                tids = {f.team_id} | {t for t in (f.alt_team_ids or "").split(",") if t}
+                specs.append(_row_spec(
+                    sid=f"teamfollow_{f.user_token}_{f.team_id}",
+                    token=f.user_token, comps=comps, team_ids=tids,
+                    alert_type=f.alert_type, threshold=f.drama_threshold,
+                    notify_at_kickoff=getattr(f, "notify_at_kickoff", False),
+                    config=getattr(f, "config", None)))
+        except Exception as exc:
+            logger.warning("team-follow load failed: %s", exc)
+    return specs
 
-        for comp_slug, alarm_group in by_comp.items():
+
+def _expand_follow_criteria(spec: dict, cid: str, detail: dict) -> list[dict]:
+    """Turn a follow spec into synthesized per-match alarm dicts the standard
+    evaluators understand. Each carries a per-match id so _fire's dedup
+    (soccer_{id}_{signal}) is scoped per (follow, match, criterion). When the
+    follow has no `config`, fall back to the legacy drama + kickoff behavior."""
+    base_id = f"{spec['id']}_{cid}"
+    cfg = spec.get("config") or {}
+    out: list[dict] = []
+
+    def mk(alarm_type: str, config: dict | None = None, threshold=None) -> dict:
+        return {
+            "id": base_id, "user_token": spec["user_token"],
+            "alarm_type": alarm_type, "match_id": cid, "competition_id": None,
+            "player_id": None, "threshold": threshold,
+            "alert_type": spec.get("alert_type") or "alarm", "config": config or {},
+        }
+
+    if cfg:
+        dr = cfg.get("drama_radar") or {}
+        if dr.get("enabled"):
+            out.append(mk("drama_radar", threshold=dr.get("threshold", 7.0)))
+        ld = cfg.get("late_drama") or {}
+        if ld.get("enabled"):
+            out.append(mk("late_drama", {"max_diff": ld.get("max_diff", 1),
+                                         "last_minutes": ld.get("last_minutes", 15)}))
+        mm = cfg.get("match_moments") or {}
+        if mm.get("enabled"):
+            out.append(mk("match_moments", {
+                "kickoff": bool(mm.get("kickoff")), "halftime": bool(mm.get("halftime")),
+                "extra_time": bool(mm.get("extra_time")), "penalties": bool(mm.get("penalties"))}))
+        cp = cfg.get("card_penalty") or {}
+        if cp.get("enabled"):
+            out.append(mk("card_penalty", {"red_card": bool(cp.get("red_card")),
+                                           "penalty": bool(cp.get("penalty"))}))
+        sn = cfg.get("sensation") or {}
+        if sn.get("enabled"):
             try:
-                live_matches = ss.get_live_matches([comp_slug])
-            except Exception as exc:
-                logger.warning("drama_radar: live fetch failed for %s: %s", comp_slug, exc)
-                continue
-            for slim_match in live_matches:
-                cid = slim_match.get("id")
-                if not cid:
-                    continue
-                try:
-                    detail = ss.get_soccer_match_detail(cid)
-                except Exception as exc:
-                    logger.warning("drama_radar: detail fetch failed for %s: %s", cid, exc)
-                    continue
-                if detail is None:
-                    continue
-                # Compute the drama score ONCE per match — shared across every
-                # follower of this competition instead of recomputed (and the DB
-                # snapshot re-written) per subscriber.
-                match_score = _match_drama(detail)
-                for alarm in alarm_group:
-                    try:
-                        if match_score is not None:
-                            _evaluate_drama_radar(alarm, detail, score=match_score)
-                        # League-follow kickoff: one alert per match in the league.
-                        if (alarm.get("config") or {}).get("notify_at_kickoff"):
-                            st = (detail.get("status") or "").lower()
-                            if st in ("live", "1h"):
-                                _fire(alarm, "soccer_kickoff", t_soccer_body_kickoff,
-                                      (detail.get("home") or {}).get("name", ""),
-                                      (detail.get("away") or {}).get("name", ""),
-                                      detail.get("competition", ""),
-                                      signal=f"lg_kickoff_{cid}", one_shot=False)
-                    except Exception as exc:
-                        logger.exception("drama_radar alarm %s eval failed: %s", alarm["id"], exc)
+                dog = ss.resolve_underdog(cid, detail=detail)
+            except Exception:
+                dog = None
+            if dog:
+                out.append(mk("sensation", {"underdog_is_home": dog["underdog_is_home"],
+                                            "underdog_name": dog["underdog_name"]}))
+    else:
+        # Legacy follow (pre-config): drama radar + kickoff only.
+        thr = spec.get("threshold")
+        if thr is not None and thr < 90:
+            out.append(mk("drama_radar", threshold=thr))
+        if spec.get("notify_at_kickoff"):
+            out.append(mk("match_moments", {"kickoff": True}))
+    return out
 
 
 # ---------------------------------------------------------------------------
