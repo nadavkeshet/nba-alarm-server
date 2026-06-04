@@ -262,6 +262,18 @@ _LEAGUES: list[dict] = [
     {"id": "ligat_haal",     "name": "Israeli Ligat Ha'Al",       "sport": "football"},
 ]
 
+# Marquee competitions pinned to the front of league search results. Keep in
+# sync with the iOS LeagueCatalog.featuredLeagueIds. Empty to disable.
+_FEATURED_LEAGUE_IDS: list[str] = ["world_cup"]
+
+
+def _featured_rank(league_id: str) -> int:
+    """Lower sorts first; non-featured leagues fall to the end."""
+    try:
+        return _FEATURED_LEAGUE_IDS.index(league_id)
+    except ValueError:
+        return len(_FEATURED_LEAGUE_IDS)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Public search API
@@ -352,9 +364,10 @@ def search(query: str, limit: int = 10) -> dict[str, list[dict]]:
     # into a single row carrying all ids + leagues, BEFORE the limit cap.
     teams = _merge_duplicate_teams(teams)
 
-    # Sort by score desc, then name asc; cap each section at `limit`
+    # Sort by score desc, then name asc; cap each section at `limit`.
+    # Featured leagues (World Cup) are pinned to the FRONT of league results.
     teams.sort(   key=lambda r: (-r["score"], r["name"].lower()))
-    leagues.sort( key=lambda r: (-r["score"], r["name"].lower()))
+    leagues.sort( key=lambda r: (_featured_rank(r["id"]), -r["score"], r["name"].lower()))
     players.sort( key=lambda r: (-r["score"], r["name"].lower()))
 
     return {
