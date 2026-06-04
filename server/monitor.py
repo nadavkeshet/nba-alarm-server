@@ -593,20 +593,32 @@ def fetch_game_summary_roster(game_id: str, date: str | None = None, league: str
         native_id = parts[1]
 
     # ── Step 1: collect raw team stubs ─────────────────────────────────────────
+    # Identify both teams (name + crest) from the SAME normalized event detail
+    # the /summary header uses — it works for bsd-* AND s365-* ids and always
+    # carries a 365 logo URL. The legacy ESPN-style `competitions`/`competitors`
+    # shape only exists for some upstreams, so the flat bsd/s365 detail
+    # (`home_team`/`away_team`) was silently missed and the response came back
+    # with zero teams — i.e. no logos next to the alarm.
     team_stubs: list[dict] = []
+    try:
+        import basketball_source as _bb
+        detail = _bb.get_basketball_event_detail(game_id)
+        if detail:
+            for side in ("home_team", "away_team"):
+                t = detail.get(side)
+                if isinstance(t, dict) and (t.get("name") or t.get("id")):
+                    team_stubs.append({
+                        "id":           str(t.get("id", "")),
+                        "displayName":  t.get("name", ""),
+                        "name":         t.get("name", ""),
+                        "abbreviation": t.get("short_name", ""),
+                        "logo":         t.get("logo", ""),
+                    })
+    except Exception as exc:
+        log.warning("Game summary: event detail fetch failed for %s: %s", game_id, exc)
 
-    # For BSD canonical IDs use basketball_source to get the event (fast path).
-    if source_prefix == "bsd":
-        try:
-            import basketball_source as _bb
-            detail = _bb.get_basketball_event_detail(game_id)
-            if detail:
-                for comp in (detail.get("competitions") or [{}])[0].get("competitors", []):
-                    team_stubs.append(comp.get("team", {}))
-        except Exception as exc:
-            log.warning("Game summary (BSD): detail fetch failed for %s: %s", game_id, exc)
-
-    # For 365scores IDs (s365-* or legacy numeric) try today's NBA cache.
+    # Legacy fallback: older ESPN-style scoreboard shapes, used only when the
+    # normalized detail came back empty (e.g. a numeric legacy id off-cache).
     if not team_stubs and (not source_prefix or source_prefix == "s365"):
         lookup_id = native_id  # numeric 365scores id
         if not league or league == "nba":
@@ -642,42 +654,60 @@ def fetch_game_summary_roster(game_id: str, date: str | None = None, league: str
     teams_out: list[dict] = []
 
     for team in team_stubs:
-        team_id = str(team.get("id", ""))
+        team_id   = str(team.get("id", ""))
+        team_name = team.get("displayName") or team.get("name") or ""
+        team_logo = team.get("logo", "")
+        team_abbr = team.get("abbreviation") or "?"
 
-        # Try numeric team_id first (works for 365scores games)
+        # Try numeric team_id first (works for 365scores games), then a
+        # name-based match for BSD games whose team IDs differ from 365scores.
         cached = None
         if team_id:
             with _CACHE_LOCK:
                 cached = _ROSTER_CACHE.get(team_id)
-
-        # Name-based fallback for BSD games whose team IDs differ from 365scores
-        if not cached:
-            team_name = team.get("displayName") or team.get("name") or ""
+        if not cached and team_name:
             cached = _roster_by_name(team_name)
 
+        # Live roster fetch on a clean miss — only for 365scores ids. A bsd team
+        # id is NOT a 365 competitor id, so fetching it would pull the WRONG
+        # roster; bsd games just return their identity (name + crest) below.
+        if not cached and team_id and source_prefix != "bsd":
+            log.warning("Roster cache miss for team %s – fetching live.", team_id)
+            try:
+                players = api_fetch_team_players(int(team_id))
+                cached = {
+                    "id":           team_id,
+                    "name":         team_name or "?",
+                    "abbreviation": team_abbr,
+                    "logo":         team_logo,
+                    "players":      players,
+                }
+                with _CACHE_LOCK:
+                    _ROSTER_CACHE[team_id] = cached
+            except Exception as exc:
+                log.warning("Live fetch for team %s failed: %s", team_id, exc)
+
         if cached:
-            teams_out.append(cached)
-            continue
-
-        if not team_id:
-            continue
-
-        # Cache miss — live fetch from 365scores
-        log.warning("Roster cache miss for team %s – fetching live.", team_id)
-        try:
-            players = api_fetch_team_players(int(team_id))
-            entry = {
-                "id":           team_id,
-                "name":         team.get("displayName", team.get("name", "?")),
-                "abbreviation": team.get("abbreviation", "?"),
-                "logo":         team.get("logo", ""),
-                "players":      players,
-            }
-            with _CACHE_LOCK:
-                _ROSTER_CACHE[team_id] = entry
+            # Always carry the crest + full name from the event detail, even if
+            # the cached roster entry predates logo stamping or lacks them.
+            entry = dict(cached)
+            if not entry.get("logo") and team_logo:
+                entry["logo"] = team_logo
+            if not entry.get("name") and team_name:
+                entry["name"] = team_name
+            entry.setdefault("players", [])
             teams_out.append(entry)
-        except Exception as exc:
-            log.warning("Live fetch for team %s failed: %s", team_id, exc)
+        else:
+            # No roster available (e.g. a scheduled game with no lineup yet) —
+            # still return the team identity so the client renders the crest and
+            # full name next to the alarm. THIS is the logos fix.
+            teams_out.append({
+                "id":           team_id,
+                "name":         team_name or "?",
+                "abbreviation": team_abbr,
+                "logo":         team_logo,
+                "players":      [],
+            })
 
     return {"teams": teams_out}
 
