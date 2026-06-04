@@ -1587,6 +1587,10 @@ def national_team_squad(team_id: int | str) -> dict:
     player_detail degrades that row to current_team_id=None (club shown as a
     plain name, never an error)."""
     rows = bsd.worldcup_squad(team_id) or []
+    # A row with no player_id can't be merged to a club or opened as a player
+    # page — and the iOS client decodes player_id as a non-optional Int, so a
+    # null one would fail the whole squad. Drop them at the source.
+    rows = [r for r in rows if r.get("player_id") is not None]
     if not rows:
         return {"team_id": team_id, "count": 0, "players": []}
 
@@ -1602,8 +1606,6 @@ def national_team_squad(team_id: int | str) -> dict:
                     club_crest = _bsd_team_image_url(club_id)
             except Exception as exc:
                 logger.warning("squad: player_detail(%s) failed: %s", pid, exc)
-        else:
-            logger.debug("squad: row has no player_id, skipping club merge: %s", row.get("name"))
         return {
             "player_id":       pid,
             "name":            row.get("name"),

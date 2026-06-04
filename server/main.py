@@ -3053,7 +3053,7 @@ def soccer_team_squad(team_id: str):
     try:
         tid = int(team_id)
     except ValueError:
-        return {"team_id": team_id, "count": 0, "players": []}
+        return {"team_id": 0, "count": 0, "players": []}
     return _ss.national_team_squad(tid)
 
 

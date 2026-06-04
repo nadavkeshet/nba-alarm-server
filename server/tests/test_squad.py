@@ -56,21 +56,22 @@ def test_squad_empty_upstream(monkeypatch):
     assert out == {"team_id": 999, "count": 0, "players": []}
 
 
-def test_squad_handles_missing_player_id(monkeypatch):
-    row = {"player_id": None, "name": "Mystery", "position": "FW",
-           "jersey_number": 99, "club": "FC Y", "club_country": "Spain",
-           "caps": 0, "goals": 0, "age": 20, "status": "official"}
-    monkeypatch.setattr(ss.bsd, "worldcup_squad", lambda tid, **k: [row])
-    # player_detail must never be called for a None player_id
-    def fail(pid):
-        raise AssertionError("player_detail should not be called for None pid")
-    monkeypatch.setattr(ss.bsd, "player_detail", fail)
+def test_squad_drops_rows_with_null_player_id(monkeypatch):
+    rows = [
+        {"player_id": None, "name": "Mystery", "position": "FW",
+         "jersey_number": 99, "club": "FC Y", "club_country": "Spain",
+         "caps": 0, "goals": 0, "age": 20, "status": "official"},
+        _row(5, "Real Player", "MF", 8),
+    ]
+    monkeypatch.setattr(ss.bsd, "worldcup_squad", lambda tid, **k: rows)
+    monkeypatch.setattr(ss.bsd, "player_detail",
+                        lambda pid: {"current_team_id": 100 + int(pid)})
 
     out = ss.national_team_squad(930)
-    p = out["players"][0]
-    assert p["current_team_id"] is None
-    assert p["club_crest"] is None
-    assert p["name"] == "Mystery"
+    # Null-player_id row is dropped at the source.
+    assert out["count"] == 1
+    assert [p["name"] for p in out["players"]] == ["Real Player"]
+    assert all(p["player_id"] is not None for p in out["players"])
 
 
 def test_squad_route(monkeypatch):
