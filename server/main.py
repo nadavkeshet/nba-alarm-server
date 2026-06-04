@@ -3938,7 +3938,7 @@ def watch_score(home: str, away: str, date: str = "", league: str = "nba"):
 
 
 @app.get("/watch-scores")
-def watch_scores(date: str = "", league: str = "nba"):
+def watch_scores(date: str = "", league: str = "nba", tz: Optional[str] = None):
     """
     Batch: return watch scores for all finished games on a date for a league.
     Returns: { "scores": { "DEN_SA": { "score": 8.8, ... }, ... } }
@@ -3950,7 +3950,19 @@ def watch_scores(date: str = "", league: str = "nba"):
     game_date = date if date else _eastern_today()
     recent = _watch_date_is_recent(game_date)
 
-    events = get_games_for_date(game_date, league=league)
+    # Use the SAME game source as the schedule feed (BSD-primary cascade), not
+    # the legacy ESPN `get_games_for_date` — which no longer surfaces BSD games,
+    # so BSD-sourced leagues (NBA, etc.) yielded zero games here and never got a
+    # watch-score badge. Going through basketball_source also guarantees the
+    # team abbreviations (and tz day-bucket) match the cards' lookup key exactly.
+    import basketball_source as _bb
+    try:
+        events = _bb.get_basketball_games(
+            league, date_iso=_yyyymmdd_to_iso(game_date), tz=tz)
+    except Exception as exc:
+        log.warning("watch-scores: basketball_source failed (%s/%s): %s — legacy fallback",
+                    league, game_date, exc)
+        events = get_games_for_date(game_date, league=league)
 
     # One round-trip seeds every persisted final score for the date (permanent,
     # survives restarts/deploys). Misses fall through to compute below.
