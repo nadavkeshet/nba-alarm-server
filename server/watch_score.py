@@ -1061,6 +1061,21 @@ def calculate_watch_score_bsd(bsd_event_id: int, league: str = "nba") -> WatchSc
         avdija, _ = _compute_avdija_boost_bsd(detail, _bb_safe(_bb.event_box_score, bsd_event_id))
         final_score += avdija
 
+    # Stakes: deciding playoff/Finals games rate higher — the basketball parity
+    # of football's round multiplier. Stage is cross-referenced from 365scores
+    # (BSD carries no round label); 1.0 for regular-season / unknown.
+    stakes = 1.0
+    try:
+        import basketball_stakes
+        stakes = basketball_stakes.stakes_multiplier(
+            league,
+            detail.get("home_team_name") or (detail.get("home_team") or {}).get("name"),
+            detail.get("away_team_name") or (detail.get("away_team") or {}).get("name"),
+            detail.get("event_date"))
+        final_score *= stakes
+    except Exception:
+        pass
+
     final_score = max(1.0, min(10.0, round(final_score, 1)))
     return WatchScoreResult(
         score=final_score,
@@ -1070,7 +1085,7 @@ def calculate_watch_score_bsd(bsd_event_id: int, league: str = "nba") -> WatchSc
         details={
             **details, "teams": team_info, "source": "bsd", "live": is_live,
             "efficiency": round(eff, 3), "standout": round(standout, 2),
-            "avdija": round(avdija, 2),
+            "avdija": round(avdija, 2), "stakes": round(stakes, 2),
             "final_score_home": plays[-1].home_score,
             "final_score_away": plays[-1].away_score,
         },
