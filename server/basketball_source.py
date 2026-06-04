@@ -261,6 +261,28 @@ def _s365_team_obj(comp: dict) -> dict:
     }
 
 
+def _s365_status_to_bsd(game: dict) -> str:
+    """Normalize a 365scores game status to BSD basketball's vocabulary
+    ('notstarted'/'inprogress'/'finished'/'cancelled'/'postponed') so the
+    summary's `detail.status` is identical across sources. iOS classifies
+    live/final off this string; before, s365 emitted display text ("Q3",
+    "Final") that the live/final checks (and the status label) couldn't read.
+    365's `statusGroup` is the structured signal: 2=pre, 3=live, 4=post."""
+    txt = (game.get("statusText") or game.get("shortStatusText") or "").lower()
+    if "cancel" in txt:
+        return "cancelled"
+    if "postpon" in txt:
+        return "postponed"
+    grp = game.get("statusGroup")
+    if grp == 2:
+        return "notstarted"
+    if grp == 3:
+        return "inprogress"
+    if grp == 4:
+        return "finished"
+    return game.get("statusText") or game.get("shortStatusText") or ""
+
+
 def _s365_event_detail(native: str) -> dict | None:
     game = _s365_game_detail(native)
     if not game:
@@ -289,7 +311,7 @@ def _s365_event_detail(native: str) -> dict | None:
         "home_team":   _s365_team_obj(home),
         "away_team":   _s365_team_obj(away),
         "event_date":  game.get("startTime"),
-        "status":      game.get("statusText") or game.get("shortStatusText") or "",
+        "status":      _s365_status_to_bsd(game),
         "home_score":  _s365_int(home.get("score")),
         "away_score":  _s365_int(away.get("score")),
         "round_number": game.get("roundNum"),
