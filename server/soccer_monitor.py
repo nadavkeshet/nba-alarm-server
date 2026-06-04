@@ -17,8 +17,12 @@ What we support in P2 (all event-driven, no Drama Engine yet):
 What's NOT in P2:
 - Radar-style alarms (no specific match_id) — needs Drama Engine for the
   "fire on any worth-watching match" semantics. P3.
-- comeback, hat_trick, big_chance — more complex, P3.
+- hat_trick — superseded by player_alert's hat_trick_watch.
 - drama_radar — P3 (Drama Engine).
+
+Implemented since P3:
+- comeback     — a side that trailed by 2+ has pulled back to within 1.
+- big_chance   — a burst of chances (recent-xG flurry) for a side / either side.
 """
 
 from __future__ import annotations
@@ -41,6 +45,8 @@ from i18n import (
     t_soccer_body_penalty,
     t_soccer_body_red_card,
     t_soccer_body_sensation,
+    t_soccer_body_comeback,
+    t_soccer_body_big_chance,
     t_soccer_body_drama_radar,
     t_soccer_body_player_goal,
     t_soccer_body_player_brace,
@@ -357,6 +363,22 @@ def _load_follow_specs() -> list[dict]:
     return specs
 
 
+def _follow_side(spec: dict, detail: dict) -> str:
+    """Which side a team-scoped criterion (comeback / big_chance) should watch:
+    'home'/'away' for a team follow on this match, 'both' for a league follow
+    (team_ids None) or when the followed team can't be matched to a side."""
+    tids = spec.get("team_ids")
+    if not tids:
+        return "both"
+    home_id = str((detail.get("home") or {}).get("id") or "")
+    away_id = str((detail.get("away") or {}).get("id") or "")
+    if home_id in tids:
+        return "home"
+    if away_id in tids:
+        return "away"
+    return "both"
+
+
 def _expand_follow_criteria(spec: dict, cid: str, detail: dict) -> list[dict]:
     """Turn a follow spec into synthesized per-match alarm dicts the standard
     evaluators understand. Each carries a per-match id so _fire's dedup
@@ -400,6 +422,13 @@ def _expand_follow_criteria(spec: dict, cid: str, detail: dict) -> list[dict]:
             if dog:
                 out.append(mk("sensation", {"underdog_is_home": dog["underdog_is_home"],
                                             "underdog_name": dog["underdog_name"]}))
+        cb = cfg.get("comeback") or {}
+        if cb.get("enabled"):
+            out.append(mk("comeback", {"side": _follow_side(spec, detail)}))
+        bc = cfg.get("big_chance") or {}
+        if bc.get("enabled"):
+            out.append(mk("big_chance", {"side": _follow_side(spec, detail),
+                                         "sensitivity": bc.get("sensitivity", "medium")}))
     else:
         # Legacy follow (pre-config): drama radar + kickoff only.
         thr = spec.get("threshold")
@@ -412,6 +441,13 @@ def _expand_follow_criteria(spec: dict, cid: str, detail: dict) -> list[dict]:
 
 # ---------------------------------------------------------------------------
 # Evaluators
+
+# comeback: trailed by >= _COMEBACK_DEFICIT, now within _COMEBACK_TARGET (or better)
+_COMEBACK_DEFICIT = 2
+_COMEBACK_TARGET = 1
+# big_chance: expected goals in the last ~15' that count as a "burst", per
+# sensitivity. Higher sensitivity = lower bar = fires more readily.
+_BIG_CHANCE_XG = {"low": 1.3, "medium": 1.0, "high": 0.7}
 
 
 def _evaluate_alarm(alarm: dict, match: dict) -> None:
@@ -540,8 +576,43 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
                   signal=f"red_card_{red.get('minute',0)}", one_shot=True)
         return
 
-    if alarm_type == "player_alert":
-        _evaluate_player_alert(alarm, match)
+    if alarm_type == "comeback":
+        # A side that trailed by 2+ goals has clawed back to within one (or
+        # drawn level / gone ahead). Reconstructed statelessly from the goal
+        # incidents' running scores. `side` scopes to a team (home/away) for a
+        # team follow, or "both" for league follows / manual match alarms.
+        if status not in ("live", "1h", "2h", "et"):
+            return
+        side = (alarm.get("config") or {}).get("side", "both")
+        sides = _comeback_sides(match)
+        if side in ("home", "away"):
+            sides &= {side}
+        if sides:
+            _fire(alarm, "soccer_comeback", t_soccer_body_comeback,
+                  home_name, away_name, competition,
+                  signal="comeback", one_shot=True)
+        return
+
+    if alarm_type == "big_chance":
+        # Burst of chances: a side's expected goals over the last ~15' crosses
+        # the chosen sensitivity. xg_last_15 is derived from the xg-per-minute
+        # timeline; leagues without xG data simply never trip this (no false +).
+        # Dedup per 15-minute block so a sustained flurry doesn't spam, but a
+        # genuine second flurry later in the match still alerts.
+        if status not in ("live", "1h", "2h", "et"):
+            return
+        cfg = alarm.get("config") or {}
+        side = cfg.get("side", "both")
+        thr = _BIG_CHANCE_XG.get((cfg.get("sensitivity") or "medium").lower(), 1.0)
+        h_xg, a_xg = _recent_xg15(match)
+        hit = (h_xg >= thr) if side == "home" else \
+              (a_xg >= thr) if side == "away" else \
+              (h_xg >= thr or a_xg >= thr)
+        if hit:
+            block = (match.get("minute") or 0) // 15
+            _fire(alarm, "soccer_big_chance", t_soccer_body_big_chance,
+                  home_name, away_name, competition,
+                  signal=f"bcb_{side}_{block}", one_shot=False)
         return
 
     # Unknown alarm_type → no-op (keeps forward compat for P3 types)
@@ -762,6 +833,55 @@ def _log_drama_snapshot(match_id: str | None, minute: int, score) -> None:
             conn.commit()
     except Exception as exc:
         logger.debug("drama snapshot log failed for %s: %s", match_id, exc)
+
+
+def _comeback_sides(match: dict) -> set[str]:
+    """Sides ('home'/'away') that trailed by >= _COMEBACK_DEFICIT at some point
+    and are now within _COMEBACK_TARGET (level/ahead counts too). Reconstructed
+    from the goal incidents' running scores, so it's stateless across ticks."""
+    home = match.get("home") or {}
+    away = match.get("away") or {}
+    hs_now = home.get("score") or 0
+    as_now = away.get("score") or 0
+    # Seed with the current scoreline so a peak deficit is caught even if the
+    # incident that produced it lacked a running score.
+    max_home_deficit = as_now - hs_now
+    max_away_deficit = hs_now - as_now
+    goals = [inc for inc in (match.get("incidents") or [])
+             if "goal" in (inc.get("type") or inc.get("incidentType") or "").lower()]
+    for inc in sorted(goals, key=lambda i: i.get("minute") or i.get("time") or 0):
+        h = inc.get("home_score")
+        a = inc.get("away_score")
+        if h is None or a is None:
+            continue
+        max_home_deficit = max(max_home_deficit, a - h)
+        max_away_deficit = max(max_away_deficit, h - a)
+    sides: set[str] = set()
+    if max_home_deficit >= _COMEBACK_DEFICIT and (as_now - hs_now) <= _COMEBACK_TARGET:
+        sides.add("home")
+    if max_away_deficit >= _COMEBACK_DEFICIT and (hs_now - as_now) <= _COMEBACK_TARGET:
+        sides.add("away")
+    return sides
+
+
+def _recent_xg15(match: dict) -> tuple[float, float]:
+    """(home, away) expected goals over the last ~15 minutes. Prefers a
+    precomputed xg_last_15 on the side dicts; otherwise derives it from the
+    xg_per_minute timeline. Returns (0.0, 0.0) when no xG data is available."""
+    home = match.get("home") or {}
+    away = match.get("away") or {}
+    h, a = home.get("xg_last_15"), away.get("xg_last_15")
+    if h is not None and a is not None:
+        return float(h or 0.0), float(a or 0.0)
+    timeline = match.get("xg_per_minute") or []
+    minute = match.get("minute") or 0
+    if not timeline or minute <= 0:
+        return 0.0, 0.0
+    cum_start = drama_engine._cum_xg_at(timeline, max(0, minute - 15))
+    cum_now = drama_engine._cum_xg_at(timeline, minute)
+    if cum_start is None or cum_now is None:
+        return 0.0, 0.0
+    return max(0.0, cum_now[0] - cum_start[0]), max(0.0, cum_now[1] - cum_start[1])
 
 
 def _recent_incident(match: dict, *, types: tuple[str, ...], window_min: int) -> bool:
