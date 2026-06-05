@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+import secrets
 import threading
 import time
 import requests
@@ -330,6 +331,25 @@ class WatchScoreCacheDB(_Base):
     computed_at   = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
+class CalendarSubscriptionDB(_Base):
+    """Opaque, revocable calendar token -> subscription scope. The public webcal
+    URL carries only this random token, never the FCM user_token."""
+    __tablename__ = "calendar_subscriptions"
+
+    token      = Column(String, primary_key=True)            # secrets.token_urlsafe(24)
+    user_token = Column(String, nullable=False, index=True)  # FCM push token (private)
+    scope      = Column(String, nullable=False)              # favorites|custom|all|world_cup
+    params     = Column(_JSONB, nullable=False, default=dict)
+    revoked    = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+def _mint_calendar_token() -> str:
+    """High-entropy opaque token for calendar subscription URLs (~192 bits)."""
+    return secrets.token_urlsafe(24)
+
+
 def _init_db() -> None:
     """Create tables if they don't already exist, and run lightweight migrations."""
     if engine is None:
@@ -633,6 +653,9 @@ def _migrate_token(old_token: str, new_token: str) -> None:
                 {"user_token": new_token}, synchronize_session=False
             )
             session.query(Alarm).filter(Alarm.user_token == old_token).update(
+                {"user_token": new_token}, synchronize_session=False
+            )
+            session.query(CalendarSubscriptionDB).filter_by(user_token=old_token).update(
                 {"user_token": new_token}, synchronize_session=False
             )
             # UserPreferenceDB has user_token as primary key — update via raw SQL.
