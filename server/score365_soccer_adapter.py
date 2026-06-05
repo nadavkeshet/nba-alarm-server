@@ -187,6 +187,18 @@ def soccer_game_detail(game_id: int) -> dict:
         return get_game_detail(c, game_id)
 
 
+def soccer_game_stats(game_id: int) -> list[dict]:
+    """Per-team match statistics for a football game.
+
+    365scores serves stats from a SEPARATE endpoint (`/game/stats/`), not inline
+    in `/game/`. Returns the flat `statistics` list — each item is one stat for
+    one team: `{id, name, competitorId, value, valuePercentage, ...}`. Empty
+    list when the game has no stats. Best-effort: caller guards exceptions."""
+    with Client365() as c:
+        data = c.get("/game/stats/", params={"games": str(game_id)})
+    return data.get("statistics") or []
+
+
 def soccer_competitions() -> list[dict]:
     """Get the full list of football competitions on 365scores.
 

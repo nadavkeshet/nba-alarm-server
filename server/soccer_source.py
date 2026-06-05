@@ -1207,7 +1207,9 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
             return out
 
     if source == "s365":
-        from score365_soccer_adapter import soccer_game_detail, league_slug_for_competition_id
+        from score365_soccer_adapter import (
+            soccer_game_detail, soccer_game_stats, league_slug_for_competition_id,
+        )
         try:
             raw = soccer_game_detail(int(native))
             if not raw:
@@ -1219,6 +1221,25 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
             out["shotmap"] = []
             out["xg_per_minute"] = []
             out["momentum"] = []
+            # Team statistics live behind a separate 365 endpoint — normalize the
+            # full per-team table so the iOS Statistics tab is as complete as a
+            # BSD/Sofascore match instead of nearly empty. Best-effort.
+            try:
+                if raw.get("hasStats"):
+                    raw_stats = soccer_game_stats(int(native))
+                    hid = (raw.get("homeCompetitor") or {}).get("id")
+                    aid = (raw.get("awayCompetitor") or {}).get("id")
+                    norm = _normalize_365_statistics(raw_stats, hid, aid)
+                    if norm:
+                        out["stats"] = norm
+                        hxg = (norm.get("home") or {}).get("expected_goals")
+                        axg = (norm.get("away") or {}).get("expected_goals")
+                        if hxg is not None:
+                            out["home"]["xg"] = hxg
+                        if axg is not None:
+                            out["away"]["xg"] = axg
+            except Exception as exc:
+                logger.warning("s365 stats failed for %s: %s", canonical, exc)
             return out
         except Exception as exc:
             logger.warning("s365 game_detail failed for %s: %s", canonical, exc)
@@ -1376,6 +1397,93 @@ def _sofa_stat_float(value: Any) -> float | None:
         return float(str(value).strip())
     except (ValueError, TypeError):
         return None
+
+
+# 365scores football stat NAME (English, lower-cased) → canonical TeamStats
+# field + value kind. Mapped by name (stable in English) rather than numeric id,
+# since the id set varies by league and some ids overlap across stat types.
+_S365_STAT_NAME_MAP: dict[str, tuple[str, str]] = {
+    "ball possession":          ("ball_possession",        "pct"),
+    "possession":               ("ball_possession",        "pct"),
+    "expected goals":           ("expected_goals",         "float"),
+    "expected goals (xg)":      ("expected_goals",         "float"),
+    "total shots":              ("total_shots",            "int"),
+    "shots":                    ("total_shots",            "int"),
+    "shots on target":          ("shots_on_target",        "int"),
+    "shots on goal":            ("shots_on_target",        "int"),
+    "blocked shots":            ("blocked_shots",          "int"),
+    "big chances":              ("big_chances",            "int"),
+    "big chances created":      ("big_chances",            "int"),
+    "big chances missed":       ("big_chances_missed",     "int"),
+    "big chances scored":       ("big_chances_scored",     "int"),
+    "corners":                  ("corner_kicks",           "int"),
+    "corner kicks":             ("corner_kicks",           "int"),
+    "fouls":                    ("fouls",                  "int"),
+    "offsides":                 ("offsides",               "int"),
+    "yellow cards":             ("yellow_cards",           "int"),
+    "red cards":                ("red_cards",              "int"),
+    "accurate passes":          ("accurate_passes",        "int"),
+    "passes completed":         ("accurate_passes",        "int"),
+    "total passes":             ("total_passes",           "int"),
+    "passes":                   ("total_passes",           "int"),
+    "goalkeeper saves":         ("goalkeeper_saves",       "int"),
+    "saves":                    ("goalkeeper_saves",       "int"),
+    "touches in penalty area":  ("touches_in_penalty_area", "int"),
+    "touches in opposition box": ("touches_in_penalty_area", "int"),
+}
+
+
+def _normalize_365_statistics(stats: list, home_id, away_id) -> dict | None:
+    """Translate a 365scores `/game/stats/` statistics list into the canonical
+    `{home, away}` TeamStats shape iOS expects. Each 365 item carries a
+    `competitorId`, so we bucket per side. Returns None when nothing usable."""
+    if not stats:
+        return None
+    home: dict[str, Any] = {}
+    away: dict[str, Any] = {}
+    # Captured for the total_shots fallback (inside + outside the box) when the
+    # league doesn't expose a single "Total Shots" stat.
+    box = {"home": [None, None], "away": [None, None]}  # [inside, outside]
+    found = False
+    hid, aid = str(home_id), str(away_id)
+    for s in stats:
+        if not isinstance(s, dict):
+            continue
+        cid = str(s.get("competitorId"))
+        if cid == hid:
+            side, sk = home, "home"
+        elif cid == aid:
+            side, sk = away, "away"
+        else:
+            continue
+        name = str(s.get("name") or "").strip().lower()
+        val = s.get("value")
+        if name == "shots inside the box":
+            box[sk][0] = _sofa_stat_int(val)
+        elif name == "shots outside the box":
+            box[sk][1] = _sofa_stat_int(val)
+        mapping = _S365_STAT_NAME_MAP.get(name)
+        if not mapping:
+            continue
+        field, kind = mapping
+        parsed = (_sofa_stat_pct(val) if kind == "pct"
+                  else _sofa_stat_float(val) if kind == "float"
+                  else _sofa_stat_int(val))
+        if parsed is not None:
+            side[field] = parsed
+            found = True
+    # total_shots fallback = inside + outside, when not given directly.
+    for sk, side in (("home", home), ("away", away)):
+        if side.get("total_shots") is None and any(v is not None for v in box[sk]):
+            side["total_shots"] = (box[sk][0] or 0) + (box[sk][1] or 0)
+            found = True
+    if not found:
+        return None
+    for side in (home, away):
+        acc, tot = side.get("accurate_passes"), side.get("total_passes")
+        if acc is not None and tot:
+            side["pass_accuracy_pct"] = round(acc / tot * 100, 1)
+    return {"home": home, "away": away}
 
 
 def _normalize_sofa_statistics(raw: dict | None) -> dict | None:
