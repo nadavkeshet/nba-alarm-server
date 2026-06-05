@@ -86,6 +86,9 @@ def test_all_scope_hits_every_catalog_slug(monkeypatch):
         bball_slugs.add(slug)
         return []
 
+    # The "all" scope's soccer prefetch uses the shared 365 allscores path
+    # (soccer_source._fetch_365), not per-league get_soccer_matches.
+    monkeypatch.setattr(soccer_source, "_fetch_365", lambda slug, date_iso: fake_soccer(slug, date_iso=date_iso))
     monkeypatch.setattr(soccer_source, "get_soccer_matches", fake_soccer)
     monkeypatch.setattr(basketball_source, "get_basketball_games", fake_bball)
 

@@ -158,7 +158,10 @@ def _prefetch_windows(soccer_slugs: list[str], bball_slugs: list[str], cache: di
         sport, slug, date_iso = task
         try:
             if sport == "soccer":
-                return (sport, slug, soccer_source.get_soccer_matches(slug, date_iso=date_iso) or [])
+                # Use 365's all-competitions day payload (shared + cached per date),
+                # so 14 leagues on one day = ONE download, not 14 BSD round-trips.
+                # Safe for "all" — 365 covers the same fixtures (incl. World Cup).
+                return (sport, slug, soccer_source._fetch_365(slug, date_iso) or [])
             return (sport, slug, basketball_source.get_basketball_games(slug, date_iso=date_iso) or [])
         except Exception as exc:
             logger.warning("calendar_scope: prefetch %s %s/%s failed: %s", sport, slug, date_iso, exc)
