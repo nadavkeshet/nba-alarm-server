@@ -304,3 +304,38 @@ def test_memoization_soccer_team_fetched_once(monkeypatch):
     cs.collect_matches(None, "custom", params, "tok")
 
     assert counter["n"] == 1
+
+
+# ── 8. non-BSD team → 365 league-window fallback ──────────────────────────────
+
+def test_team_matches_falls_back_to_365_league_window(monkeypatch):
+    import calendar_scope as cs, soccer_source
+    # BSD team-season empty (the Israeli-team bug)
+    monkeypatch.setattr(soccer_source, "get_team_season", lambda tid, league_slug=None, name=None: [])
+    # ligat_haal league window (365-covered) contains a Maccabi (id 130) match
+    def fake_league(slug, date_iso=None, tz=None):
+        if slug == "ligat_haal" and date_iso == cs._window_dates()[5]:
+            return [{"id": f"s365-{date_iso}", "competition": "ligat_haal",
+                     "kickoff": f"{date_iso}T18:00:00Z",
+                     "home": {"id": "130", "name": "Maccabi Tel Aviv"},
+                     "away": {"id": "999", "name": "X"}}]
+        return []
+    monkeypatch.setattr(soccer_source, "get_soccer_matches", fake_league)
+    out = cs._soccer_team_matches("130", {}, league="ligat_haal")
+    assert len(out) == 1 and out[0]["_sport"] == "soccer"
+    assert out[0]["home"]["id"] == "130"
+
+
+def test_custom_soccer_teams_with_league(monkeypatch):
+    import calendar_scope as cs, soccer_source
+    monkeypatch.setattr(soccer_source, "get_team_season", lambda tid, league_slug=None, name=None: [])
+    def fake_league(slug, date_iso=None, tz=None):
+        if slug == "ligat_haal" and date_iso == cs._window_dates()[3]:
+            return [{"id": f"s365-{date_iso}", "competition": "ligat_haal",
+                     "kickoff": f"{date_iso}T18:00:00Z",
+                     "home": {"id": "567", "name": "Hapoel TA"}, "away": {"id": "1", "name": "Y"}}]
+        return []
+    monkeypatch.setattr(soccer_source, "get_soccer_matches", fake_league)
+    out = cs.collect_matches(None, "custom",
+        {"custom_soccer_teams": [{"id": "567", "league": "ligat_haal"}]}, "tok")
+    assert any(m["home"]["id"] == "567" for m in out)

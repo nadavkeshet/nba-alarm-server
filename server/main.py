@@ -3834,7 +3834,8 @@ class CalendarSubscribeRequest(BaseModel):
     user_token: str
     scope: str
     include_players: bool = False
-    custom_soccer_team_ids: list[str] = []
+    custom_soccer_teams: list[dict] = []        # [{"id": "..", "league": ".."}]
+    custom_soccer_team_ids: list[str] = []      # legacy (no league), kept for back-compat
     custom_soccer_league_slugs: list[str] = []
     custom_bball_teams: list[dict] = []         # [{"id": "..", "league": ".."}]
     custom_bball_league_slugs: list[str] = []
@@ -3852,6 +3853,7 @@ def calendar_subscribe(req: CalendarSubscribeRequest):
         raise HTTPException(status_code=400, detail="invalid scope")
     params = {
         "include_players": req.include_players,
+        "custom_soccer_teams": req.custom_soccer_teams,
         "custom_soccer_team_ids": req.custom_soccer_team_ids,
         "custom_soccer_league_slugs": req.custom_soccer_league_slugs,
         "custom_bball_teams": req.custom_bball_teams,
