@@ -34,7 +34,7 @@ logger = logging.getLogger("nba_monitor")
 # surfaces as a misleading "insecure connection"). Fan the per-day fetches out
 # across a shared thread pool so a window resolves in a few seconds. The source
 # adapters are thread-safe (lock-guarded caches + thread-safe httpx clients).
-_FETCH_POOL = ThreadPoolExecutor(max_workers=16, thread_name_prefix="cal-fetch")
+_FETCH_POOL = ThreadPoolExecutor(max_workers=24, thread_name_prefix="cal-fetch")
 
 # Future-only window: today through +60 days. Past/finished games are excluded
 # (a subscription calendar is about upcoming fixtures), and +60d keeps the
@@ -138,6 +138,40 @@ def _bball_league_window(slug: str, cache: dict) -> list[dict]:
     tagged = _tag(_fetch_window(basketball_source.get_basketball_games, slug, "bball"), "basketball")
     cache[key] = tagged
     return tagged
+
+
+def _prefetch_windows(soccer_slugs: list[str], bball_slugs: list[str], cache: dict) -> None:
+    """Warm many league windows in ONE flat parallel batch (every league × every
+    day concurrent, not league-by-league). Used by the heavy "all" scope so a
+    cold render fans out fully instead of serializing ~19 leagues. Populates the
+    per-render `cache` so the window helpers then read it. Source adapters keep
+    their own caches, so already-downloaded days are instant."""
+    dates = _window_dates()
+    tasks = (
+        [("soccer", s, d) for s in soccer_slugs if ("soccer_league", s) not in cache for d in dates]
+        + [("bball", s, d) for s in bball_slugs if ("bball_league", s) not in cache for d in dates]
+    )
+    if not tasks:
+        return
+
+    def _one(task):
+        sport, slug, date_iso = task
+        try:
+            if sport == "soccer":
+                return (sport, slug, soccer_source.get_soccer_matches(slug, date_iso=date_iso) or [])
+            return (sport, slug, basketball_source.get_basketball_games(slug, date_iso=date_iso) or [])
+        except Exception as exc:
+            logger.warning("calendar_scope: prefetch %s %s/%s failed: %s", sport, slug, date_iso, exc)
+            return (sport, slug, [])
+
+    agg: dict[tuple[str, str], list[dict]] = {}
+    for sport, slug, res in _FETCH_POOL.map(_one, tasks):
+        agg.setdefault((sport, slug), []).extend(res)
+
+    for s in soccer_slugs:
+        cache.setdefault(("soccer_league", s), _tag(agg.get(("soccer", s), []), "soccer"))
+    for s in bball_slugs:
+        cache.setdefault(("bball_league", s), _tag(agg.get(("bball", s), []), "basketball"))
 
 
 def _soccer_team_matches(team_id, cache: dict, league: str | None = None) -> list[dict]:
@@ -329,9 +363,12 @@ def collect_matches(session, scope: str, params: dict, user_token: str) -> list[
         raw += _soccer_league_window("world_cup", cache)
 
     elif scope == "all":
-        for s in _all_soccer_slugs():
+        soccer_slugs, bball_slugs = _all_soccer_slugs(), _all_bball_slugs()
+        # Flat parallel warm-up so all leagues fetch concurrently (not serialized).
+        _prefetch_windows(soccer_slugs, bball_slugs, cache)
+        for s in soccer_slugs:
             raw += _soccer_league_window(s, cache)
-        for s in _all_bball_slugs():
+        for s in bball_slugs:
             raw += _bball_league_window(s, cache)
 
     elif scope == "custom":
