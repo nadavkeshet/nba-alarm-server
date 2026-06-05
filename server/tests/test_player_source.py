@@ -51,6 +51,26 @@ def test_soccer_detail_uses_latest_career_season():
     assert out["photo"].endswith("/img/player/9063/")
 
 
+def test_normalize_exposes_club_and_national_team():
+    out = ps.normalize_soccer_detail(
+        {"id": 594, "name": "Kylian Mbappé", "nationality": "France",
+         "position": "F", "jersey_number": 9},
+        {"seasons": [{"matches": 30, "goals": 25, "assists": 6, "avg_rating": 8.1}]},
+        player_id="594", team_name="Real Madrid",
+        current_team_id=57, national_team_id=485, national_team_name="France")
+    assert out["current_team_id"] == "57"
+    assert out["club_crest"] == "https://sports.bzzoiro.com/img/team/57/"
+    assert out["national_team_id"] == "485"
+    assert out["national_team_name"] == "France"
+    assert out["national_team_crest"] == "https://sports.bzzoiro.com/img/team/485/"
+    # Defaults: when no ids supplied, all new fields are None
+    out2 = ps.normalize_soccer_detail({"id": 1, "name": "X"}, None,
+                                      player_id="1", team_name=None)
+    assert out2["national_team_id"] is None and out2["club_crest"] is None
+    assert out2["current_team_id"] is None
+    assert out2["national_team_name"] is None and out2["national_team_crest"] is None
+
+
 def test_soccer_stats_resolves_opponent_from_events():
     stats = {"results": [
         {"event_id": 5131, "team_id": 293, "minutes_played": 73, "rating": 8.7,

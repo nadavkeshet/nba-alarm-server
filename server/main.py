@@ -3792,19 +3792,23 @@ def soccer_favorites_all(user_token: str = ""):
 
 @app.get("/soccer/player/{player_id}")
 def soccer_player(player_id: str):
-    """Normalized football player detail (bio + latest-season summary)."""
+    """Normalized football player detail (bio + latest-season summary), with
+    the player's current club and national team (ids + names) so the client
+    can link to both."""
     import bzzoiro_adapter as bz
     import player_source as ps
     detail = bz.player_detail(player_id)
     if not detail:
         raise HTTPException(status_code=404, detail="player not found")
     career = bz.player_career(player_id)
-    team_name = None
-    team_id = detail.get("current_team_id")
-    if team_id:
-        t = bz.team(team_id)
-        team_name = (t or {}).get("name")
-    return ps.normalize_soccer_detail(detail, career, player_id=player_id, team_name=team_name)
+    club_id = detail.get("current_team_id")
+    team_name = (bz.team(club_id) or {}).get("name") if club_id else None
+    nat_id = detail.get("national_team_id")
+    nat_name = (bz.team(nat_id) or {}).get("name") if nat_id else None
+    return ps.normalize_soccer_detail(
+        detail, career, player_id=player_id, team_name=team_name,
+        current_team_id=club_id,
+        national_team_id=nat_id, national_team_name=nat_name)
 
 
 @app.get("/soccer/player/{player_id}/stats")

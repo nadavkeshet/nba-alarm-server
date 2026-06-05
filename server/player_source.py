@@ -19,6 +19,11 @@ def basketball_photo_url(player_id) -> str:
     return _BASKETBALL_PHOTO.format(player_id)
 
 
+def _team_crest_url(team_id) -> str:
+    """BSD team crest (works for clubs and national teams alike)."""
+    return f"https://sports.bzzoiro.com/img/team/{team_id}/"
+
+
 def _jersey(raw_value) -> str | None:
     return str(raw_value) if raw_value not in (None, "") else None
 
@@ -69,7 +74,10 @@ def normalize_basketball_games(raw, *, limit: int = 10) -> list[dict]:
 
 
 def normalize_soccer_detail(detail: dict, career: dict | None, *, player_id: str,
-                            team_name: str | None) -> dict:
+                            team_name: str | None,
+                            current_team_id=None,
+                            national_team_id=None,
+                            national_team_name: str | None = None) -> dict:
     detail = detail or {}
     seasons = (career or {}).get("seasons") or []
     latest = seasons[0] if seasons else {}
@@ -79,6 +87,11 @@ def normalize_soccer_detail(detail: dict, career: dict | None, *, player_id: str
         "name": detail.get("name") or "",
         "sport": "football",
         "team_name": team_name,
+        "current_team_id": str(current_team_id) if current_team_id is not None else None,
+        "club_crest": _team_crest_url(current_team_id) if current_team_id is not None else None,
+        "national_team_id": str(national_team_id) if national_team_id is not None else None,
+        "national_team_name": national_team_name,
+        "national_team_crest": _team_crest_url(national_team_id) if national_team_id is not None else None,
         "position": detail.get("position"),
         "jersey": _jersey(detail.get("jersey_number")),
         "country": detail.get("nationality"),
