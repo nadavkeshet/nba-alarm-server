@@ -58,16 +58,31 @@ def test_late_drama_config_diff_zero_means_tied_only(monkeypatch):
 # ── match_moments ───────────────────────────────────────────────────────────
 def test_match_moments_fires_each_enabled_once(monkeypatch):
     sent = _wire_capture(monkeypatch)
-    a = _alarm("match_moments", {"kickoff": True, "halftime": True, "extra_time": False, "penalties": False})
+    a = _alarm("match_moments", {"kickoff": True, "halftime": True})
     sm._evaluate_alarm(a, _match(status="live"))          # kickoff
     sm._evaluate_alarm(a, _match(status="live"))          # dedup → no 2nd kickoff
     sm._evaluate_alarm(a, _match(status="ht"))            # halftime
     titles = [s["title"] for s in sent]
     assert sum("Kicking Off" in t for t in titles) == 1
     assert sum("Half-Time" in t for t in titles) == 1
-    # extra_time disabled → never fires even at et
-    sm._evaluate_alarm(a, _match(status="et"))
-    assert not any("Extra Time" in t for t in [s["title"] for s in sent])
+
+
+def test_match_moments_modular_disabled_event_is_suppressed(monkeypatch):
+    sent = _wire_capture(monkeypatch)
+    # Everything ON except goals → kickoff fires, the goal does NOT.
+    a = _alarm("match_moments", {"enabled": True, "kickoff": True, "goals": False})
+    sm._evaluate_alarm(a, _match(status="live", hs=1, as_=0))
+    titles = [s["title"] for s in sent]
+    assert any("Kicking Off" in t for t in titles)
+    assert not any("GOAL" in t.upper() or "גול" in t for t in titles)
+
+    # The inverse: goals ON, kickoff OFF → goal fires, kickoff does not.
+    sent2 = _wire_capture(monkeypatch)
+    b = _alarm("match_moments", {"enabled": True, "kickoff": False, "goals": True}, aid=2)
+    sm._evaluate_alarm(b, _match(status="live", hs=1, as_=0))
+    titles2 = [s["title"] for s in sent2]
+    assert any("GOAL" in t.upper() or "גול" in t for t in titles2)
+    assert not any("Kicking Off" in t for t in titles2)
 
 
 # ── match_moments full bundle ───────────────────────────────────────────────

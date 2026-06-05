@@ -45,13 +45,26 @@ def test_full_config_expands_to_every_enabled_criterion(monkeypatch):
     assert next(a for a in alarms if a["alarm_type"] == "sensation")["config"]["underdog_name"] == "Home"
 
 
-def test_match_moments_bundle_expands_with_reminder():
-    # New bundle shape: a single {enabled, reminder_minutes} — the live evaluator
-    # gates on `enabled`; the pre-match pass reads `reminder_minutes`.
+def test_match_moments_modular_expands_all_flags_default_on():
+    # Modular shape: each per-event flag passes through; flags absent from the
+    # follow config default ON in the expanded alarm.
     cfg = {"match_moments": {"enabled": True, "reminder_minutes": 30}}
     alarms = sm._expand_follow_criteria(_spec(cfg), "bsd-1", {})
     mm = next(a for a in alarms if a["alarm_type"] == "match_moments")
-    assert mm["config"] == {"enabled": True, "reminder_minutes": 30}
+    assert mm["config"] == {
+        "enabled": True, "kickoff": True, "goals": True, "halftime": True,
+        "second_half": True, "red_cards": True, "penalties": True,
+        "match_end": True, "lineups": True, "reminder_minutes": 30}
+
+
+def test_match_moments_modular_disabled_event_passes_through_false():
+    cfg = {"match_moments": {"enabled": True, "goals": False, "penalties": False,
+                             "reminder_minutes": 0}}
+    alarms = sm._expand_follow_criteria(_spec(cfg), "bsd-1", {})
+    mm = next(a for a in alarms if a["alarm_type"] == "match_moments")["config"]
+    assert mm["goals"] is False and mm["penalties"] is False
+    assert mm["kickoff"] is True and mm["red_cards"] is True   # absent → ON
+    assert mm["reminder_minutes"] == 0
 
 
 def test_disabled_criteria_are_omitted():

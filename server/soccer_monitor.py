@@ -466,11 +466,18 @@ def _expand_follow_criteria(spec: dict, cid: str, detail: dict) -> list[dict]:
                                          "last_minutes": ld.get("last_minutes", 15)}))
         mm = cfg.get("match_moments") or {}
         if mm.get("enabled"):
-            # Bundle = all events; only the pre-kickoff reminder is tunable.
-            # `reminder_minutes` is read by the pre-match pass; the live evaluator
-            # gates on `enabled`.
+            # Modular: pass every per-event flag through (each absent flag
+            # defaults ON in the evaluator). `reminder_minutes` + `lineups` are
+            # read by the pre-match pass; the live evaluator gates each moment on
+            # its own flag.
+            def _f(k: str) -> bool:
+                return bool(mm.get(k, True))
             out.append(mk("match_moments", {
                 "enabled": True,
+                "kickoff": _f("kickoff"), "goals": _f("goals"),
+                "halftime": _f("halftime"), "second_half": _f("second_half"),
+                "red_cards": _f("red_cards"), "penalties": _f("penalties"),
+                "match_end": _f("match_end"), "lineups": _f("lineups"),
                 "reminder_minutes": int(mm.get("reminder_minutes") or 0)}))
         cp = cfg.get("card_penalty") or {}
         if cp.get("enabled"):
@@ -651,8 +658,9 @@ def _prematch_team(spec: dict, team_id: str, league_slug: str | None,
             home, away, comp, signal="mm_reminder", one_shot=False,
         )
 
-    # ── Confirmed lineups: only poll inside the 90-min window to bound cost.
-    if 0 < secs_to_ko <= _LINEUP_WINDOW:
+    # ── Confirmed lineups: gated on its flag; only poll inside the 90-min
+    # window to bound cost. (Flag absent → ON, for legacy configs.)
+    if bool(cfg.get("lineups", True)) and 0 < secs_to_ko <= _LINEUP_WINDOW:
         if _fetch_lineup_status(cid) == "confirmed":
             _fire(
                 alarm, "soccer_lineups", t_soccer_body_lineups,
@@ -707,55 +715,60 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
         return
 
     if alarm_type == "match_moments":
-        # Full standard event bundle. When the bundle is enabled, EVERY moment
-        # fires (the legacy per-event sub-flags — kickoff/halftime/extra_time/
-        # penalties — are ignored). Each moment carries a STATE-ENCODED dedup
-        # signal so it fires exactly once regardless of which tick catches it;
-        # one_shot=False keeps the row alive for later moments. Works identically
-        # for BSD- and 365/Sofascore-sourced matches (same normalized shape).
+        # Modular event set — each moment is gated on its OWN config flag
+        # (kickoff / goals / halftime / second_half / red_cards / penalties /
+        # match_end). A flag absent from config defaults to ON, so legacy configs
+        # that only carry `enabled` still fire every moment. Each moment carries a
+        # STATE-ENCODED dedup signal so it fires exactly once regardless of which
+        # tick catches it; one_shot=False keeps the row alive for later moments.
+        # Works identically for BSD- and 365/Sofascore-sourced matches.
         cfg = alarm.get("config") or {}
         if not cfg.get("enabled", True):
             return
+        def want(flag: str) -> bool:
+            return bool(cfg.get(flag, True))
         minute = match.get("minute") or 0
         period = match.get("period")
         home_score = (match.get("home") or {}).get("score") or 0
         away_score = (match.get("away") or {}).get("score") or 0
 
         # Kickoff — first live tick (status live with period 1h, or period 1h).
-        if status in ("live", "1h") or period == "1h":
+        if want("kickoff") and (status in ("live", "1h") or period == "1h"):
             _fire(alarm, "soccer_kickoff", t_soccer_body_kickoff,
                   home_name, away_name, competition, signal="mm_kickoff", one_shot=False)
         # Goals — dedup per scoreline so each distinct goal fires exactly once.
-        if (home_score + away_score) > 0 and status not in ("scheduled", None):
+        if want("goals") and (home_score + away_score) > 0 and status not in ("scheduled", None):
             _fire(alarm, "soccer_goal",
                   lambda h, a, c, lang: t_soccer_body_goal(h, a, c, home_score, away_score, lang),
                   home_name, away_name, competition,
                   signal=f"mm_goal_{home_score}-{away_score}", one_shot=False)
         # Half-time start.
-        if status == "ht" or period == "ht":
+        if want("halftime") and (status == "ht" or period == "ht"):
             _fire(alarm, "soccer_halftime", t_soccer_body_halftime,
                   home_name, away_name, competition, signal="mm_ht", one_shot=False)
         # Second-half kickoff (HT end).
-        if period == "2h" or (status == "live" and minute >= 46):
+        if want("second_half") and (period == "2h" or (status == "live" and minute >= 46)):
             _fire(alarm, "soccer_second_half", t_soccer_body_second_half,
                   home_name, away_name, competition, signal="mm_2h", one_shot=False)
         # Red card — dedup by the incident minute (mirrors card_penalty).
-        red = _find_recent_red_card(match)
-        if red:
-            rmin = red.get("minute") or 0
-            _fire(alarm, "soccer_red_card",
-                  lambda h, a, c, lang: t_soccer_body_red_card(h, a, c, rmin, lang),
-                  home_name, away_name, competition, signal=f"mm_red_{rmin}", one_shot=False)
+        if want("red_cards"):
+            red = _find_recent_red_card(match)
+            if red:
+                rmin = red.get("minute") or 0
+                _fire(alarm, "soccer_red_card",
+                      lambda h, a, c, lang: t_soccer_body_red_card(h, a, c, rmin, lang),
+                      home_name, away_name, competition, signal=f"mm_red_{rmin}", one_shot=False)
         # Penalty awarded — dedup by the penalty INCIDENT's minute (stable),
         # NOT the live clock which advances every tick.
-        pen_min = _recent_penalty_minute(match)
-        if pen_min is not None:
-            _fire(alarm, "soccer_penalty", t_soccer_body_penalty,
-                  home_name, away_name, competition, signal=f"mm_pen_{pen_min}", one_shot=False)
+        if want("penalties"):
+            pen_min = _recent_penalty_minute(match)
+            if pen_min is not None:
+                _fire(alarm, "soccer_penalty", t_soccer_body_penalty,
+                      home_name, away_name, competition, signal=f"mm_pen_{pen_min}", one_shot=False)
         # Match end — MUST fire before the terminal-status sweep deactivates the
         # row. _tick special-cases match_moments alarms so this still runs on the
         # ft tick (see _tick's terminal handling).
-        if status in ("ft", "aet", "ap"):
+        if want("match_end") and status in ("ft", "aet", "ap"):
             _fire(alarm, "soccer_match_end",
                   lambda h, a, c, lang: t_soccer_body_match_end(h, a, c, home_score, away_score, lang),
                   home_name, away_name, competition, signal="mm_ft", one_shot=False)
