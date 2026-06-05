@@ -522,3 +522,210 @@ def t_soccer_body_reminder(home: str, away: str, competition: str,
     if lang == "he":
         return f"{m} מתחיל בעוד {minutes} דקות · {comp}"
     return f"{m} starts in {minutes} min · {comp}"
+
+
+# ---------------------------------------------------------------------------
+# Soccer "Historic Moments" (see soccer_historic.py)
+# ---------------------------------------------------------------------------
+#
+# One bilingual (title, body) template per category key in
+# soccer_historic.CATEGORY_KEYS. Bodies pull from a `params` dict; every lookup
+# uses params.get(...) so a missing field degrades to "" rather than KeyError.
+
+def _shist_ctx(params: dict, lang: str) -> dict:
+    """Common derived fields used by the templates."""
+    p = params or {}
+    comp = soccer_competition_name(str(p.get("competition") or ""), lang)
+    return {
+        "player": p.get("player") or "",
+        "team": p.get("team") or "",
+        "opp": p.get("opp") or "",
+        "home_name": p.get("home_name") or "",
+        "away_name": p.get("away_name") or "",
+        "home": p.get("home_score", p.get("home", 0)),
+        "away": p.get("away_score", p.get("away", 0)),
+        "minute": p.get("minute", 0),
+        "count": p.get("count", 0),
+        "total": p.get("total", 0),
+        "margin": p.get("margin", 0),
+        "assists": p.get("assists", 0),
+        "goals": p.get("goals", 0),
+        "comp": comp,
+    }
+
+
+def t_shist(category: str, lang: str, params: dict) -> tuple[str, str]:
+    """Return (title, body) for a soccer historic-moment category in 'en'/'he'."""
+    lang = "he" if lang == "he" else "en"
+    c = _shist_ctx(params, lang)
+    he = lang == "he"
+
+    # vs-line: "Home-Away vs Opp" — built per language for RTL friendliness.
+    def score():
+        return f"{c['home']}-{c['away']}"
+
+    if category == "hat_trick":
+        if he:
+            return ("🎩 שלושער!",
+                    f"{c['player']} עשה שלושער עבור {c['team']}! {score()} מול {c['opp']} · {c['comp']}")
+        return ("🎩 Hat-Trick!",
+                f"{c['player']} has a hat-trick for {c['team']}! {score()} vs {c['opp']} · {c['comp']}")
+
+    if category == "poker":
+        if he:
+            return ("🃏 ארבעה שערים!",
+                    f"{c['player']} כבש 4 שערים עבור {c['team']}! {score()} מול {c['opp']} · {c['comp']}")
+        return ("🃏 Four Goals!",
+                f"{c['player']} scores 4 for {c['team']}! {score()} vs {c['opp']} · {c['comp']}")
+
+    if category == "five_plus":
+        if he:
+            return ("🌟 ערב היסטורי!",
+                    f"{c['player']} כבש {c['count']} שערים עבור {c['team']}! {score()} · {c['comp']}")
+        return ("🌟 Historic Haul!",
+                f"{c['player']} scores {c['count']} for {c['team']}! {score()} · {c['comp']}")
+
+    if category == "fast_hat_trick":
+        if he:
+            return ("⚡ שלושער מהיר!",
+                    f"{c['player']} עשה שלושער בזק עבור {c['team']}! {score()} מול {c['opp']} · {c['comp']}")
+        return ("⚡ Lightning Hat-Trick!",
+                f"{c['player']} fires a rapid hat-trick for {c['team']}! {score()} vs {c['opp']} · {c['comp']}")
+
+    if category == "penalty_hat_trick":
+        if he:
+            return ("🎯 שלושער פנדלים!",
+                    f"{c['player']} כבש {c['count']} פנדלים עבור {c['team']}! {score()} · {c['comp']}")
+        return ("🎯 Penalty Hat-Trick!",
+                f"{c['player']} converts {c['count']} penalties for {c['team']}! {score()} · {c['comp']}")
+
+    if category == "goal_involvements":
+        if he:
+            return ("🔗 מעורבות מלאה!",
+                    f"{c['player']} עם {c['goals']} שערים ו-{c['assists']} בישולים עבור {c['team']}! {c['comp']}")
+        return ("🔗 Total Influence!",
+                f"{c['player']}: {c['goals']} goals & {c['assists']} assists for {c['team']}! {c['comp']}")
+
+    if category == "rout":
+        if he:
+            return ("💥 מחיקה!",
+                    f"הפרש של {c['margin']} שערים! {c['home_name']} {score()} {c['away_name']} · {c['comp']}")
+        return ("💥 Total Rout!",
+                f"A {c['margin']}-goal margin! {c['home_name']} {score()} {c['away_name']} · {c['comp']}")
+
+    if category == "goal_feast":
+        if he:
+            return ("🍿 חגיגת שערים!",
+                    f"{c['total']} שערים במשחק! {c['home_name']} {score()} {c['away_name']} · {c['comp']}")
+        return ("🍿 Goal Feast!",
+                f"{c['total']} goals in this match! {c['home_name']} {score()} {c['away_name']} · {c['comp']}")
+
+    if category == "end_to_end":
+        if he:
+            return ("🔄 משחק פתוח!",
+                    f"שני הצדדים כבשו 3+! {c['home_name']} {score()} {c['away_name']} · {c['comp']}")
+        return ("🔄 End to End!",
+                f"Both sides hit 3+! {c['home_name']} {score()} {c['away_name']} · {c['comp']}")
+
+    if category == "goal_blitz":
+        if he:
+            return ("🔥 מטח שערים!",
+                    f"3 שערים בתוך דקות! {c['home_name']} {score()} {c['away_name']} · דקה {c['minute']} · {c['comp']}")
+        return ("🔥 Goal Blitz!",
+                f"3 goals in minutes! {c['home_name']} {score()} {c['away_name']} · {c['minute']}' · {c['comp']}")
+
+    if category == "lightning_goal":
+        if he:
+            return ("⚡ שער בזק!",
+                    f"{c['player']} כבש בדקה {c['minute']} עבור {c['team']}! {score()} · {c['comp']}")
+        return ("⚡ Lightning Goal!",
+                f"{c['player']} scores in minute {c['minute']} for {c['team']}! {score()} · {c['comp']}")
+
+    if category == "last_gasp_winner":
+        if he:
+            return ("⏱️ שער ניצחון בסיום!",
+                    f"{c['player']} כבש בדקה {c['minute']} והפך את התוצאה ל-{c['team']}! {score()} מול {c['opp']} · {c['comp']}")
+        return ("⏱️ Last-Gasp Winner!",
+                f"{c['player']} strikes in the {c['minute']}' to put {c['team']} ahead! {score()} vs {c['opp']} · {c['comp']}")
+
+    if category == "historic_comeback":
+        if he:
+            return ("🔙 קאמבק היסטורי!",
+                    f"{c['team']} חזרו מפיגור של 3+ שערים! {c['home_name']} {score()} {c['away_name']} · {c['comp']}")
+        return ("🔙 Historic Comeback!",
+                f"{c['team']} battle back from 3+ down! {c['home_name']} {score()} {c['away_name']} · {c['comp']}")
+
+    if category == "early_red":
+        if he:
+            return ("🟥 אדום מוקדם!",
+                    f"{c['player']} ({c['team']}) קיבל כרטיס אדום בדקה {c['minute']}! {c['comp']}")
+        return ("🟥 Early Red!",
+                f"{c['player']} ({c['team']}) sent off in minute {c['minute']}! {c['comp']}")
+
+    if category == "mass_red_cards":
+        if he:
+            return ("🟥 כאוס כרטיסים אדומים!",
+                    f"{c['count']} כרטיסים אדומים במשחק! {c['home_name']} {score()} {c['away_name']} · {c['comp']}")
+        return ("🟥 Red-Card Chaos!",
+                f"{c['count']} red cards in this match! {c['home_name']} {score()} {c['away_name']} · {c['comp']}")
+
+    if category == "penalty_barrage":
+        if he:
+            return ("🎯 מטר פנדלים!",
+                    f"{c['count']} פנדלים נפסקו במשחק! {c['home_name']} {score()} {c['away_name']} · {c['comp']}")
+        return ("🎯 Penalty Barrage!",
+                f"{c['count']} penalties awarded in this match! {c['home_name']} {score()} {c['away_name']} · {c['comp']}")
+
+    if category == "stoppage_penalty":
+        if he:
+            return ("⏱️ פנדל בתוספת הזמן!",
+                    f"{c['player']} כבש פנדל בדקה {c['minute']} עבור {c['team']}! {score()} · {c['comp']}")
+        return ("⏱️ Stoppage-Time Penalty!",
+                f"{c['player']} converts a penalty in the {c['minute']}' for {c['team']}! {score()} · {c['comp']}")
+
+    if category == "own_goal":
+        if he:
+            return ("😬 שער עצמי!",
+                    f"{c['player']} ({c['team']}) כבש שער עצמי בדקה {c['minute']}! {score()} · {c['comp']}")
+        return ("😬 Own Goal!",
+                f"{c['player']} ({c['team']}) turns it into his own net in the {c['minute']}'! {score()} · {c['comp']}")
+
+    if category == "multiple_own_goals":
+        if he:
+            return ("😬 ריבוי שערים עצמיים!",
+                    f"{c['count']} שערים עצמיים במשחק! {c['home_name']} {score()} {c['away_name']} · {c['comp']}")
+        return ("😬 Own-Goal Madness!",
+                f"{c['count']} own goals in this match! {c['home_name']} {score()} {c['away_name']} · {c['comp']}")
+
+    if category == "goalkeeper_goal":
+        if he:
+            return ("🥅 שוער כובש!",
+                    f"השוער {c['player']} כבש עבור {c['team']}! {score()} · {c['comp']}")
+        return ("🥅 Keeper Goal!",
+                f"Goalkeeper {c['player']} scores for {c['team']}! {score()} · {c['comp']}")
+
+    if category == "defender_brace":
+        if he:
+            return ("🛡️ צמד של בלם!",
+                    f"הבלם {c['player']} כבש {c['count']} שערים עבור {c['team']}! {score()} · {c['comp']}")
+        return ("🛡️ Defender's Brace!",
+                f"Defender {c['player']} bags {c['count']} for {c['team']}! {score()} · {c['comp']}")
+
+    if category == "marathon_shootout":
+        if he:
+            return ("🥵 דו-קרב פנדלים מרתוני!",
+                    f"הכרעת הפנדלים הגיעה למוות פתאומי — {c['count']} בעיטות! {c['home_name']} מול {c['away_name']} · {c['comp']}")
+        return ("🥵 Marathon Shootout!",
+                f"The shootout reaches sudden death — {c['count']} kicks! {c['home_name']} vs {c['away_name']} · {c['comp']}")
+
+    if category == "shootout_decided":
+        if he:
+            return ("🎲 הוכרע בפנדלים!",
+                    f"המשחק הוכרע בדו-קרב פנדלים! {c['home_name']} מול {c['away_name']} · {c['comp']}")
+        return ("🎲 Decided on Penalties!",
+                f"The match is settled in a shootout! {c['home_name']} vs {c['away_name']} · {c['comp']}")
+
+    # Unknown category — degrade gracefully.
+    if he:
+        return ("⚽ רגע היסטורי", f"{c['home_name']} מול {c['away_name']} · {c['comp']}")
+    return ("⚽ Historic Moment", f"{c['home_name']} vs {c['away_name']} · {c['comp']}")

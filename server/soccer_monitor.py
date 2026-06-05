@@ -59,7 +59,9 @@ from i18n import (
     t_soccer_body_player_hattrick,
     t_soccer_body_player_yellow,
     t_soccer_body_player_red,
+    t_shist,
 )
+import soccer_historic
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +74,7 @@ _db_engine: Any = None
 _alarm_model: Any = None  # SoccerAlarmDB class — injected to avoid circular import
 _comp_follow_model: Any = None  # SoccerFavoriteCompetitionDB — followed leagues
 _team_follow_model: Any = None  # SoccerFavoriteTeamDB — followed teams
+_soccer_historic_model: Any = None  # SoccerHistoricPrefDB — per-user historic config
 
 POLL_INTERVAL = 25.0  # seconds
 
@@ -107,10 +110,11 @@ def wire(
     alarm_model: Any,
     comp_follow_model: Any = None,
     team_follow_model: Any = None,
+    soccer_historic_model: Any = None,
 ) -> None:
     """Called once by main.py during startup to inject runtime dependencies."""
     global _send_push, _get_user_language, _fire_once_fn, _db_engine, _alarm_model
-    global _comp_follow_model, _team_follow_model
+    global _comp_follow_model, _team_follow_model, _soccer_historic_model
     _send_push = send_push
     _get_user_language = get_user_language
     _fire_once_fn = fire_once
@@ -118,6 +122,7 @@ def wire(
     _alarm_model = alarm_model
     _comp_follow_model = comp_follow_model
     _team_follow_model = team_follow_model
+    _soccer_historic_model = soccer_historic_model
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +316,14 @@ def _tick() -> None:
             if slug:
                 specs_by_comp[slug].append(spec)
 
-    for comp_slug in set(drama_by_comp) | set(specs_by_comp):
+    # Football Historic Moments: also iterate comps that historic-enabled users
+    # follow (even via silent / just-follow favorites, which specs_by_comp omits).
+    hist_cfgs, hist_follows = _load_historic_state()
+    hist_comps: set[str] = set()
+    for _u in hist_cfgs:
+        hist_comps |= hist_follows.get(_u, {}).get("comps", set())
+
+    for comp_slug in set(drama_by_comp) | set(specs_by_comp) | hist_comps:
         try:
             live_matches = ss.get_live_matches([comp_slug])
         except Exception as exc:
@@ -356,6 +368,13 @@ def _tick() -> None:
                     except Exception as exc:
                         logger.exception("follow %s criterion %s eval failed: %s",
                                          spec["id"], alarm["alarm_type"], exc)
+
+            # Football Historic Moments for everyone following this match.
+            if hist_cfgs:
+                try:
+                    _evaluate_historic(cid, detail, home_id, away_id, hist_cfgs, hist_follows)
+                except Exception as exc:
+                    logger.exception("historic eval failed for %s: %s", cid, exc)
 
     # ── Pre-match pass: reminders + confirmed lineups for favorite teams.
     # Self-throttled (~60s); best-effort so a failure never aborts the tick.
@@ -421,6 +440,143 @@ def _load_follow_specs() -> list[dict]:
         except Exception as exc:
             logger.warning("team-follow load failed: %s", exc)
     return specs
+
+
+# ── Football Historic Moments ───────────────────────────────────────────────
+# Per-user opt-in "historic moment" alerts (hat-trick, rout, last-gasp winner,
+# mass red cards, …). Global per user — applies to every match they follow
+# (team or league), independent of the per-follow alarm criteria. Detection is
+# in soccer_historic.detect_historic; config + dedup are wired here.
+_HIST_INTERVAL = 60.0
+_hist_cfg_cache: dict[str, dict] = {}
+_hist_follows_cache: dict[str, dict] = {}
+_hist_cache_ts: float = 0.0
+
+
+def _load_historic_state() -> tuple[dict, dict]:
+    """(configs, follows) for users with historic enabled. `configs[user] =
+    {alert_type, categories}`. `follows[user] = {"comps": set, "teams": set}`,
+    INCLUDING silent / just-follow favorites (historic applies to any favorite,
+    not only alerting ones). Both throttled together (~60s)."""
+    global _hist_cfg_cache, _hist_follows_cache, _hist_cache_ts
+    now = time.monotonic()
+    if now - _hist_cache_ts < _HIST_INTERVAL and _hist_cache_ts > 0:
+        return _hist_cfg_cache, _hist_follows_cache
+    cfgs: dict[str, dict] = {}
+    follows: dict[str, dict] = {}
+    if _db_engine is not None and _soccer_historic_model is not None:
+        from sqlalchemy.orm import Session
+        try:
+            with Session(_db_engine) as session:
+                for r in session.query(_soccer_historic_model).filter(
+                        _soccer_historic_model.enabled.is_(True)).all():
+                    cfgs[r.user_token] = {
+                        "alert_type": r.alert_type or "silent",
+                        "categories": {k for k, v in (r.categories or {}).items() if v},
+                    }
+        except Exception as exc:
+            logger.warning("historic config load failed: %s", exc)
+        if cfgs:
+            def _bucket(token):
+                return follows.setdefault(token, {"comps": set(), "teams": set()})
+            try:
+                with Session(_db_engine) as session:
+                    if _comp_follow_model is not None:
+                        for f in session.query(_comp_follow_model).all():
+                            if f.user_token in cfgs and f.competition_id:
+                                _bucket(f.user_token)["comps"].add(f.competition_id)
+                    if _team_follow_model is not None:
+                        for f in session.query(_team_follow_model).all():
+                            if f.user_token not in cfgs:
+                                continue
+                            b = _bucket(f.user_token)
+                            b["comps"].update(c for c in (f.competitions or "").split(",") if c)
+                            if f.competition_id:
+                                b["comps"].add(f.competition_id)
+                            b["teams"].add(str(f.team_id))
+                            b["teams"].update(t for t in (f.alt_team_ids or "").split(",") if t)
+            except Exception as exc:
+                logger.warning("historic follow load failed: %s", exc)
+    _hist_cfg_cache, _hist_follows_cache, _hist_cache_ts = cfgs, follows, now
+    return cfgs, follows
+
+
+def _reset_historic_for_tests() -> None:
+    global _hist_cache_ts
+    _hist_cache_ts = 0.0
+
+
+def _historic_users_for_match(comp_slug: str, home_id: str, away_id: str,
+                              cfgs: dict, follows: dict) -> list[str]:
+    """Users (with historic enabled) who follow this match — via a league follow
+    on its competition or a team follow on either side."""
+    out = []
+    for user in cfgs:
+        f = follows.get(user)
+        if not f:
+            continue
+        if comp_slug in f["comps"] or home_id in f["teams"] or away_id in f["teams"]:
+            out.append(user)
+    return out
+
+
+def _evaluate_historic(cid: str, detail: dict, home_id: str, away_id: str,
+                       cfgs: dict, follows: dict) -> None:
+    """Detect historic moments once per match, fire each enabled category for
+    every following user. Dedup is per (user, match, moment) via a stable
+    `shist_{cid}` alarm id so two follows of the same match don't double-fire."""
+    users = _historic_users_for_match(comp_slug=detail.get("competition") or "",
+                                      home_id=home_id, away_id=away_id,
+                                      cfgs=cfgs, follows=follows)
+    if not users:
+        return
+    try:
+        moments = soccer_historic.detect_historic(detail)  # positions unavailable in radar loop
+    except Exception as exc:
+        logger.warning("historic detect failed for %s: %s", cid, exc)
+        return
+    if not moments:
+        return
+    home_name = (detail.get("home") or {}).get("name", "")
+    away_name = (detail.get("away") or {}).get("name", "")
+    competition = detail.get("competition", "")
+    for user in users:
+        cfg = cfgs[user]
+        enabled_cats = cfg["categories"]
+        alert_type = cfg["alert_type"]
+        for m in moments:
+            cat = m.get("category")
+            if cat not in enabled_cats:
+                continue
+            params = dict(m.get("params") or {})
+            params.setdefault("home", home_name)
+            params.setdefault("away", away_name)
+            params.setdefault("competition", competition)
+            dedup_key = f"soccer_shist_{cid}_{cat}_{m.get('dedup', cat)}"
+            _fire_historic(user, dedup_key, cat, params, alert_type)
+
+
+def _fire_historic(user_token: str, dedup_key: str, category: str,
+                   params: dict, alert_type: str) -> None:
+    if _send_push is None or _fire_once_fn is None:
+        return
+    if not _fire_once_fn(dedup_key, user_token):
+        return
+    lang = "en"
+    if _get_user_language is not None:
+        try:
+            lang = _get_user_language(user_token) or "en"
+        except Exception:
+            pass
+    try:
+        title, body = t_shist(category, lang, params)
+    except Exception as exc:
+        logger.warning("historic i18n failed for %s: %s", category, exc)
+        return
+    try:
+        _send_push(user_token, title, body, alert_type=alert_type)
+    except Exception as exc:
+        logger.warning("historic FCM send failed (%s): %s", category, exc)
 
 
 def _follow_side(spec: dict, detail: dict) -> str:

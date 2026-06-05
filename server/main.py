@@ -345,6 +345,20 @@ class CalendarSubscriptionDB(_Base):
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
+class SoccerHistoricPrefDB(_Base):
+    """Per-user "Football Historic Moments" config. Its own table (not extra
+    columns on user_preferences) so create_all provisions it with no ALTER, and
+    the per-category flags live in one JSONB blob — new moment types need no
+    schema change."""
+    __tablename__ = "soccer_historic_prefs"
+
+    user_token  = Column(String, primary_key=True)
+    enabled     = Column(Boolean, nullable=False, default=False)
+    alert_type  = Column(String,  nullable=False, default="silent")
+    categories  = Column(_JSONB,  nullable=False, default=dict)   # {category_key: bool}
+    updated_at  = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 def _mint_calendar_token() -> str:
     """High-entropy opaque token for calendar subscription URLs (~192 bits)."""
     return secrets.token_urlsafe(24)
@@ -673,6 +687,18 @@ def _migrate_token(old_token: str, new_token: str) -> None:
             session.query(CalendarSubscriptionDB).filter_by(user_token=old_token).update(
                 {"user_token": new_token}, synchronize_session=False
             )
+            # SoccerHistoricPrefDB also has user_token as PK — same raw-SQL +
+            # conflict handling as user_preferences below.
+            if session.get(SoccerHistoricPrefDB, new_token) is None:
+                session.execute(
+                    text("UPDATE soccer_historic_prefs SET user_token = :new WHERE user_token = :old"),
+                    {"new": new_token, "old": old_token},
+                )
+            else:
+                session.execute(
+                    text("DELETE FROM soccer_historic_prefs WHERE user_token = :old"),
+                    {"old": old_token},
+                )
             # UserPreferenceDB has user_token as primary key — update via raw SQL.
             # If new_token already has a prefs row (fresh install wrote one first),
             # the old orphaned row is deleted to avoid a PK conflict.
@@ -1507,6 +1533,7 @@ async def lifespan(_app: FastAPI):
             alarm_model=SoccerAlarmDB,
             comp_follow_model=SoccerFavoriteCompetitionDB,
             team_follow_model=SoccerFavoriteTeamDB,
+            soccer_historic_model=SoccerHistoricPrefDB,
         )
         soccer_monitor.start_soccer_radar()
         log.info("soccer radar wired and started")
@@ -1985,12 +2012,21 @@ def get_settings(user_token: str = ""):
                         "quad_double_threat": pref.hist_quad_double,
                     },
                 }
+            soc_hist_cfg = {"enabled": False, "alert_type": "silent", "categories": {}}
+            sh = session.get(SoccerHistoricPrefDB, user_token)
+            if sh:
+                soc_hist_cfg = {
+                    "enabled":    sh.enabled,
+                    "alert_type": sh.alert_type,
+                    "categories": sh.categories or {},
+                }
         return {
             "FavoritePlayers": fav_players,
             "FavoriteTeams":   fav_teams,
             "FavoriteLeagues": fav_leagues,
             "GlobalGameRadar": radar_cfg,
             "HistoricalMode":  hist_cfg,
+            "soccer_historic": soc_hist_cfg,
         }
     except Exception as exc:
         log.error("DB: /settings read error – %s", exc)
@@ -2305,6 +2341,38 @@ def update_historical(req: HistoricalSettings):
     if req.enabled:
         _maybe_start_radar()
     return {"status": "updated", "HistoricalMode": hist_mode}
+
+
+class SoccerHistoricSettings(BaseModel):
+    user_token: str = ""
+    enabled:    bool = False
+    alert_type: str = "silent"
+    categories: dict[str, bool] = {}
+
+
+@app.post("/settings/soccer-historic")
+def update_soccer_historic(req: SoccerHistoricSettings):
+    cats = {str(k): bool(v) for k, v in (req.categories or {}).items()}
+    if engine is not None and req.user_token:
+        try:
+            with Session(engine) as session:
+                row = session.get(SoccerHistoricPrefDB, req.user_token)
+                if row:
+                    row.enabled    = req.enabled
+                    row.alert_type = req.alert_type
+                    row.categories = cats
+                    row.updated_at = datetime.now(timezone.utc)
+                else:
+                    session.add(SoccerHistoricPrefDB(
+                        user_token=req.user_token, enabled=req.enabled,
+                        alert_type=req.alert_type, categories=cats,
+                    ))
+                session.commit()
+        except Exception as exc:
+            log.error("DB: update_soccer_historic failed – %s", exc)
+    return {"status": "updated", "soccer_historic": {
+        "enabled": req.enabled, "alert_type": req.alert_type, "categories": cats,
+    }}
 
 
 class GlobalThresholdsRequest(BaseModel):
