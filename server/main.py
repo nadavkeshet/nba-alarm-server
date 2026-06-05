@@ -3573,10 +3573,11 @@ def _resolve_national_team_for_player(
     country: Optional[str] = None,
     country_id: Optional[str] = None,
 ) -> Optional[str]:
-    """National-team id for a player. Prefers a client-supplied `country_id`,
-    then a `country` name, then the player's nationality from provider detail.
-    Returns None on anything unexpected — callers treat that as "no national
-    team to track", never as an error."""
+    """National-team id for a player. Resolution order: a client-supplied
+    `country_id`, then BSD's direct `national_team_id` from player detail, then
+    a nationality-name lookup (using `country` if supplied, else the player's
+    nationality). Returns None on anything unexpected — callers treat that as
+    "no national team to track", never as an error."""
     try:
         import national_team as nt
         if country_id:
