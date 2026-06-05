@@ -1072,9 +1072,22 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
             except Exception as exc:
                 logger.warning("s365 incidents failed for %s: %s", canonical, exc)
                 out["incidents"] = []
-            out["shotmap"] = []
-            out["xg_per_minute"] = []
-            out["momentum"] = []
+            # Shotmap + per-shot xG come inline in 365's `chartEvents` — this
+            # powers the pitch shotmap, the xG race, per-team xG, and (via the
+            # cumulative series) the retroactive drama timeline's xg_last_15.
+            shot_xg: tuple[float, float] | None = None
+            try:
+                out["shotmap"] = _normalize_365_shotmap(raw)
+                xg_per_minute, momentum, team_xg = _build_365_xg_timeline(out["shotmap"])
+                out["xg_per_minute"] = xg_per_minute
+                out["momentum"] = momentum
+                if out["shotmap"]:
+                    shot_xg = team_xg
+                    out["home"]["xg"] = team_xg[0]
+                    out["away"]["xg"] = team_xg[1]
+            except Exception as exc:
+                logger.warning("s365 shotmap failed for %s: %s", canonical, exc)
+                out["shotmap"], out["xg_per_minute"], out["momentum"] = [], [], []
             # Team statistics live behind a separate 365 endpoint — normalize the
             # full per-team table so the iOS Statistics tab is as complete as a
             # BSD match instead of nearly empty. Best-effort.
@@ -1086,12 +1099,15 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
                     norm = _normalize_365_statistics(raw_stats, hid, aid)
                     if norm:
                         out["stats"] = norm
-                        hxg = (norm.get("home") or {}).get("expected_goals")
-                        axg = (norm.get("away") or {}).get("expected_goals")
-                        if hxg is not None:
-                            out["home"]["xg"] = hxg
-                        if axg is not None:
-                            out["away"]["xg"] = axg
+                        # Prefer the shot-sum xG (matches the shotmap); fall back
+                        # to the stats-table expected_goals only when no shots.
+                        if shot_xg is None:
+                            hxg = (norm.get("home") or {}).get("expected_goals")
+                            axg = (norm.get("away") or {}).get("expected_goals")
+                            if hxg is not None:
+                                out["home"]["xg"] = hxg
+                            if axg is not None:
+                                out["away"]["xg"] = axg
             except Exception as exc:
                 logger.warning("s365 stats failed for %s: %s", canonical, exc)
             return out
@@ -1317,6 +1333,106 @@ def get_365_lineups(event_id: int) -> dict | None:
         logger.warning("365 lineups failed for %s: %s", event_id, exc)
         return None
     return _normalize_365_lineups(game or {})
+
+
+# 365 shot `outcome.name` → canonical shot type iOS speaks ('goal'/'miss'/'save'
+# /'block'). 365 has no separate woodwork bucket in this enum → treat as a miss.
+_365_SHOT_OUTCOME = {
+    "goal": "goal", "own goal": "goal",
+    "saved": "save", "blocked": "block",
+    "missed": "miss", "post": "miss", "woodwork": "miss",
+}
+
+
+def _365_shot_minute(t: Any) -> int | None:
+    """'6\\'' → 6, '90 + 1\\'' → 90, '45' → 45 (leading integer minute)."""
+    if t is None:
+        return None
+    digits = ""
+    for ch in str(t).strip():
+        if ch.isdigit():
+            digits += ch
+        else:
+            break
+    return int(digits) if digits else None
+
+
+def _normalize_365_shotmap(game: dict) -> list[dict]:
+    """Translate 365's `chartEvents.events` into the canonical shotmap shape iOS
+    speaks (same fields the BSD shotmap emits): one entry per shot with per-shot
+    xG / xGOT, outcome, body part, shooter, and a pitch `pos` {x,y} in 0–100.
+
+    365 coords: `side` = % up the pitch toward the ATTACKING goal (100 = goal
+    line), `line` = lateral position (50 = centre). iOS expects `pos.x` measured
+    from the attacking goal (0 = goal line) — so x = 100 - side — and `pos.y` =
+    lateral. iOS mirrors x per home/away to share one pitch."""
+    ce = (game.get("chartEvents") or {}).get("events") or []
+    home_num = 1  # 365 competitorNum: 1 = home, 2 = away
+    out: list[dict] = []
+    for s in ce:
+        if not isinstance(s, dict):
+            continue
+        comp = s.get("competitorNum")
+        is_home = (comp == home_num) if comp in (1, 2) else None
+        outcome_name = ((s.get("outcome") or {}).get("name") or "").strip().lower()
+        side = _stat_float(s.get("side"))
+        line = _stat_float(s.get("line"))
+        pos = None
+        if side is not None and line is not None:
+            pos = {"x": round(max(0.0, min(100.0, 100.0 - side)), 1),
+                   "y": round(max(0.0, min(100.0, line)), 1)}
+        out.append({
+            "min":       _365_shot_minute(s.get("time")),
+            "home":      is_home,
+            "type":      _365_SHOT_OUTCOME.get(outcome_name, "miss"),
+            "xg":        _stat_float(s.get("xg")),
+            "xgot":      _stat_float(s.get("xgot")),
+            "body":      s.get("bodyPart"),
+            "sit":       None,                 # 365 doesn't expose shot situation
+            "player_id": s.get("playerId"),
+            "pos":       pos,
+        })
+    out.sort(key=lambda z: (z.get("min") if z.get("min") is not None else 0))
+    return out
+
+
+def _build_365_xg_timeline(shotmap: list[dict]) -> tuple[list[dict], list[dict], tuple[float, float]]:
+    """From a normalized shotmap derive: (xg_per_minute cumulative series,
+    momentum pressure series, (home_total_xg, away_total_xg)).
+
+    - xg_per_minute: `[{m, cum_home, cum_away}]` (the shape the iOS xG-race reads).
+    - momentum: `[{m, v}]`, v ∈ [-1,1] (+ = home) — a rolling 5-min xG-share
+      pressure proxy, since 365 has no native momentum graph. Honest best-effort.
+    - team xG: the cumulative sum per side (matches the shotmap exactly)."""
+    per_min: dict[int, list[float]] = {}
+    for s in shotmap:
+        m = s.get("min")
+        if m is None:
+            continue
+        xg = s.get("xg") or 0.0
+        slot = per_min.setdefault(int(m), [0.0, 0.0])
+        if s.get("home") is True:
+            slot[0] += xg
+        elif s.get("home") is False:
+            slot[1] += xg
+
+    xg_per_minute: list[dict] = []
+    cum_h = cum_a = 0.0
+    for m in sorted(per_min):
+        cum_h += per_min[m][0]
+        cum_a += per_min[m][1]
+        xg_per_minute.append({"m": float(m), "cum_home": round(cum_h, 3), "cum_away": round(cum_a, 3)})
+
+    momentum: list[dict] = []
+    if per_min:
+        last = max(per_min)
+        for m in range(0, last + 1):
+            wh = sum(per_min.get(k, (0.0, 0.0))[0] for k in range(max(0, m - 4), m + 1))
+            wa = sum(per_min.get(k, (0.0, 0.0))[1] for k in range(max(0, m - 4), m + 1))
+            tot = wh + wa
+            momentum.append({"m": float(m), "v": round((wh - wa) / tot, 3) if tot > 0 else 0.0})
+
+    return xg_per_minute, momentum, (round(cum_h, 2), round(cum_a, 2))
 
 
 # Generic numeric stat-value parsers (used by _normalize_365_statistics). They

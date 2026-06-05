@@ -188,3 +188,50 @@ def test_lineups_home_away_names_positions_and_split():
 def test_lineups_none_when_empty():
     members = []
     assert ss._normalize_365_lineups(_game([], members)) is None
+
+
+# ── shotmap + xG timeline ────────────────────────────────────────────────────
+import soccer_source as _ss
+
+
+def _shot(comp, time, xg, side, line, outcome, body="Right Foot", xgot=0.0, pid=1):
+    return {"competitorNum": comp, "time": time, "xg": xg, "xgot": xgot,
+            "side": side, "line": line, "bodyPart": body, "playerId": pid,
+            "outcome": {"name": outcome}}
+
+
+def test_365_shotmap_maps_fields_and_coords():
+    game = {"homeCompetitor": {"id": 10}, "awayCompetitor": {"id": 20},
+            "chartEvents": {"events": [
+                _shot(1, "6'", "0.11", 90.5, 44.6, "Missed"),
+                _shot(2, "24'", "0.10", 82.2, 54.2, "Goal"),
+            ]}}
+    sm = _ss._normalize_365_shotmap(game)
+    assert len(sm) == 2
+    s0 = sm[0]
+    assert s0["home"] is True and s0["type"] == "miss" and s0["xg"] == 0.11
+    assert s0["min"] == 6 and s0["body"] == "Right Foot"
+    # x = 100 - side (0 = attacking goal); y = lateral line
+    assert s0["pos"] == {"x": 9.5, "y": 44.6}
+    s1 = sm[1]
+    assert s1["home"] is False and s1["type"] == "goal"
+
+
+def test_365_xg_timeline_and_team_totals():
+    game = {"homeCompetitor": {"id": 10}, "awayCompetitor": {"id": 20},
+            "chartEvents": {"events": [
+                _shot(1, "10'", "0.30", 88.0, 50.0, "Saved"),
+                _shot(2, "20'", "0.20", 85.0, 50.0, "Missed"),
+                _shot(1, "80'", "0.45", 92.0, 50.0, "Goal"),
+            ]}}
+    sm = _ss._normalize_365_shotmap(game)
+    xgpm, momentum, team_xg = _ss._build_365_xg_timeline(sm)
+    assert team_xg == (0.75, 0.20)                      # home 0.30+0.45, away 0.20
+    assert xgpm[-1]["cum_home"] == 0.75 and xgpm[-1]["cum_away"] == 0.20
+    # momentum is a signed [-1,1] series
+    assert all(-1.0 <= p["v"] <= 1.0 for p in momentum)
+
+
+def test_365_shotmap_empty_when_no_chart():
+    assert _ss._normalize_365_shotmap({"chartEvents": {}}) == []
+    assert _ss._build_365_xg_timeline([]) == ([], [], (0.0, 0.0))
