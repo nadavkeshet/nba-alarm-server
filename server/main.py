@@ -16,7 +16,7 @@ from epg import get_broadcasts_for_game, get_all_broadcasts
 from i18n import (t_title, t_body_game, t_body_period_start, t_body_scoring,
                   t_body_early_pts, t_body_triple_double, translate_game_name)
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
@@ -348,6 +348,21 @@ class CalendarSubscriptionDB(_Base):
 def _mint_calendar_token() -> str:
     """High-entropy opaque token for calendar subscription URLs (~192 bits)."""
     return secrets.token_urlsafe(24)
+
+
+# ─── Calendar subscription config + per-token ICS cache ─────────────────────
+import time as _time  # noqa: E402  (monotonic clock for the ICS TTL cache)
+_CAL_HOST = "clutchalarm.com"
+_ICS_CACHE: dict[str, tuple[float, str]] = {}   # token -> (expiry_monotonic, ics_text)
+_ICS_TTL = 300.0
+
+_CAL_SCOPES = {"favorites", "custom", "all", "world_cup"}
+_CAL_NAMES = {
+    "favorites": "Clutch Alarm – Favorites",
+    "custom":    "Clutch Alarm – Custom",
+    "all":       "Clutch Alarm – All Matches",
+    "world_cup": "Clutch Alarm – World Cup",
+}
 
 
 def _init_db() -> None:
@@ -3811,6 +3826,111 @@ def soccer_favorites_all(user_token: str = ""):
         "teams":        soccer_fav_teams_list(user_token=user_token)["teams"],
         "competitions": soccer_fav_competitions_list(user_token=user_token)["competitions"],
     }
+
+
+# ─── Calendar subscriptions (webcal/ICS) ────────────────────────────────────
+
+class CalendarSubscribeRequest(BaseModel):
+    user_token: str
+    scope: str
+    include_players: bool = False
+    custom_soccer_team_ids: list[str] = []
+    custom_soccer_league_slugs: list[str] = []
+    custom_bball_teams: list[dict] = []         # [{"id": "..", "league": ".."}]
+    custom_bball_league_slugs: list[str] = []
+
+
+class CalendarRevokeRequest(BaseModel):
+    user_token: str
+    token: str
+
+
+@app.post("/calendar/subscribe")
+def calendar_subscribe(req: CalendarSubscribeRequest):
+    _require_token(req.user_token)
+    if req.scope not in _CAL_SCOPES:
+        raise HTTPException(status_code=400, detail="invalid scope")
+    params = {
+        "include_players": req.include_players,
+        "custom_soccer_team_ids": req.custom_soccer_team_ids,
+        "custom_soccer_league_slugs": req.custom_soccer_league_slugs,
+        "custom_bball_teams": req.custom_bball_teams,
+        "custom_bball_league_slugs": req.custom_bball_league_slugs,
+    }
+    with Session(engine) as session:
+        # Reuse an existing non-revoked subscription for (user, scope); for custom,
+        # also require identical params so different custom sets get distinct tokens.
+        q = session.query(CalendarSubscriptionDB).filter_by(
+            user_token=req.user_token, scope=req.scope, revoked=False)
+        existing = None
+        for row in q.all():
+            if req.scope != "custom" or (row.params or {}) == params:
+                existing = row
+                break
+        if existing is not None:
+            existing.params = params
+            existing.updated_at = datetime.now(timezone.utc)
+            token = existing.token
+        else:
+            token = _mint_calendar_token()
+            session.add(CalendarSubscriptionDB(
+                token=token, user_token=req.user_token, scope=req.scope, params=params))
+        session.commit()
+    _ICS_CACHE.pop(token, None)   # bust cache on (re)subscribe
+    return {
+        "token": token,
+        "webcal_url": f"webcal://{_CAL_HOST}/cal/{token}.ics",
+        "https_url": f"https://{_CAL_HOST}/cal/{token}.ics",
+    }
+
+
+@app.get("/calendar/{token}.ics")
+def calendar_ics_feed(token: str):
+    import calendar_scope
+    import calendar_ics
+    cached = _ICS_CACHE.get(token)
+    if cached and cached[0] > _time.monotonic():
+        return Response(content=cached[1], media_type="text/calendar; charset=utf-8",
+                        headers={"Cache-Control": "public, max-age=300"})
+    with Session(engine) as session:
+        row = session.get(CalendarSubscriptionDB, token)
+        if row is None or row.revoked:
+            raise HTTPException(status_code=404, detail="calendar not found")
+        scope, params, user_token = row.scope, (row.params or {}), row.user_token
+        matches = calendar_scope.collect_matches(session, scope, params, user_token)
+    ics = calendar_ics.build_calendar(matches, cal_name=_CAL_NAMES.get(scope, "Clutch Alarm"))
+    _ICS_CACHE[token] = (_time.monotonic() + _ICS_TTL, ics)
+    return Response(content=ics, media_type="text/calendar; charset=utf-8",
+                    headers={"Cache-Control": "public, max-age=300"})
+
+
+@app.post("/calendar/revoke")
+def calendar_revoke(req: CalendarRevokeRequest):
+    _require_token(req.user_token)
+    with Session(engine) as session:
+        row = session.get(CalendarSubscriptionDB, req.token)
+        if row is None or row.user_token != req.user_token:
+            raise HTTPException(status_code=404, detail="subscription not found")
+        row.revoked = True
+        session.commit()
+    _ICS_CACHE.pop(req.token, None)
+    return {"status": "revoked", "token": req.token}
+
+
+@app.get("/calendar/subscriptions")
+def calendar_subscriptions(user_token: str = ""):
+    _require_token(user_token)
+    with Session(engine) as session:
+        rows = session.query(CalendarSubscriptionDB).filter_by(
+            user_token=user_token, revoked=False).order_by(
+            CalendarSubscriptionDB.created_at.desc()).all()
+        out = [{
+            "token": r.token, "scope": r.scope, "params": r.params or {},
+            "webcal_url": f"webcal://{_CAL_HOST}/cal/{r.token}.ics",
+            "https_url": f"https://{_CAL_HOST}/cal/{r.token}.ics",
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        } for r in rows]
+    return {"subscriptions": out}
 
 
 @app.get("/soccer/player/{player_id}")
