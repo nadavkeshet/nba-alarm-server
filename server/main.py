@@ -3581,11 +3581,15 @@ def _resolve_national_team_for_player(
         import national_team as nt
         if country_id:
             return str(country_id)
-        if country:
-            return nt.national_team_id(country)
         import bzzoiro_adapter as bz
         detail = bz.player_detail(player_id) or {}
-        return nt.national_team_id(detail.get("nationality"))
+        # BSD's direct national_team_id is the most reliable signal — prefer it.
+        direct = detail.get("national_team_id")
+        if direct is not None:
+            return str(direct)
+        # Fall back to a nationality-name lookup: covers players BSD leaves
+        # national_team_id null but whose nation is in a current competition.
+        return nt.national_team_id(country or detail.get("nationality"))
     except Exception as exc:
         log.warning("soccer fav player: national-team resolve failed (%s): %s",
                     player_id, exc)
