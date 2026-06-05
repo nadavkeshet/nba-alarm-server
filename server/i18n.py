@@ -161,6 +161,12 @@ _TITLES = {
         "soccer_hat_trick":    "⚽ Hat-Trick Watch",
         "soccer_big_chance":   "💥 Chances Pouring In",
         "soccer_drama_radar":  "⚡ Drama Brewing",
+        # Soccer match-moments (v3)
+        "soccer_goal":         "⚽ GOAL",
+        "soccer_second_half":  "Second half underway",
+        "soccer_match_end":    "Full-time",
+        "soccer_lineups":      "Lineups confirmed",
+        "soccer_reminder":     "Match starting soon",
         # Soccer player alerts
         "soccer_player_goal":     "⚽ Goal!",
         "soccer_player_clutch_goal": "⚽ Clutch Goal!",
@@ -194,6 +200,12 @@ _TITLES = {
         "soccer_hat_trick":    "⚽ מעקב האט-טריק",
         "soccer_big_chance":   "💥 הזדמנויות בכמויות",
         "soccer_drama_radar":  "⚡ דרמה בדרך",
+        # Soccer match-moments (v3)
+        "soccer_goal":         "⚽ גול",
+        "soccer_second_half":  "המחצית השנייה יצאה לדרך",
+        "soccer_match_end":    "סיום משחק",
+        "soccer_lineups":      "ההרכבים אושרו",
+        "soccer_reminder":     "המשחק עומד להתחיל",
         # Soccer player alerts
         "soccer_player_goal":     "⚽ שער!",
         "soccer_player_clutch_goal": "⚽ שער קריטי!",
@@ -465,3 +477,48 @@ def t_soccer_body_drama_radar(home: str, away: str, competition: str, drama: flo
     if lang == "he":
         return f"{m}\n{comp}{drama_tag} · שווה לפתוח את האפליקציה"
     return f"{m}\n{comp}{drama_tag} · worth opening the app"
+
+
+# ── Soccer match-moments (v3) ──────────────────────────────────────────────────
+# Unlike the spoiler-safe drama alerts above, match-moment alerts (goal, full-time)
+# DO reveal the scoreline — the user opted in to follow the match's flow.
+
+def t_soccer_body_goal(home: str, away: str, competition: str,
+                       home_score: int, away_score: int, lang: str) -> str:
+    comp = soccer_competition_name(competition, lang)
+    if lang == "he":
+        return f"גול! {home} {home_score}-{away_score} {away} · {comp}"
+    return f"GOAL! {home} {home_score}-{away_score} {away} · {comp}"
+
+
+def t_soccer_body_second_half(home: str, away: str, competition: str, lang: str) -> str:
+    m = soccer_match_label(home, away, lang)
+    comp = soccer_competition_name(competition, lang)
+    if lang == "he":
+        return f"{m}\n{comp} · המחצית השנייה יצאה לדרך"
+    return f"{m}\n{comp} · second half underway"
+
+
+def t_soccer_body_match_end(home: str, away: str, competition: str,
+                            home_score: int, away_score: int, lang: str) -> str:
+    comp = soccer_competition_name(competition, lang)
+    if lang == "he":
+        return f"סיום משחק: {home} {home_score}-{away_score} {away} · {comp}"
+    return f"Full-time: {home} {home_score}-{away_score} {away} · {comp}"
+
+
+def t_soccer_body_lineups(home: str, away: str, competition: str, lang: str) -> str:
+    m = soccer_match_label(home, away, lang)
+    comp = soccer_competition_name(competition, lang)
+    if lang == "he":
+        return f"ההרכבים אושרו — {m}\n{comp}"
+    return f"Confirmed lineups are out — {m}\n{comp}"
+
+
+def t_soccer_body_reminder(home: str, away: str, competition: str,
+                           minutes: int, lang: str) -> str:
+    m = soccer_match_label(home, away, lang)
+    comp = soccer_competition_name(competition, lang)
+    if lang == "he":
+        return f"{m} מתחיל בעוד {minutes} דקות · {comp}"
+    return f"{m} starts in {minutes} min · {comp}"
