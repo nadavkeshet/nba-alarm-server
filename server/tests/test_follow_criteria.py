@@ -45,6 +45,15 @@ def test_full_config_expands_to_every_enabled_criterion(monkeypatch):
     assert next(a for a in alarms if a["alarm_type"] == "sensation")["config"]["underdog_name"] == "Home"
 
 
+def test_match_moments_bundle_expands_with_reminder():
+    # New bundle shape: a single {enabled, reminder_minutes} — the live evaluator
+    # gates on `enabled`; the pre-match pass reads `reminder_minutes`.
+    cfg = {"match_moments": {"enabled": True, "reminder_minutes": 30}}
+    alarms = sm._expand_follow_criteria(_spec(cfg), "bsd-1", {})
+    mm = next(a for a in alarms if a["alarm_type"] == "match_moments")
+    assert mm["config"] == {"enabled": True, "reminder_minutes": 30}
+
+
 def test_disabled_criteria_are_omitted():
     cfg = {"drama_radar": {"enabled": False},
            "late_drama": {"enabled": True, "max_diff": 1, "last_minutes": 15}}
@@ -57,7 +66,8 @@ def test_legacy_no_config_falls_back_to_drama_and_kickoff():
         _spec(config=None, threshold=7.0, notify_at_kickoff=True), "bsd-1", {})
     types_ = {a["alarm_type"] for a in alarms}
     assert types_ == {"drama_radar", "match_moments"}
-    assert next(a for a in alarms if a["alarm_type"] == "match_moments")["config"] == {"kickoff": True}
+    assert next(a for a in alarms if a["alarm_type"] == "match_moments")["config"] == {
+        "enabled": True, "reminder_minutes": 0}
 
 
 def test_legacy_just_follow_threshold_99_emits_nothing():

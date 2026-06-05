@@ -466,9 +466,12 @@ def _expand_follow_criteria(spec: dict, cid: str, detail: dict) -> list[dict]:
                                          "last_minutes": ld.get("last_minutes", 15)}))
         mm = cfg.get("match_moments") or {}
         if mm.get("enabled"):
+            # Bundle = all events; only the pre-kickoff reminder is tunable.
+            # `reminder_minutes` is read by the pre-match pass; the live evaluator
+            # gates on `enabled`.
             out.append(mk("match_moments", {
-                "kickoff": bool(mm.get("kickoff")), "halftime": bool(mm.get("halftime")),
-                "extra_time": bool(mm.get("extra_time")), "penalties": bool(mm.get("penalties"))}))
+                "enabled": True,
+                "reminder_minutes": int(mm.get("reminder_minutes") or 0)}))
         cp = cfg.get("card_penalty") or {}
         if cp.get("enabled"):
             out.append(mk("card_penalty", {"red_card": bool(cp.get("red_card")),
@@ -495,7 +498,7 @@ def _expand_follow_criteria(spec: dict, cid: str, detail: dict) -> list[dict]:
         if thr is not None and thr < 90:
             out.append(mk("drama_radar", threshold=thr))
         if spec.get("notify_at_kickoff"):
-            out.append(mk("match_moments", {"kickoff": True}))
+            out.append(mk("match_moments", {"enabled": True, "reminder_minutes": 0}))
     return out
 
 
