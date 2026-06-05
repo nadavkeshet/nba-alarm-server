@@ -23,10 +23,26 @@ from datetime import datetime, timezone, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import functools
+
 import bzzoiro_adapter as bsd
 import sofascore_adapter as sofa
 import drama_engine
 import win_probability
+import team_names_he
+
+
+def _with_hebrew(fn):
+    """Stamp `name_he` onto the home/away teams of a normalized match dict, so
+    the iOS app can show Hebrew team names without shipping the big name file."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        out = fn(*args, **kwargs)
+        if isinstance(out, dict):
+            team_names_he.attach(out.get("home"))
+            team_names_he.attach(out.get("away"))
+        return out
+    return wrapper
 from score365_soccer_adapter import (
     BSD_COMPETITION_IDS,
     PRIMARY_SOURCE,
@@ -433,6 +449,7 @@ def _lightweight_drama(status, minute, hs, aw, hs_ht, aw_ht, h_xg, a_xg,
     return round(drama_engine.compute_drama(ctx).total, 2)
 
 
+@_with_hebrew
 def _from_bsd_event(event: dict, *, slug: str | None = None) -> dict:
     """Normalize a BSD /events/{id}/ payload (or list item) into SoccerMatch shape."""
     eid = event.get("id")
@@ -485,6 +502,7 @@ def _from_bsd_event(event: dict, *, slug: str | None = None) -> dict:
     }
 
 
+@_with_hebrew
 def _from_sofa_event(event: dict, *, slug: str | None = None) -> dict:
     """Normalize a Sofascore scheduled-event or event payload into SoccerMatch shape."""
     eid = event.get("id")
@@ -768,6 +786,7 @@ def _fetch_365(slug: str, date_iso: str) -> list[dict]:
     return [_from_365_game(g, slug=slug) for g in matched]
 
 
+@_with_hebrew
 def _from_365_game(game: dict, *, slug: str | None = None) -> dict:
     """Normalize a 365scores football game dict into SoccerMatch shape."""
     gid = game.get("id")
