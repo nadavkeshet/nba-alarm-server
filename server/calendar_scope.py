@@ -23,7 +23,18 @@ from datetime import datetime, timedelta, timezone
 import soccer_source
 import basketball_source
 
+from concurrent.futures import ThreadPoolExecutor
+
 logger = logging.getLogger("nba_monitor")
+
+# Per-(league, day) source fetches are blocking HTTP. A cold render of a
+# multi-league window (e.g. the "all" scope, or a basketball team with no known
+# league that scans every bball league) is hundreds of sequential fetches and
+# can take ~minute — long enough that iOS Calendar's subscribe times out (it
+# surfaces as a misleading "insecure connection"). Fan the per-day fetches out
+# across a shared thread pool so a window resolves in a few seconds. The source
+# adapters are thread-safe (lock-guarded caches + thread-safe httpx clients).
+_FETCH_POOL = ThreadPoolExecutor(max_workers=16, thread_name_prefix="cal-fetch")
 
 # Future-only window: today through +60 days. Past/finished games are excluded
 # (a subscription calendar is about upcoming fixtures), and +60d keeps the
@@ -93,17 +104,29 @@ def _tag(matches: list[dict], sport: str) -> list[dict]:
 
 # ── per-league / per-team windows (memoized via the per-render cache) ─────────
 
+def _fetch_window(fetcher, slug: str, label: str) -> list[dict]:
+    """Fan the per-day fetches for one league window out across the pool, in
+    parallel. `fetcher(slug, date_iso)` is a blocking source call."""
+    dates = _window_dates()
+
+    def _one(date_iso: str) -> list[dict]:
+        try:
+            return fetcher(slug, date_iso=date_iso) or []
+        except Exception as exc:
+            logger.warning("calendar_scope: %s %s/%s failed: %s", label, slug, date_iso, exc)
+            return []
+
+    out: list[dict] = []
+    for res in _FETCH_POOL.map(_one, dates):
+        out += res
+    return out
+
+
 def _soccer_league_window(slug: str, cache: dict) -> list[dict]:
     key = ("soccer_league", slug)
     if key in cache:
         return cache[key]
-    out: list[dict] = []
-    for date_iso in _window_dates():
-        try:
-            out += soccer_source.get_soccer_matches(slug, date_iso=date_iso)
-        except Exception as exc:
-            logger.warning("calendar_scope: soccer %s/%s failed: %s", slug, date_iso, exc)
-    tagged = _tag(out, "soccer")
+    tagged = _tag(_fetch_window(soccer_source.get_soccer_matches, slug, "soccer"), "soccer")
     cache[key] = tagged
     return tagged
 
@@ -112,13 +135,7 @@ def _bball_league_window(slug: str, cache: dict) -> list[dict]:
     key = ("bball_league", slug)
     if key in cache:
         return cache[key]
-    out: list[dict] = []
-    for date_iso in _window_dates():
-        try:
-            out += basketball_source.get_basketball_games(slug, date_iso=date_iso)
-        except Exception as exc:
-            logger.warning("calendar_scope: bball %s/%s failed: %s", slug, date_iso, exc)
-    tagged = _tag(out, "basketball")
+    tagged = _tag(_fetch_window(basketball_source.get_basketball_games, slug, "bball"), "basketball")
     cache[key] = tagged
     return tagged
 
