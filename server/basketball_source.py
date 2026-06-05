@@ -463,42 +463,113 @@ def get_s365_basketball_standings(slug: str) -> dict | None:
     }
 
 
+# 365scores basketball team-stat NAME → totals key. The official /game/stats/
+# endpoint carries AUTHORITATIVE team totals (incl. team rebounds not credited
+# to any player), and is populated even while the box-score lineups still lag —
+# so the Team Stats tab isn't empty mid-game or just after the final whistle.
+_S365_BB_STAT_NAME_MAP = {
+    "field goals":     "fg",   "3 pointers":     "tp",  "three pointers": "tp",
+    "free throws":     "ft",
+    "rebounds":        "reb",  "off. rebounds":  "orb", "offensive rebounds": "orb",
+    "def. rebounds":   "drb",  "defensive rebounds": "drb",
+    "assists":         "ast",  "steals":         "stl", "blocks": "blk",
+    "turnovers":       "to",   "personal fouls": "pf",  "fouls": "pf",
+}
+
+
+def _s365_team_totals_direct(native: str, game: dict) -> tuple[dict, dict] | None:
+    """Authoritative team totals from 365's /game/stats/ endpoint, in the same
+    {pts,reb,orb,...,fgm,fga,...} shape the box-score aggregation produces.
+    Points come from the game header (the endpoint omits them). Returns None
+    when the endpoint has no usable stats so the caller can fall back."""
+    try:
+        from score365.client import Client365
+        with Client365() as c:
+            data = c.get("/game/stats/", params={"games": str(native)})
+    except Exception as exc:
+        logger.warning("s365 /game/stats/ failed for %s: %s", native, exc)
+        return None
+    stats = (data or {}).get("statistics") or []
+    if not stats:
+        return None
+    hid = str((game.get("homeCompetitor") or {}).get("id"))
+    aid = str((game.get("awayCompetitor") or {}).get("id"))
+    keys = ("pts", "reb", "orb", "drb", "ast", "stl", "blk", "to", "pf",
+            "fgm", "fga", "tpm", "tpa", "ftm", "fta")
+    h = {k: 0 for k in keys}
+    a = {k: 0 for k in keys}
+    found = False
+    for s in stats:
+        cid = str(s.get("competitorId"))
+        side = h if cid == hid else (a if cid == aid else None)
+        if side is None:
+            continue
+        field = _S365_BB_STAT_NAME_MAP.get(str(s.get("name") or "").strip().lower())
+        if not field:
+            continue
+        raw = str(s.get("value") or "")
+        if field in ("fg", "tp", "ft"):                 # "33/56 (58.9%)"
+            made, att = _s365_made_att(raw.split("(", 1)[0].strip())
+            if made is not None:
+                pre = {"fg": "fg", "tp": "tp", "ft": "ft"}[field]
+                side[f"{pre}m"] = made
+                side[f"{pre}a"] = att or 0
+                found = True
+        else:
+            v = _s365_int(raw)
+            if v is not None:
+                side[field] = v
+                found = True
+    if not found:
+        return None
+    # Points aren't in /game/stats/ — take them from the score header.
+    h["pts"] = _s365_int((game.get("homeCompetitor") or {}).get("score")) or 0
+    a["pts"] = _s365_int((game.get("awayCompetitor") or {}).get("score")) or 0
+    return h, a
+
+
 def _s365_team_stats(native: str) -> dict | None:
-    """Aggregate the 365 box score into team totals, shaped like BSD's
-    team-stats payload. Nested group/item keys are camelCase to match the
-    iOS contract (the BSD source emits them that way)."""
+    """Comprehensive 365scores team stats, shaped like BSD's team-stats payload.
+    Prefers the authoritative /game/stats/ endpoint; falls back to aggregating
+    the box score when that endpoint is empty. Nested group/item keys are
+    camelCase to match the iOS contract (the BSD source emits them that way)."""
     game = _s365_game_detail(native)
     if not game:
         return None
-    try:
-        from score365.scraper import extract_box_score
-        box = extract_box_score(game)
-    except Exception as exc:
-        logger.warning("s365 team stats failed for %s: %s", native, exc)
-        return None
 
-    def agg(side_key: str) -> dict:
-        t = {k: 0 for k in ("pts", "reb", "orb", "drb", "ast", "stl", "blk", "to", "pf",
-                            "fgm", "fga", "tpm", "tpa", "ftm", "fta")}
-        for p in box.get(side_key, {}).get("players", []) or []:
-            s = p.get("stats", {}) or {}
-            if not s:
-                continue
-            t["pts"] += _s365_int(s.get("Pts")) or 0
-            t["reb"] += _s365_int(s.get("Reb")) or 0
-            t["orb"] += _s365_int(s.get("OR")) or 0
-            t["drb"] += _s365_int(s.get("DR")) or 0
-            t["ast"] += _s365_int(s.get("Ast")) or 0
-            t["stl"] += _s365_int(s.get("Stl")) or 0
-            t["blk"] += _s365_int(s.get("Blk")) or 0
-            t["to"]  += _s365_int(s.get("TO")) or 0
-            t["pf"]  += _s365_int(s.get("PF")) or 0
-            fgm, fga = _s365_made_att(s.get("FG")); t["fgm"] += fgm or 0; t["fga"] += fga or 0
-            tpm, tpa = _s365_made_att(s.get("3PT")); t["tpm"] += tpm or 0; t["tpa"] += tpa or 0
-            ftm, fta = _s365_made_att(s.get("FT")); t["ftm"] += ftm or 0; t["fta"] += fta or 0
-        return t
+    totals = _s365_team_totals_direct(native, game)
+    if totals is not None:
+        h, a = totals
+    else:
+        try:
+            from score365.scraper import extract_box_score
+            box = extract_box_score(game)
+        except Exception as exc:
+            logger.warning("s365 team stats failed for %s: %s", native, exc)
+            return None
 
-    h, a = agg("home"), agg("away")
+        def agg(side_key: str) -> dict:
+            t = {k: 0 for k in ("pts", "reb", "orb", "drb", "ast", "stl", "blk", "to", "pf",
+                                "fgm", "fga", "tpm", "tpa", "ftm", "fta")}
+            for p in box.get(side_key, {}).get("players", []) or []:
+                s = p.get("stats", {}) or {}
+                if not s:
+                    continue
+                t["pts"] += _s365_int(s.get("Pts")) or 0
+                t["reb"] += _s365_int(s.get("Reb")) or 0
+                t["orb"] += _s365_int(s.get("OR")) or 0
+                t["drb"] += _s365_int(s.get("DR")) or 0
+                t["ast"] += _s365_int(s.get("Ast")) or 0
+                t["stl"] += _s365_int(s.get("Stl")) or 0
+                t["blk"] += _s365_int(s.get("Blk")) or 0
+                t["to"]  += _s365_int(s.get("TO")) or 0
+                t["pf"]  += _s365_int(s.get("PF")) or 0
+                fgm, fga = _s365_made_att(s.get("FG")); t["fgm"] += fgm or 0; t["fga"] += fga or 0
+                tpm, tpa = _s365_made_att(s.get("3PT")); t["tpm"] += tpm or 0; t["tpa"] += tpa or 0
+                ftm, fta = _s365_made_att(s.get("FT")); t["ftm"] += ftm or 0; t["fta"] += fta or 0
+            return t
+
+        h, a = agg("home"), agg("away")
 
     def _cmp(hv: float, av: float, positive: bool) -> int:
         if hv == av:
