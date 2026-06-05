@@ -31,14 +31,17 @@ import logging
 import threading
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 import soccer_source as ss
 import drama_engine
+import bzzoiro_adapter
 from i18n import (
     t_title,
     t_soccer_body_kickoff,
+    t_soccer_body_reminder,
+    t_soccer_body_lineups,
     t_soccer_body_halftime,
     t_soccer_body_goal,
     t_soccer_body_second_half,
@@ -71,6 +74,25 @@ _comp_follow_model: Any = None  # SoccerFavoriteCompetitionDB — followed leagu
 _team_follow_model: Any = None  # SoccerFavoriteTeamDB — followed teams
 
 POLL_INTERVAL = 25.0  # seconds
+
+# Pre-match pass throttle + per-team fixtures cache (module-level so they
+# survive across ticks). The pass evaluates favorite teams' upcoming matches
+# for "reminder before kickoff" + "confirmed lineups" alerts.
+_PREMATCH_INTERVAL = 60.0          # run the pass body at most once per ~60s
+_PREMATCH_FIXTURES_TTL = 600.0     # cache a team's fixtures for ~10 min
+_PREMATCH_HORIZON = 3 * 3600.0     # only consider matches within the next 3h
+_LINEUP_WINDOW = 90 * 60.0         # only poll lineups within 90 min of kickoff
+_last_prematch_ts: float = 0.0
+# {team_id: (expiry_monotonic, next_match_dict_or_None)}
+_prematch_fixtures: dict[str, tuple[float, dict | None]] = {}
+
+
+def _reset_prematch_for_tests() -> None:
+    """Clear the pre-match throttle + per-team fixtures cache so unit tests
+    run deterministically (each call exercises a fresh pass)."""
+    global _last_prematch_ts
+    _last_prematch_ts = 0.0
+    _prematch_fixtures.clear()
 
 # Statuses that mean the match is definitively over — deactivate all its alarms immediately.
 _TERMINAL_STATUSES = {"ft", "aet", "ap", "cancelled", "postponed", "abandoned"}
@@ -335,6 +357,13 @@ def _tick() -> None:
                         logger.exception("follow %s criterion %s eval failed: %s",
                                          spec["id"], alarm["alarm_type"], exc)
 
+    # ── Pre-match pass: reminders + confirmed lineups for favorite teams.
+    # Self-throttled (~60s); best-effort so a failure never aborts the tick.
+    try:
+        _prematch_pass()
+    except Exception as exc:
+        logger.exception("soccer prematch pass failed: %s", exc)
+
 
 def _load_follow_specs() -> list[dict]:
     """Active team + competition follows as evaluation specs. Each:
@@ -468,6 +497,164 @@ def _expand_follow_criteria(spec: dict, cid: str, detail: dict) -> list[dict]:
         if spec.get("notify_at_kickoff"):
             out.append(mk("match_moments", {"kickoff": True}))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Pre-match pass — reminders + confirmed lineups for favorite TEAMS.
+
+
+def _parse_kickoff(s: str | None):
+    """Parse an ISO8601 UTC kickoff ('...Z' or '+00:00') → aware datetime, or None."""
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _next_upcoming_match(team_id: str, league_slug: str | None, now) -> dict | None:
+    """The team's soonest scheduled match within the next horizon, cached per
+    team for ~10 min so get_team_season isn't hammered every tick."""
+    monot = time.monotonic()
+    cached = _prematch_fixtures.get(team_id)
+    if cached is not None and cached[0] > monot:
+        match = cached[1]
+    else:
+        try:
+            fixtures = ss.get_team_season(team_id, league_slug=league_slug) or []
+        except Exception as exc:
+            logger.warning("prematch: fixtures fetch failed for team %s: %s", team_id, exc)
+            fixtures = []
+        match = _pick_imminent(fixtures, now)
+        _prematch_fixtures[team_id] = (monot + _PREMATCH_FIXTURES_TTL, match)
+    # Re-validate the cached match against the *current* clock — the horizon
+    # check above used the now from when it was cached, which is close enough,
+    # but a match can leave the window between cache writes; the per-signal
+    # window checks below are the real gates, so just return it.
+    return match
+
+
+def _pick_imminent(fixtures: list[dict], now) -> dict | None:
+    """From a team's fixtures, the soonest match that is still scheduled and
+    kicks off within (0, _PREMATCH_HORIZON]. Returns the match dict or None."""
+    best = None
+    best_ko = None
+    for m in fixtures:
+        status = (m.get("status") or "").lower()
+        ko = _parse_kickoff(m.get("kickoff"))
+        if ko is None:
+            continue
+        delta = (ko - now).total_seconds()
+        if delta <= 0 or delta > _PREMATCH_HORIZON:
+            continue
+        # Only future/scheduled matches (a live/finished one in-window is noise).
+        if status and status != "scheduled":
+            continue
+        if best_ko is None or ko < best_ko:
+            best, best_ko = m, ko
+    return best
+
+
+def _fetch_lineup_status(cid: str) -> str | None:
+    """lineup_status for a canonical match id, dispatching by id prefix:
+    bsd-* → bzzoiro_adapter.event_lineups; sofa-/s365- → soccer_source.get_sofa_lineups.
+    Best-effort: any failure returns None."""
+    try:
+        source, native = ss.parse_canonical_id(cid)
+        eid = int(native)
+    except (ValueError, TypeError):
+        return None
+    try:
+        if source == "bsd":
+            data = bzzoiro_adapter.event_lineups(eid)
+        else:
+            data = ss.get_sofa_lineups(eid)
+    except Exception as exc:
+        logger.warning("prematch: lineup fetch failed for %s: %s", cid, exc)
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data.get("lineup_status")
+
+
+def _prematch_pass() -> None:
+    """For each favorite TEAM follow with match_moments enabled, fire a
+    'starting soon' reminder and a 'confirmed lineups' alert for its next
+    imminent match. Throttled to ~once/60s; team fixtures cached ~10 min.
+    Team follows only — league follows (team_ids None) are skipped."""
+    global _last_prematch_ts
+    monot = time.monotonic()
+    if monot - _last_prematch_ts < _PREMATCH_INTERVAL:
+        return
+    _last_prematch_ts = monot
+
+    now = datetime.now(timezone.utc)
+    for spec in _load_follow_specs():
+        try:
+            tids = spec.get("team_ids")
+            if not tids:
+                continue  # league follows have no team scope — reminders are TEAMS only
+            cfg = ((spec.get("config") or {}).get("match_moments")) or {}
+            if not cfg.get("enabled", True):
+                continue
+
+            league_slug = (spec.get("competitions") or [None])[0]
+            # Each follow tracks one (or a few alt) team id(s); evaluate each.
+            for team_id in tids:
+                try:
+                    _prematch_team(spec, str(team_id), league_slug, cfg, now)
+                except Exception as exc:
+                    logger.warning("prematch: team %s failed: %s", team_id, exc)
+        except Exception as exc:
+            logger.warning("prematch: spec %s failed: %s", spec.get("id"), exc)
+
+
+def _prematch_team(spec: dict, team_id: str, league_slug: str | None,
+                   cfg: dict, now) -> None:
+    match = _next_upcoming_match(team_id, league_slug, now)
+    if not match:
+        return
+    cid = match.get("id")
+    ko = _parse_kickoff(match.get("kickoff"))
+    if not cid or ko is None:
+        return
+    secs_to_ko = (ko - now).total_seconds()
+    if secs_to_ko <= 0:
+        return
+
+    home = (match.get("home") or {}).get("name") or ""
+    away = (match.get("away") or {}).get("name") or ""
+    comp = match.get("competition") or ""
+
+    base_id = f"{spec['id']}_{cid}"
+    alarm = {
+        "id": base_id,
+        "user_token": spec["user_token"],
+        "alarm_type": "match_moments",
+        "alert_type": spec.get("alert_type") or "alarm",
+        "config": cfg,
+    }
+
+    # ── Reminder: N min before kickoff.
+    reminder_minutes = int(cfg.get("reminder_minutes", 30))
+    if reminder_minutes > 0 and 0 < secs_to_ko <= reminder_minutes * 60:
+        _fire(
+            alarm, "soccer_reminder",
+            lambda h, a, c, lang: t_soccer_body_reminder(h, a, c, reminder_minutes, lang),
+            home, away, comp, signal="mm_reminder", one_shot=False,
+        )
+
+    # ── Confirmed lineups: only poll inside the 90-min window to bound cost.
+    if 0 < secs_to_ko <= _LINEUP_WINDOW:
+        if _fetch_lineup_status(cid) == "confirmed":
+            _fire(
+                alarm, "soccer_lineups", t_soccer_body_lineups,
+                home, away, comp, signal="mm_lineups", one_shot=False,
+            )
 
 
 # ---------------------------------------------------------------------------
