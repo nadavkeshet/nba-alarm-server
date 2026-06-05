@@ -70,6 +70,71 @@ def test_match_moments_fires_each_enabled_once(monkeypatch):
     assert not any("Extra Time" in t for t in [s["title"] for s in sent])
 
 
+# ── match_moments full bundle ───────────────────────────────────────────────
+def test_match_moments_fires_full_set(monkeypatch):
+    sent = _wire_capture(monkeypatch)
+    alarm = _alarm("match_moments", config={"enabled": True})
+    # goal at 1-0
+    sm._evaluate_alarm(alarm, _match(status="live", minute=20, hs=1, as_=0))
+    # same scoreline again → no duplicate goal (and no duplicate kickoff)
+    sm._evaluate_alarm(alarm, _match(status="live", minute=21, hs=1, as_=0))
+    # second goal 2-0
+    sm._evaluate_alarm(alarm, _match(status="live", minute=40, hs=2, as_=0))
+    # half-time
+    sm._evaluate_alarm(alarm, _match(status="ht", minute=45, hs=2, as_=0))
+    # full-time
+    sm._evaluate_alarm(alarm, _match(status="ft", minute=90, hs=2, as_=0))
+
+    # exactly 2 goal alerts (1-0 and 2-0)
+    goal_count = sum(1 for s in sent if "GOAL" in s["title"].upper() or "גול" in s["title"])
+    assert goal_count == 2
+    # exactly one kickoff (deduped across the two live ticks)
+    assert sum(1 for s in sent if "Kicking Off" in s["title"]) == 1
+    # one half-time, one full-time
+    assert sum(1 for s in sent if "Half-Time" in s["title"]) == 1
+    assert sum(1 for s in sent if "Full-time" in s["title"]) == 1
+
+
+def test_match_moments_disabled_fires_nothing(monkeypatch):
+    sent = _wire_capture(monkeypatch)
+    alarm = _alarm("match_moments", config={"enabled": False})
+    sm._evaluate_alarm(alarm, _match(status="live", minute=20, hs=1, as_=0))
+    sm._evaluate_alarm(alarm, _match(status="ft", minute=90, hs=2, as_=0))
+    assert sent == []
+
+
+def test_match_moments_second_half_fires_once(monkeypatch):
+    sent = _wire_capture(monkeypatch)
+    alarm = _alarm("match_moments", config={"enabled": True})
+    sm._evaluate_alarm(alarm, _match(status="live", minute=48, hs=0, as_=0))
+    sm._evaluate_alarm(alarm, _match(status="live", minute=50, hs=0, as_=0))
+    sh = [s for s in sent if "second half" in s["body"].lower()]
+    assert len(sh) == 1
+
+
+def test_match_moments_red_and_penalty_dedup(monkeypatch):
+    sent = _wire_capture(monkeypatch)
+    alarm = _alarm("match_moments", config={"enabled": True})
+    red_inc = {"type": "card", "card_type": "red", "minute": 55, "player": "X"}
+    m = _match(status="live", minute=55, hs=0, as_=0, incidents=[red_inc])
+    sm._evaluate_alarm(alarm, m)
+    # same red at a later live clock → fires once (dedup by incident minute 55)
+    sm._evaluate_alarm(alarm, _match(status="live", minute=60, hs=0, as_=0, incidents=[red_inc]))
+    reds = [s for s in sent if "Red Card" in s["title"] or "אדום" in s["title"]]
+    assert len(reds) == 1
+
+
+def test_match_moments_penalty_dedup_by_incident_minute(monkeypatch):
+    sent = _wire_capture(monkeypatch)
+    alarm = _alarm("match_moments", config={"enabled": True})
+    pen_inc = {"type": "penalty", "minute": 33}
+    sm._evaluate_alarm(alarm, _match(status="live", minute=33, hs=0, as_=0, incidents=[pen_inc]))
+    # live clock advanced but the SAME penalty incident → no second penalty alert
+    sm._evaluate_alarm(alarm, _match(status="live", minute=38, hs=0, as_=0, incidents=[pen_inc]))
+    pens = [s for s in sent if "Penalty" in s["title"]]
+    assert len(pens) == 1
+
+
 # ── card_penalty ────────────────────────────────────────────────────────────
 def test_card_penalty_fires_on_any_red_and_penalty(monkeypatch):
     sent = _wire_capture(monkeypatch)
