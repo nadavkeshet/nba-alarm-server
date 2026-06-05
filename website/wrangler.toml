@@ -13,8 +13,13 @@ id = "f48183931910499c94bd23cc262cebb6"
 
 [env.production]
 
+# RAILWAY_BASE must track whichever backend the iOS app (ServerConfig.baseURL)
+# talks to, because calendar tokens live in that backend's DB. The app is on
+# DEV while v3 is iterated, so the branded clutchalarm.com proxy points at DEV
+# too. When iOS flips ServerConfig.baseURL to prod AND the calendar code is
+# deployed to prod Railway (main branch), flip this to the production URL.
 [env.production.vars]
-RAILWAY_BASE = "https://nba-alarm-server-production.up.railway.app"
+RAILWAY_BASE = "https://nba-alarm-server-dev.up.railway.app"
 
 [[env.production.kv_namespaces]]
 binding = "ANDROID_SIGNUPS"
