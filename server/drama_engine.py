@@ -537,7 +537,7 @@ def _stakes_multiplier(ctx: dict) -> float:
 
 
 def context_from_match_detail(detail: dict) -> dict:
-    """Build a Drama Engine ctx from the rich BSD/Sofascore match detail.
+    """Build a Drama Engine ctx from the rich BSD/365scores match detail.
 
     Robust to missing fields — anything absent just becomes None and the
     engine handles the gap gracefully.
@@ -571,7 +571,7 @@ def context_from_match_detail(detail: dict) -> dict:
     pressure = None
     momentum_points = detail.get("momentum") or []
     if momentum_points:
-        # Tolerate Sofascore graphPoint shape ({minute, value}) too
+        # Tolerate a graphPoint shape ({minute, value}) too
         recent = []
         for p in momentum_points:
             m = p.get("m", p.get("minute"))
@@ -584,7 +584,7 @@ def context_from_match_detail(detail: dict) -> dict:
                 except (TypeError, ValueError):
                     continue
         if recent:
-            # Both BSD and Sofa emit signed values ~[-80, +80] per minute.
+            # Momentum emits signed values ~[-80, +80] per minute.
             # The engine expects pressure in [-1, +1]; divide by 30 (sustained
             # moderate dominance ≈ 30 over a 15-min mean) and clamp.
             pressure = sum(recent) / len(recent) / 30.0
@@ -738,7 +738,7 @@ def context_at_minute(detail: dict, t: int) -> dict:
                 except (TypeError, ValueError):
                     continue
         if recent:
-            # Both BSD and Sofa emit signed values roughly in [-80, +80]
+            # Momentum emits signed values roughly in [-80, +80]
             # per minute; the engine expects pressure in [-1, +1]. Divide
             # by 30 (sustained moderate dominance ≈ 30 over a 15-min mean)
             # and clamp.
@@ -817,7 +817,7 @@ def _normalize_recent_incidents(
     cutoff = max(0, minute_now - window_min)
     out: list[dict] = []
     for inc in incidents:
-        # BSD: {type, minute, ...}  /  Sofascore: {incidentType, time, ...}
+        # Canonical: {type, minute, ...} (older: {incidentType, time, ...})
         raw_type  = (inc.get("type") or inc.get("incidentType") or "").lower()
         card_type = (inc.get("card_type") or inc.get("incidentClass") or "").lower()
         inc_min   = inc.get("minute") or inc.get("time") or 0

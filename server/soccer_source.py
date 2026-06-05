@@ -1,4 +1,4 @@
-"""Soccer source router — sits on top of bzzoiro_adapter + sofascore_adapter.
+"""Soccer source router — sits on top of bzzoiro_adapter + 365scores.
 
 Public surface:
   - get_soccer_matches(league_slug, date_iso=None) -> list[dict]
@@ -9,10 +9,14 @@ Public surface:
 Every method returns dicts in a single canonical shape (see SoccerMatch below)
 regardless of which source provided the data. Source routing is automatic:
   - PRIMARY_SOURCE table in competition_map.json controls primary
-  - Adapter raises → automatic failover to the secondary
+  - Adapter raises / returns empty → automatic failover to the secondary
   - All cache layers live inside the adapters themselves
 
-The "canonical_id" returned is a string like 'bsd-372' or 'sofa-14023956'.
+There is ONE cascade everywhere: BSD (where supported) → 365scores. The two
+leagues 365 is primary for (euros, ligat_haal) have no BSD id, so they resolve
+straight to 365.
+
+The "canonical_id" returned is a string like 'bsd-372' or 's365-4702049'.
 This is the ID iOS and the alarm engine use everywhere — it's source-agnostic.
 """
 
@@ -26,7 +30,6 @@ from zoneinfo import ZoneInfo
 import functools
 
 import bzzoiro_adapter as bsd
-import sofascore_adapter as sofa
 import drama_engine
 import win_probability
 import team_names_he
@@ -46,13 +49,12 @@ def _with_hebrew(fn):
 from score365_soccer_adapter import (
     BSD_COMPETITION_IDS,
     PRIMARY_SOURCE,
-    SOFASCORE_COMPETITION_IDS,
     _COMPETITION_MAP,
 )
 
 logger = logging.getLogger(__name__)
 
-# ONE shared, bounded pool for match-detail fan-out (BSD: 3 calls, Sofa: 5).
+# ONE shared, bounded pool for match-detail fan-out (BSD: 3 calls, 365: 2).
 # A per-request pool spawned 3-5 fresh threads on every Match Summary open, so a
 # burst of users opening sheets multiplied threads on top of the request pool
 # (the same explosion that _FEED_POOL/_WATCH_POOL in main.py were created to fix).
@@ -225,7 +227,7 @@ def parse_canonical_id(cid: str) -> tuple[str, str]:
     if "-" not in cid:
         raise ValueError(f"bad canonical id: {cid!r}")
     source, native = cid.split("-", 1)
-    if source not in ("bsd", "sofa", "s365"):
+    if source not in ("bsd", "s365"):
         raise ValueError(f"unknown source in canonical id: {cid!r}")
     return source, native
 
@@ -266,31 +268,6 @@ def _normalize_status_bsd(raw_status: str | None, period: str | None) -> tuple[s
     if "penalt" in s or s in ("pens", "shootout", "penalty_shootout"):
         return "pens", "pens"
     return s or "scheduled", p or "pre"
-
-
-def _normalize_status_sofa(status: dict | None) -> tuple[str, str]:
-    """Sofascore status dict → our (status, period) pair."""
-    s = (status or {}).get("type", "")
-    desc = (status or {}).get("description", "").lower()
-    if s == "notstarted":
-        return "scheduled", "pre"
-    if s == "finished":
-        return "ft", "ft"
-    if s in ("postponed", "canceled"):
-        return s, "pre"
-    if s == "inprogress":
-        if "halftime" in desc or desc == "ht":
-            return "ht", "ht"
-        if "extra" in desc:
-            return "et", "et"
-        if "penalt" in desc:
-            return "pens", "pens"
-        if "1st" in desc or "first" in desc:
-            return "live", "1h"
-        if "2nd" in desc or "second" in desc:
-            return "live", "2h"
-        return "live", "1h"
-    return s or "scheduled", "pre"
 
 
 def _bsd_team_image_url(team_id: int) -> str:
@@ -502,90 +479,11 @@ def _from_bsd_event(event: dict, *, slug: str | None = None) -> dict:
     }
 
 
-@_with_hebrew
-def _from_sofa_event(event: dict, *, slug: str | None = None) -> dict:
-    """Normalize a Sofascore scheduled-event or event payload into SoccerMatch shape."""
-    eid = event.get("id")
-    status, period = _normalize_status_sofa(event.get("status"))
-    home = event.get("homeTeam", {}) or {}
-    away = event.get("awayTeam", {}) or {}
-    return {
-        "id": canonical_id("sofa", eid),
-        "source": "sofascore",
-        "source_event_id": eid,
-        "competition": slug or _sofa_tournament_to_slug(
-            (event.get("tournament", {}) or {}).get("uniqueTournament", {}).get("id")
-        ),
-        "competition_id_native": (event.get("tournament", {}) or {}).get("uniqueTournament", {}).get("id"),
-        "kickoff": _iso_from_unix(event.get("startTimestamp")),
-        "status": status,
-        "period": period,
-        "minute": _sofa_minute_from_time(event),
-        "home": {
-            "id": str(home.get("id") or ""),
-            "name": home.get("name", ""),
-            "short_name": home.get("shortName", "") or home.get("nameCode", ""),
-            "crest": f"https://api.sofascore.app/api/v1/team/{home.get('id')}/image" if home.get("id") else None,
-            "score": (event.get("homeScore", {}) or {}).get("current"),
-            "score_ht": (event.get("homeScore", {}) or {}).get("period1"),
-            "score_pens": (event.get("homeScore", {}) or {}).get("penalties"),
-            "xg": None,
-        },
-        "away": {
-            "id": str(away.get("id") or ""),
-            "name": away.get("name", ""),
-            "short_name": away.get("shortName", "") or away.get("nameCode", ""),
-            "crest": f"https://api.sofascore.app/api/v1/team/{away.get('id')}/image" if away.get("id") else None,
-            "score": (event.get("awayScore", {}) or {}).get("current"),
-            "score_ht": (event.get("awayScore", {}) or {}).get("period1"),
-            "score_pens": (event.get("awayScore", {}) or {}).get("penalties"),
-            "xg": None,
-        },
-        "venue": None,  # Sofascore venue lives elsewhere; skip for now
-        "is_derby": False,
-        "is_neutral_ground": False,
-        "round_number": (event.get("roundInfo", {}) or {}).get("round"),
-        "round_name": (event.get("roundInfo", {}) or {}).get("name"),
-        "watch_score": _soccer_watch_score(
-            "sofascore", eid, status, _sofa_minute_from_time(event),
-            (event.get("homeScore", {}) or {}).get("current"),
-            (event.get("awayScore", {}) or {}).get("current"),
-            slug=slug,
-            round_name=(event.get("roundInfo", {}) or {}).get("name"),
-            home_score_ht=(event.get("homeScore", {}) or {}).get("period1"),
-            away_score_ht=(event.get("awayScore", {}) or {}).get("period1"),
-        ),
-    }
-
-
-def _iso_from_unix(ts: int | float | None) -> str | None:
-    if not ts:
-        return None
-    return datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _sofa_minute_from_time(event: dict) -> int | None:
-    time = event.get("time", {}) or {}
-    # Sofascore returns currentPeriodStartTimestamp + period; for simplicity,
-    # use the "currentPeriodStart" or fall back to None. The radar will fetch
-    # the live event detail for accurate minute when it matters.
-    return time.get("currentMinute") or None
-
-
 def _bsd_league_to_slug(league_id: int | None) -> str | None:
     if league_id is None:
         return None
     for slug, lid in BSD_COMPETITION_IDS.items():
         if lid == league_id:
-            return slug
-    return None
-
-
-def _sofa_tournament_to_slug(tournament_id: int | None) -> str | None:
-    if tournament_id is None:
-        return None
-    for slug, tid in SOFASCORE_COMPETITION_IDS.items():
-        if tid == tournament_id:
             return slug
     return None
 
@@ -629,9 +527,8 @@ def get_soccer_matches_status(
 
     Source chain (cascades on either exception OR empty result):
         1. BSD           (primary for most competitions, incl. the World Cup)
-        2. 365scores     (free fallback; covers all 10 competitions and is
-                         reachable from Railway egress IPs that Sofascore
-                         occasionally blocks)
+        2. 365scores     (covers all 10 competitions; primary for euros &
+                         ligat_haal, which have no BSD id)
     """
     if league_slug not in PRIMARY_SOURCE:
         logger.warning("get_soccer_matches: unknown league %r", league_slug)
@@ -642,11 +539,9 @@ def get_soccer_matches_status(
     if date_iso is None:
         date_iso = datetime.now(anchor_tz).date().isoformat()
 
-    # Sofascore was removed from the cascade: it block-403s from Railway's
-    # egress IPs, so on a cold feed fan-out every miss burned a slow
-    # fingerprint-rotation through a dead source and stalled the schedule. BSD
-    # (primary for most competitions, incl. the World Cup) plus 365scores
-    # (covers all competitions) are sufficient.
+    # ONE cascade: BSD (where it has a competition id) → 365scores. The two
+    # 365-primary leagues (euros, ligat_haal) have no BSD id, so they go straight
+    # to 365. 365 also covers everything as a fallback for the BSD-primary ones.
     sources: list[tuple[str, callable]] = []  # type: ignore[type-arg]
     if league_slug in BSD_COMPETITION_IDS:
         sources.append(("bsd", _fetch_bsd))
@@ -681,7 +576,7 @@ def get_soccer_matches_status(
     return [], any_source_replied
 
 
-# Sources have different day boundaries (Sofa = UTC/CET, BSD = Israel, 365 =
+# Sources have different day boundaries (BSD = Israel, 365 =
 # its own thing). To keep the user's notion of "today" stable, we project
 # every kickoff into the caller's tz before comparing it to date_iso.
 # Default = UTC when no tz is supplied (e.g. backend cron jobs).
@@ -759,21 +654,10 @@ def _fetch_bsd(slug: str, date_iso: str) -> list[dict]:
     return [_from_bsd_event(e, slug=slug) for e in events]
 
 
-def _fetch_sofa(slug: str, date_iso: str) -> list[dict]:
-    tournament_id = SOFASCORE_COMPETITION_IDS[slug]
-    events = sofa.scheduled_events(date_iso)
-    # Filter to the target tournament
-    matched = [
-        e for e in events
-        if (e.get("tournament", {}) or {}).get("uniqueTournament", {}).get("id") == tournament_id
-    ]
-    return [_from_sofa_event(e, slug=slug) for e in matched]
-
-
 def _fetch_365(slug: str, date_iso: str) -> list[dict]:
-    """Free fallback via the existing 365scores client. Covers all 10 launch
-    competitions. Used when both BSD and Sofascore come up empty (e.g. when
-    Sofascore blocks Railway's egress IP)."""
+    """365scores fetch. Covers all 10 launch competitions — the primary source
+    for euros & ligat_haal (no BSD id), and the fallback for the BSD-primary
+    ones when BSD comes up empty."""
     from score365_soccer_adapter import soccer_games_by_date, COMPETITION_IDS as S365_IDS
     competition_id = S365_IDS.get(slug)
     if competition_id is None:
@@ -853,18 +737,21 @@ def _from_365_game(game: dict, *, slug: str | None = None) -> dict:
     }
 
 
+_LIVE_STATUSES = {"live", "ht", "et", "pens"}
+
+
 def get_live_matches(league_slugs: list[str] | None = None) -> list[dict]:
     """All currently-live matches across the requested leagues (defaults to all in scope).
 
-    Combines BSD and Sofascore; deduplicates by competition (we trust each
-    competition's primary source — no merging across providers).
+    Per competition, the live source is its primary: BSD for the BSD-primary
+    leagues, 365scores for euros & ligat_haal. No merging across providers.
     """
     if league_slugs is None:
         league_slugs = list(PRIMARY_SOURCE.keys())
 
     out: list[dict] = []
 
-    # BSD live — covers 8 competitions in a single call
+    # BSD live — covers the BSD-primary competitions in a single call
     bsd_slugs = [s for s in league_slugs if PRIMARY_SOURCE.get(s) == "bsd"]
     if bsd_slugs:
         try:
@@ -876,18 +763,18 @@ def get_live_matches(league_slugs: list[str] | None = None) -> list[dict]:
         except Exception as exc:
             logger.warning("BSD live_events failed: %s", exc)
 
-    # Sofascore live — covers Euros + Ligat Ha'al
-    sofa_slugs = [s for s in league_slugs if PRIMARY_SOURCE.get(s) == "sofascore"]
-    if sofa_slugs:
-        sofa_tids = {SOFASCORE_COMPETITION_IDS[s] for s in sofa_slugs if s in SOFASCORE_COMPETITION_IDS}
-        try:
-            events = sofa.live_events()
-            for e in events:
-                tid = (e.get("tournament", {}) or {}).get("uniqueTournament", {}).get("id")
-                if tid in sofa_tids:
-                    out.append(_from_sofa_event(e))
-        except Exception as exc:
-            logger.warning("Sofascore live_events failed: %s", exc)
+    # 365 live — covers Euros + Ligat Ha'al. 365 has no "live only" endpoint,
+    # so we pull today's games for those competitions and keep the live ones.
+    s365_slugs = [s for s in league_slugs if PRIMARY_SOURCE.get(s) == "score365"]
+    if s365_slugs:
+        today = datetime.now(_DEFAULT_TZ).date().isoformat()
+        for slug in s365_slugs:
+            try:
+                for m in _fetch_365(slug, today):
+                    if (m.get("status") or "").lower() in _LIVE_STATUSES:
+                        out.append(m)
+            except Exception as exc:
+                logger.warning("365 live fetch failed for %s: %s", slug, exc)
 
     _seed_search_index(out)
     return out
@@ -899,9 +786,15 @@ def get_soccer_match_state(canonical: str) -> dict | None:
     if source == "bsd":
         ev = bsd.event_detail(int(native))
         return _from_bsd_event(ev) if ev else None
-    if source == "sofa":
-        ev = sofa.event_detail(int(native))
-        return _from_sofa_event(ev) if ev else None
+    if source == "s365":
+        from score365_soccer_adapter import (
+            soccer_game_detail, league_slug_for_competition_id,
+        )
+        raw = soccer_game_detail(int(native))
+        if not raw:
+            return None
+        slug = league_slug_for_competition_id(raw.get("competitionId")) if raw.get("competitionId") else None
+        return _from_365_game(raw, slug=slug)
     return None
 
 
@@ -1161,70 +1054,6 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
                 logger.warning("ws overlay failed for %s: %s", canonical, exc)
             return out
 
-    if source == "sofa":
-        # Sofascore — five independent calls; parallelize. Per-call failures
-        # are isolated so one upstream hiccup doesn't 500 the endpoint.
-        with _nullcontext(_DETAIL_POOL) as pool:
-            f_detail    = pool.submit(sofa.event_detail, eid)
-            f_stats     = pool.submit(sofa.event_statistics, eid)
-            f_graph     = pool.submit(sofa.event_graph, eid)
-            f_shotmap   = pool.submit(sofa.event_shotmap, eid)
-            f_incidents = pool.submit(sofa.event_incidents, eid)
-            try:
-                ev = f_detail.result()
-            except Exception as exc:
-                logger.warning("sofa event_detail failed for %s: %s", canonical, exc)
-                return None
-            if not ev:
-                return None
-            out = _from_sofa_event(ev)
-            # Stats — normalize the full per-team table (this was missing, so
-            # the iOS Statistics tab was empty for every Sofascore match) and
-            # pull xG out of either the event detail or the stats block.
-            try:
-                stats = f_stats.result() or {}
-                xg = sofa.find_team_xg(stats)
-                if xg:
-                    out["home"]["xg"] = xg[0]
-                    out["away"]["xg"] = xg[1]
-                norm_stats = _normalize_sofa_statistics(stats)
-                if norm_stats:
-                    out["stats"] = norm_stats
-                    if not xg:
-                        hxg = (norm_stats.get("home") or {}).get("expected_goals")
-                        axg = (norm_stats.get("away") or {}).get("expected_goals")
-                        if hxg is not None:
-                            out["home"]["xg"] = hxg
-                        if axg is not None:
-                            out["away"]["xg"] = axg
-            except Exception as exc:
-                logger.warning("sofa stats failed for %s: %s", canonical, exc)
-            # Momentum (Sofa key shape {minute, value} → canonical {m, v})
-            try:
-                graph = f_graph.result() or {}
-                out["momentum"] = [
-                    {"m": p.get("minute"), "v": p.get("value")}
-                    for p in (graph.get("graphPoints") or [])
-                    if p.get("minute") is not None and p.get("value") is not None
-                ]
-            except Exception as exc:
-                logger.warning("sofa graph failed for %s: %s", canonical, exc)
-                out["momentum"] = []
-            # Shotmap
-            try:
-                out["shotmap"] = _normalize_sofa_shotmap(f_shotmap.result() or [])
-            except Exception as exc:
-                logger.warning("sofa shotmap failed for %s: %s", canonical, exc)
-                out["shotmap"] = []
-            # Incidents
-            try:
-                out["incidents"] = _normalize_sofa_incidents(f_incidents.result() or [])
-            except Exception as exc:
-                logger.warning("sofa incidents failed for %s: %s", canonical, exc)
-                out["incidents"] = []
-            out["xg_per_minute"] = []
-            return out
-
     if source == "s365":
         from score365_soccer_adapter import (
             soccer_game_detail, soccer_game_stats, league_slug_for_competition_id,
@@ -1236,13 +1065,19 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
             competition_id = raw.get("competitionId")
             slug = league_slug_for_competition_id(competition_id) if competition_id else None
             out = _from_365_game(raw, slug=slug)
-            out["incidents"] = []
+            # Incidents (goals/cards/subs/woodwork) come inline in the 365 game
+            # detail's `events` list — replay them for the running score.
+            try:
+                out["incidents"] = _normalize_365_incidents(raw)
+            except Exception as exc:
+                logger.warning("s365 incidents failed for %s: %s", canonical, exc)
+                out["incidents"] = []
             out["shotmap"] = []
             out["xg_per_minute"] = []
             out["momentum"] = []
             # Team statistics live behind a separate 365 endpoint — normalize the
             # full per-team table so the iOS Statistics tab is as complete as a
-            # BSD/Sofascore match instead of nearly empty. Best-effort.
+            # BSD match instead of nearly empty. Best-effort.
             try:
                 if raw.get("hasStats"):
                     raw_stats = soccer_game_stats(int(native))
@@ -1268,121 +1103,227 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Sofascore → canonical shape normalizers
+# 365scores → canonical shape normalizers
 #
-# BSD's per-shot and per-incident shapes are what iOS speaks. Sofascore uses
-# completely different keys (camelCase, nested player objects), so we translate
-# here at the API boundary so the iOS contract stays uniform regardless of
-# which adapter produced the data.
+# BSD's per-incident and per-lineup shapes are what iOS speaks. 365scores uses
+# its own `events` / `members` / `lineups` structures, so we translate here at
+# the API boundary so the iOS contract stays uniform regardless of which adapter
+# produced the data.
 
 
-def _normalize_sofa_shotmap(raw: list[dict]) -> list[dict]:
-    """Translate Sofascore shotmap entries to the BSD/canonical shape iOS speaks."""
-    out: list[dict] = []
-    for s in raw:
-        if not isinstance(s, dict):
-            continue
-        pos_src = s.get("playerCoordinates") or {}
-        player = s.get("player") or {}
-        out.append({
-            "min":        s.get("time"),
-            "added":      s.get("addedTime"),
-            "home":       bool(s.get("isHome")) if s.get("isHome") is not None else None,
-            "type":       s.get("shotType"),
-            "sit":        s.get("situation"),
-            "body":       s.get("bodyPart"),
-            "xg":         s.get("xg"),
-            "xgot":       s.get("xgot"),
-            "player_id":  player.get("id"),
-            "pos":        {
-                "x": pos_src.get("x"),
-                "y": pos_src.get("y"),
-            },
-            "gml":        s.get("goalMouthLocation"),
-        })
-    return out
+def _365_members_index(game: dict) -> dict[int, dict]:
+    """id → top-level member dict (the name/jersey source). Mirrors the
+    basketball score365 member→athlete mapping (extract_box_score / extract_players)."""
+    return {m.get("id"): m for m in (game.get("members") or []) if m.get("id") is not None}
 
 
-def _normalize_sofa_incidents(raw: list[dict]) -> list[dict]:
-    """Translate Sofascore incidents to the BSD/canonical shape iOS speaks.
-
-    Handles: goal, card, substitution, period, injuryTime. Unknown
-    `incidentType` values pass through with minimal mapping so they at
-    least decode without crashing.
-    """
-    out: list[dict] = []
-    for inc in raw:
-        if not isinstance(inc, dict):
-            continue
-        itype = (inc.get("incidentType") or "").lower()
-        iclass = (inc.get("incidentClass") or "").lower()
-        minute = inc.get("time")
-        is_home = bool(inc.get("isHome")) if inc.get("isHome") is not None else None
-        player  = inc.get("player") or {}
-        norm: dict[str, Any] = {
-            "type":      itype,
-            "minute":    minute,
-            "is_home":   is_home,
-        }
-        if itype == "goal":
-            # Sofa uses incidentClass = 'regular' | 'penalty' | 'owngoal' | 'header'
-            # Mirror BSD: own goals get type='owngoal'
-            if iclass == "owngoal":
-                norm["type"] = "owngoal"
-            norm["player"]    = player.get("shortName") or player.get("name")
-            norm["player_id"] = player.get("id")
-            # Assist: Sofascore lists it as "assist1" on the incident
-            assist1 = inc.get("assist1") or {}
-            if assist1:
-                norm["assist"] = assist1.get("shortName") or assist1.get("name")
-            norm["home_score"] = inc.get("homeScore")
-            norm["away_score"] = inc.get("awayScore")
-        elif itype == "card":
-            norm["card_type"] = iclass or None
-            norm["player"]    = player.get("shortName") or player.get("name")
-            norm["player_id"] = player.get("id")
-        elif itype == "substitution":
-            p_in  = inc.get("playerIn")  or {}
-            p_out = inc.get("playerOut") or {}
-            norm["player_in"]      = p_in.get("shortName")  or p_in.get("name")
-            norm["player_out"]     = p_out.get("shortName") or p_out.get("name")
-            norm["player_in_id"]   = p_in.get("id")
-            norm["player_out_id"]  = p_out.get("id")
-        elif itype == "period":
-            norm["text"]       = inc.get("text")
-            norm["home_score"] = inc.get("homeScore")
-            norm["away_score"] = inc.get("awayScore")
-        elif itype == "injurytime":
-            # BSD spells this exactly "injuryTime"; keep that vocabulary.
-            norm["type"]   = "injuryTime"
-            norm["length"] = inc.get("length") or inc.get("addedTime")
-        # else: unknown type passes through with just type/minute/is_home
-        out.append(norm)
-    return out
+def _365_member_name(members: dict[int, dict], pid: int | None) -> str | None:
+    m = members.get(pid) if pid is not None else None
+    if not m:
+        return None
+    return m.get("shortName") or m.get("name")
 
 
-# Sofascore statistics item `key` → canonical TeamStats field. Sofascore keys
-# are quirky ("totalShotsOnGoal" actually means *total* shots). Mapped from a
-# real Ligat ha'Al payload — these are the fields the iOS Statistics tab reads.
-_SOFA_STAT_INT_KEYS = {
-    "totalShotsOnGoal":      "total_shots",
-    "shotsOnGoal":           "shots_on_target",
-    "blockedScoringAttempt": "blocked_shots",
-    "bigChanceCreated":      "big_chances",
-    "bigChanceScored":       "big_chances_scored",
-    "bigChanceMissed":       "big_chances_missed",
-    "cornerKicks":           "corner_kicks",
-    "fouls":                 "fouls",
-    "offsides":              "offsides",
-    "accuratePasses":        "accurate_passes",
-    "passes":                "total_passes",
-    "yellowCards":           "yellow_cards",
-    "redCards":              "red_cards",
+# 365 goal eventType.subTypeName → canonical goal type. Own goals must credit
+# the OTHER side when replaying the running score.
+_365_CARD_TYPE = {
+    "yellow card": "yellow",
+    "red card":    "red",
+    "second yellow card": "yellow-red",
 }
 
 
-def _sofa_stat_int(value: Any) -> int | None:
-    """Parse a Sofascore stat to int. Handles '21', '467', '149/178 (84%)'
+def _normalize_365_incidents(game: dict) -> list[dict]:
+    """Translate a 365scores game-detail `events` list into the BSD/canonical
+    incident shape iOS speaks (same fields `_from_bsd_event`/the BSD incident
+    feed emit).
+
+    Emits, sorted chronologically: goals (`type` 'goal'/'owngoal', with a
+    replayed running `home_score`/`away_score`), cards (`type` 'card',
+    `card_type` 'yellow'/'red'/'yellow-red'), and substitutions (`type`
+    'substitution', `player_in`/`player_out` + ids). 365 marks the scoring
+    player's side via `competitorId`; an own goal credits the opposing team.
+    """
+    members = _365_members_index(game)
+    home_id = (game.get("homeCompetitor") or {}).get("id")
+    away_id = (game.get("awayCompetitor") or {}).get("id")
+
+    events = [e for e in (game.get("events") or []) if isinstance(e, dict)]
+    # Chronological replay for the running score (gameTime + order as tiebreak).
+    events.sort(key=lambda e: (
+        e.get("gameTime") if isinstance(e.get("gameTime"), (int, float)) else 0.0,
+        e.get("addedTime") or 0,
+        e.get("order") or 0,
+    ))
+
+    out: list[dict] = []
+    hs = aw = 0
+    for e in events:
+        et = e.get("eventType") or {}
+        name = (et.get("name") or "").strip().lower()
+        sub_name = (et.get("subTypeName") or "").strip().lower()
+        comp_id = e.get("competitorId")
+        is_home = (comp_id == home_id) if home_id is not None else None
+        minute = int(e["gameTime"]) if isinstance(e.get("gameTime"), (int, float)) else None
+        added = e.get("addedTime") or None
+        pid = e.get("playerId")
+
+        if et.get("id") == 1 or name == "goal":
+            is_own = sub_name == "own goal"
+            # Running score: regular goal credits the scorer's side; an own goal
+            # credits the OPPOSING side.
+            credit_home = (is_home and not is_own) or ((is_home is False) and is_own)
+            if credit_home:
+                hs += 1
+            else:
+                aw += 1
+            norm: dict[str, Any] = {
+                "type":       "owngoal" if is_own else "goal",
+                "minute":     minute,
+                "added_time": added,
+                "is_home":    is_home,
+                "player":     _365_member_name(members, pid),
+                "player_id":  pid,
+                "assist":     None,
+                "home_score": hs,
+                "away_score": aw,
+            }
+            extras = e.get("extraPlayers") or []
+            if extras and not is_own:
+                norm["assist"] = _365_member_name(members, extras[0])
+            out.append(norm)
+
+        elif et.get("id") in (2, 3) or "card" in name:
+            card_type = _365_CARD_TYPE.get(name)
+            if card_type is None:
+                card_type = "red" if "red" in name else "yellow"
+            out.append({
+                "type":       "card",
+                "minute":     minute,
+                "added_time": added,
+                "is_home":    is_home,
+                "card_type":  card_type,
+                "player":     _365_member_name(members, pid),
+                "player_id":  pid,
+            })
+
+        elif et.get("id") == 1000 or name == "substitution":
+            # 365: playerId is the player coming ON (was on the bench),
+            # extraPlayers[0] is the player going OFF (was Starting).
+            extras = e.get("extraPlayers") or []
+            out_id = extras[0] if extras else None
+            out.append({
+                "type":          "substitution",
+                "minute":        minute,
+                "added_time":    added,
+                "is_home":       is_home,
+                "player_in":     _365_member_name(members, pid),
+                "player_out":    _365_member_name(members, out_id),
+                "player_in_id":  pid,
+                "player_out_id": out_id,
+            })
+        # Woodwork and other minor event types are intentionally dropped — iOS
+        # only renders goals, cards and subs in the timeline.
+
+    return out
+
+
+# 365 lineup statusText → canonical position bucket. iOS shows the raw position
+# string, so we pass through 365's `position.name` (e.g. "Goalkeeper").
+def _normalize_365_lineups(game: dict) -> dict | None:
+    """Translate the 365scores game-detail lineups into the canonical
+    `{event_id, lineup_status, beta, lineups:{home, away}}` shape iOS expects
+    (the same shape the BSD lineups path produces).
+
+    Each lineup member's `id` maps back to a top-level `members` entry for the
+    name + jersey number; `ranking` is the per-player score (ai_score), and
+    `statusText`/`status` splits starters from substitutes."""
+    members = _365_members_index(game)
+
+    def _side(comp: dict) -> dict:
+        lineups = comp.get("lineups") or {}
+        entries = lineups.get("members") or []
+        starters: list[dict] = []
+        subs: list[dict] = []
+        for lm in entries:
+            if not isinstance(lm, dict):
+                continue
+            status_text = (lm.get("statusText") or "").strip().lower()
+            status_code = lm.get("status")
+            is_starter = status_text == "starting" or status_code == 1
+            is_sub = status_text in ("bench", "substitute") or status_code == 2
+            # 365 lists coaching staff in the lineup too (statusText
+            # "Management", status 4). Keep only actual players.
+            if not is_starter and not is_sub:
+                continue
+            pid = lm.get("id")
+            base = members.get(pid) or {}
+            ranking = lm.get("ranking")
+            try:
+                ai_score = float(ranking) if ranking is not None else None
+            except (TypeError, ValueError):
+                ai_score = None
+            position = (lm.get("position") or {}).get("name")
+            norm = {
+                "id":            pid or 0,
+                "name":          base.get("name") or "",
+                "short_name":    base.get("shortName"),
+                "position":      position,
+                "jersey_number": _to_int(base.get("jerseyNumber")),
+                "ai_score":      ai_score,
+                "rating":        ai_score,
+            }
+            (subs if is_sub else starters).append(norm)
+        return {
+            "team_id":     comp.get("id") or 0,
+            "team_name":   comp.get("name") or "",
+            "formation":   lineups.get("formation"),
+            "confidence":  None,
+            "players":     starters,
+            "substitutes": subs,
+        }
+
+    home_comp = game.get("homeCompetitor") or {}
+    away_comp = game.get("awayCompetitor") or {}
+    home_lu = (home_comp.get("lineups") or {}).get("members") or []
+    away_lu = (away_comp.get("lineups") or {}).get("members") or []
+    if not home_lu and not away_lu:
+        return None
+
+    # 365 lineup `status`: "Confirmed" vs predicted/probable.
+    status_raw = ((home_comp.get("lineups") or {}).get("status")
+                  or (away_comp.get("lineups") or {}).get("status") or "")
+    lineup_status = "confirmed" if str(status_raw).strip().lower() == "confirmed" else "predicted"
+
+    return {
+        "event_id":      game.get("id"),
+        "lineup_status": lineup_status,
+        "beta":          False,
+        "lineups": {
+            "home": _side(home_comp),
+            "away": _side(away_comp),
+        },
+    }
+
+
+def get_365_lineups(event_id: int) -> dict | None:
+    """Confirmed/predicted lineups for a 365scores match (fetches the game
+    detail and normalizes), in the canonical
+    `{event_id, lineup_status, beta, lineups:{home,away}}` shape iOS expects."""
+    from score365_soccer_adapter import soccer_game_detail
+    try:
+        game = soccer_game_detail(int(event_id))
+    except Exception as exc:
+        logger.warning("365 lineups failed for %s: %s", event_id, exc)
+        return None
+    return _normalize_365_lineups(game or {})
+
+
+# Generic numeric stat-value parsers (used by _normalize_365_statistics). They
+# handle the quirky 365 stat-value formats: '21', '149/178 (84%)' (numerator),
+# '68%'.
+def _stat_int(value: Any) -> int | None:
+    """Parse a stat value to int. Handles '21', '467', '149/178 (84%)'
     (takes the numerator) and '68%'."""
     if value is None:
         return None
@@ -1398,7 +1339,7 @@ def _sofa_stat_int(value: Any) -> int | None:
         return None
 
 
-def _sofa_stat_pct(value: Any) -> float | None:
+def _stat_pct(value: Any) -> float | None:
     """Parse '68%' → 68.0."""
     if value is None:
         return None
@@ -1409,7 +1350,7 @@ def _sofa_stat_pct(value: Any) -> float | None:
         return None
 
 
-def _sofa_stat_float(value: Any) -> float | None:
+def _stat_float(value: Any) -> float | None:
     if value is None:
         return None
     try:
@@ -1478,16 +1419,16 @@ def _normalize_365_statistics(stats: list, home_id, away_id) -> dict | None:
         name = str(s.get("name") or "").strip().lower()
         val = s.get("value")
         if name == "shots inside the box":
-            box[sk][0] = _sofa_stat_int(val)
+            box[sk][0] = _stat_int(val)
         elif name == "shots outside the box":
-            box[sk][1] = _sofa_stat_int(val)
+            box[sk][1] = _stat_int(val)
         mapping = _S365_STAT_NAME_MAP.get(name)
         if not mapping:
             continue
         field, kind = mapping
-        parsed = (_sofa_stat_pct(val) if kind == "pct"
-                  else _sofa_stat_float(val) if kind == "float"
-                  else _sofa_stat_int(val))
+        parsed = (_stat_pct(val) if kind == "pct"
+                  else _stat_float(val) if kind == "float"
+                  else _stat_int(val))
         if parsed is not None:
             side[field] = parsed
             found = True
@@ -1505,48 +1446,6 @@ def _normalize_365_statistics(stats: list, home_id, away_id) -> dict | None:
     return {"home": home, "away": away}
 
 
-def _normalize_sofa_statistics(raw: dict | None) -> dict | None:
-    """Translate a Sofascore /statistics response into the canonical
-    `{home, away}` TeamStats shape iOS expects (uses the ALL-period group).
-    Returns None when there's nothing usable so the caller can omit the key."""
-    if not isinstance(raw, dict):
-        return None
-    home: dict[str, Any] = {}
-    away: dict[str, Any] = {}
-    found = False
-    for period_group in raw.get("statistics", []):
-        if period_group.get("period") != "ALL":
-            continue
-        for group in period_group.get("groups", []):
-            for item in group.get("statisticsItems", []):
-                key = item.get("key")
-                if key == "ballPossession":
-                    home["ball_possession"] = _sofa_stat_pct(item.get("home"))
-                    away["ball_possession"] = _sofa_stat_pct(item.get("away"))
-                    found = True
-                elif key in ("expectedGoals", "xg"):
-                    home["expected_goals"] = _sofa_stat_float(item.get("home"))
-                    away["expected_goals"] = _sofa_stat_float(item.get("away"))
-                    found = True
-                elif key in _SOFA_STAT_INT_KEYS:
-                    field = _SOFA_STAT_INT_KEYS[key]
-                    home[field] = _sofa_stat_int(item.get("home"))
-                    away[field] = _sofa_stat_int(item.get("away"))
-                    found = True
-    if not found:
-        return None
-    for side in (home, away):
-        acc, tot = side.get("accurate_passes"), side.get("total_passes")
-        if acc is not None and tot:
-            side["pass_accuracy_pct"] = round(acc / tot * 100, 1)
-    return {"home": home, "away": away}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Sofascore lineups + standings (the BSD-only endpoints 404'd / returned
-# "unavailable" for Sofascore-primary leagues like the Israeli Premier League).
-
-
 def _to_int(v: Any) -> int | None:
     if v is None:
         return None
@@ -1556,152 +1455,11 @@ def _to_int(v: Any) -> int | None:
         return None
 
 
-def _normalize_sofa_lineup_side(side: dict) -> dict:
-    """Sofascore lineup side → canonical iOS LineupTeam shape. Splits starters
-    from substitutes via each entry's `substitute` flag."""
-    entries = side.get("players") or []
-    starters: list[dict] = []
-    subs: list[dict] = []
-    team_id = 0
-    for e in entries:
-        if not isinstance(e, dict):
-            continue
-        p = e.get("player") or {}
-        if not team_id and e.get("teamId"):
-            team_id = e.get("teamId")
-        rating = (e.get("statistics") or {}).get("rating")
-        try:
-            rating = float(rating) if rating is not None else None
-        except (TypeError, ValueError):
-            rating = None
-        pid = p.get("id") or 0
-        norm = {
-            "id":            pid,
-            "name":          p.get("name") or "",
-            "short_name":    p.get("shortName"),
-            "position":      e.get("position") or p.get("position"),
-            "jersey_number": _to_int(e.get("shirtNumber") or e.get("jerseyNumber") or p.get("jerseyNumber")),
-            "ai_score":      rating,
-            "photo_url":     f"https://api.sofascore.app/api/v1/player/{pid}/image" if pid else None,
-        }
-        (subs if e.get("substitute") else starters).append(norm)
-    return {
-        "team_id":     team_id,
-        "team_name":   "",                  # iOS reads team names from match detail
-        "formation":   side.get("formation"),
-        "confidence":  None,
-        "players":     starters,
-        "substitutes": subs,
-    }
-
-
-def get_sofa_lineups(event_id: int) -> dict | None:
-    """Confirmed/predicted lineups for a Sofascore match, in the canonical
-    `{lineup_status, lineups:{home,away}, event_id}` shape iOS expects."""
-    try:
-        raw = sofa.event_lineups(event_id)
-    except Exception as exc:
-        logger.warning("sofa lineups failed for %s: %s", event_id, exc)
-        return None
-    if not isinstance(raw, dict) or not (raw.get("home") or raw.get("away")):
-        return None
-    return {
-        "event_id":      event_id,
-        "lineup_status": "confirmed" if raw.get("confirmed") else "predicted",
-        "beta":          False,
-        "lineups": {
-            "home": _normalize_sofa_lineup_side(raw.get("home") or {}),
-            "away": _normalize_sofa_lineup_side(raw.get("away") or {}),
-        },
-    }
-
-
-def get_sofa_standings(slug: str) -> dict | None:
-    """League table for a Sofascore-primary competition slug, in the canonical
-    LeagueStandings shape (matching `_normalize_soccer_standings`).
-
-    Sofascore returns split competitions (e.g. the Israeli Ligat Ha'al, which
-    splits into Championship + Relegation rounds after the regular season) as
-    MULTIPLE groups. We must NOT flatten them into one list — overlapping
-    positions (1-6, then 1-8, …) made iOS render a garbled fragment. Instead we
-    emit a proper `groups[]` array (one mini-table per group), exactly like the
-    BSD grouped path the client already knows how to draw. For a single-table
-    league we emit a flat `standings[]`.
-    """
-    utid = SOFASCORE_COMPETITION_IDS.get(slug)
-    if not utid:
-        return None
-    try:
-        season_list = sofa.seasons(utid)
-        if not season_list:
-            return None
-        season_id = season_list[0].get("id")
-        season_name = season_list[0].get("name") or ""
-        raw = sofa.standings(utid, season_id)
-    except Exception as exc:
-        logger.warning("sofa standings failed for %s: %s", slug, exc)
-        return None
-    groups = raw.get("standings") if isinstance(raw, dict) else None
-    if not groups:
-        return None
-
-    def _rows(grp: dict) -> list[dict]:
-        out: list[dict] = []
-        for row in (grp.get("rows") or []):
-            team = row.get("team") or {}
-            tid = team.get("id") or 0
-            gf = _to_int(row.get("scoresFor")) or 0
-            ga = _to_int(row.get("scoresAgainst")) or 0
-            team_name = team.get("name") or ""
-            team_name_he = team_names_he.hebrew_name(team_name)
-            entry = {
-                "position":   _to_int(row.get("position")) or 0,
-                "team_id":    tid,
-                "team_name":  team_name,
-                "team_crest": f"https://api.sofascore.app/api/v1/team/{tid}/image" if tid else None,
-                "played":     _to_int(row.get("matches")) or 0,
-                "won":        _to_int(row.get("wins")) or 0,
-                "drawn":      _to_int(row.get("draws")) or 0,
-                "lost":       _to_int(row.get("losses")) or 0,
-                "gf": gf, "ga": ga, "gd": gf - ga,
-                "pts":        _to_int(row.get("points")) or 0,
-                "form":       None,
-                "live":       None,
-            }
-            if team_name_he:
-                entry["team_name_he"] = team_name_he
-            out.append(entry)
-        return out
-
-    # When a league splits into playoff rounds, those "Round" groups ARE the
-    # live standings; the full regular-season table Sofascore also returns is
-    # redundant, so prefer the round groups when present.
-    round_groups = [g for g in groups if "round" in (g.get("name") or "").lower()]
-    use_groups = round_groups or groups
-
-    base = {"league_id": utid, "season": {"id": season_id or 0, "name": season_name}}
-
-    if len(use_groups) > 1:
-        out_groups = [
-            {"name": g.get("name") or "", "standings": _rows(g)}
-            for g in use_groups
-        ]
-        out_groups = [g for g in out_groups if g["standings"]]
-        if not out_groups:
-            return None
-        return {**base, "grouped": True, "standings": [], "groups": out_groups}
-
-    rows = _rows(use_groups[0]) if use_groups else []
-    if not rows:
-        return None
-    return {**base, "grouped": False, "standings": rows}
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Team full-season matches. One call yields a team's whole season across all
 # competitions. BSD for the leagues it covers (the app already holds BSD team
-# ids there); Sofascore only for sofa-primary leagues (e.g. Israeli) where BSD
-# coverage is thin.
+# ids there); 365scores for the 365-primary leagues (euros, ligat_haal) where
+# there is no BSD id.
 
 
 # Position display order for national-team squads (GK → DF → MF → FW).
@@ -1765,8 +1523,8 @@ def national_team_squad(team_id: int | str) -> dict:
 
 def get_team_season(team_id: str, league_slug: str | None = None, name: str | None = None) -> list[dict]:
     source = PRIMARY_SOURCE.get(league_slug or "", "bsd")
-    if source == "sofascore":
-        return _sofa_team_season(team_id, name)
+    if source == "score365":
+        return _s365_team_season(team_id, league_slug)
     return _bsd_team_season(team_id)
 
 
@@ -1792,47 +1550,36 @@ def _bsd_team_season(team_id: str) -> list[dict]:
     return _finalize_team_matches([_from_bsd_event(e) for e in events])
 
 
-def _sofa_team_season(team_id: str, name: str | None) -> list[dict]:
-    sofa_id = _resolve_sofa_team_id(team_id, name)
-    if not sofa_id:
+def _s365_team_season(team_id: str, league_slug: str | None) -> list[dict]:
+    """A 365-primary team's season: the competition's rolling 365 window
+    (current/results/fixtures), filtered to games this team plays in, returned
+    as canonical s365 matches. 365 has no per-team season endpoint, so we filter
+    the competition slate by competitor id."""
+    from score365_soccer_adapter import (
+        soccer_competition_games, COMPETITION_IDS as S365_IDS,
+        league_slug_for_competition_id,
+    )
+    competition_id = S365_IDS.get(league_slug or "")
+    if competition_id is None:
         return []
-    raw: list[dict] = []
-    for page in range(0, 2):       # upcoming
-        evs = sofa.team_events(sofa_id, upcoming=True, page=page)
-        if not evs:
-            break
-        raw += evs
-    for page in range(0, 4):       # played — ~120 matches covers a full season
-        evs = sofa.team_events(sofa_id, upcoming=False, page=page)
-        if not evs:
-            break
-        raw += evs
-    season_start, _ = _season_window()   # keep this season only (team-events pages back further)
-    out = []
-    for e in raw:
-        m = _from_sofa_event(e)
-        if not m.get("competition"):
-            tour = e.get("tournament", {}) or {}
-            m["competition"] = (tour.get("uniqueTournament", {}) or {}).get("name") or tour.get("name") or "other"
-        ko = m.get("kickoff")
-        if ko and ko[:10] < season_start:   # ISO date prefix compares lexically
+    try:
+        tid = str(int(team_id))
+    except (TypeError, ValueError):
+        return []
+    try:
+        games = soccer_competition_games(competition_id)
+    except Exception as exc:
+        logger.warning("365 team season failed for %s/%s: %s", team_id, league_slug, exc)
+        return []
+    out: list[dict] = []
+    for g in games:
+        hid = str((g.get("homeCompetitor") or {}).get("id") or "")
+        aid = str((g.get("awayCompetitor") or {}).get("id") or "")
+        if tid not in (hid, aid):
             continue
-        out.append(m)
+        slug = league_slug or league_slug_for_competition_id(g.get("competitionId"))
+        out.append(_from_365_game(g, slug=slug))
     return _finalize_team_matches(out)
-
-
-def _resolve_sofa_team_id(team_id: str, name: str | None):
-    if team_id and str(team_id).isdigit():
-        try:
-            if sofa.team_events(int(team_id), upcoming=False, page=0):
-                return int(team_id)
-        except Exception:
-            pass
-    if name:
-        teams = sofa.search_teams(name, sport="football")
-        if teams:
-            return teams[0].get("id")
-    return None
 
 
 def _finalize_team_matches(matches: list[dict]) -> list[dict]:

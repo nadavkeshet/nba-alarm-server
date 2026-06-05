@@ -186,7 +186,7 @@ def _soccer_team_matches(team_id, cache: dict, league: str | None = None) -> lis
     key = ("soccer_team", str(team_id), league or "")
     if key in cache:
         return cache[key]
-    # Try the (BSD/Sofa) team-season first, passing the league so non-BSD teams
+    # Try the (BSD/365) team-season first, passing the league so non-BSD teams
     # route to the correct provider.
     try:
         out = soccer_source.get_team_season(str(team_id), league_slug=league) or []
@@ -195,7 +195,7 @@ def _soccer_team_matches(team_id, cache: dict, league: str | None = None) -> lis
         out = []
 
     if not out and league:
-        # BSD/Sofa had nothing (e.g. an Israeli / 365-covered team). The league
+        # BSD had nothing (e.g. an Israeli / 365-covered team). The league
         # window already cascades to 365scores — filter it to this team's matches.
         # _soccer_league_window returns already-tagged ("soccer") dicts.
         tid = str(team_id)

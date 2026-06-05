@@ -1,6 +1,6 @@
 """365scores team-stats normalization: the /game/stats/ flat list (keyed by
 competitorId) → canonical {home, away} TeamStats shape the iOS reads, so 365
-matches show as complete a Statistics tab as BSD/Sofascore ones."""
+matches show as complete a Statistics tab as BSD ones."""
 import soccer_source as ss
 
 

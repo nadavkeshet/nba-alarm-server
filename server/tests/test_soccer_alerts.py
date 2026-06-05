@@ -213,9 +213,9 @@ def test_resolve_underdog_ranking_fallback(monkeypatch):
     assert dog["underdog_source"] == "ranking"
 
 
-def test_resolve_underdog_none_for_sofa(monkeypatch):
-    # sofa-* has no BSD prediction path
-    assert ss.resolve_underdog("sofa-14023956") is None
+def test_resolve_underdog_none_for_s365(monkeypatch):
+    # s365-* (non-BSD source) has no BSD prediction path
+    assert ss.resolve_underdog("s365-14023956") is None
 
 
 def test_fifa_rankings_alias_bridging():

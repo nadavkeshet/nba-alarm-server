@@ -5,7 +5,6 @@
     "country": "England",
     "primary_source": "bsd",
     "bsd_id": 1,
-    "sofascore_id": 17,
     "score365_id": 7
   },
   "la_liga": {
@@ -14,7 +13,6 @@
     "country": "Spain",
     "primary_source": "bsd",
     "bsd_id": 3,
-    "sofascore_id": 8,
     "score365_id": 11
   },
   "serie_a": {
@@ -23,7 +21,6 @@
     "country": "Italy",
     "primary_source": "bsd",
     "bsd_id": 4,
-    "sofascore_id": 23,
     "score365_id": 17
   },
   "bundesliga": {
@@ -32,7 +29,6 @@
     "country": "Germany",
     "primary_source": "bsd",
     "bsd_id": 5,
-    "sofascore_id": 35,
     "score365_id": 25
   },
   "ligue_1": {
@@ -41,7 +37,6 @@
     "country": "France",
     "primary_source": "bsd",
     "bsd_id": 6,
-    "sofascore_id": 34,
     "score365_id": 35
   },
   "ucl": {
@@ -50,7 +45,6 @@
     "country": "Europe",
     "primary_source": "bsd",
     "bsd_id": 7,
-    "sofascore_id": 7,
     "score365_id": 572
   },
   "europa_league": {
@@ -59,7 +53,6 @@
     "country": "Europe",
     "primary_source": "bsd",
     "bsd_id": 8,
-    "sofascore_id": 679,
     "score365_id": 573
   },
   "world_cup": {
@@ -68,25 +61,22 @@
     "country": "World",
     "primary_source": "bsd",
     "bsd_id": 27,
-    "sofascore_id": 16,
     "score365_id": 5930
   },
   "euros": {
     "name_en": "UEFA European Championship",
     "name_he": "אליפות אירופה",
     "country": "Europe",
-    "primary_source": "sofascore",
+    "primary_source": "score365",
     "bsd_id": null,
-    "sofascore_id": 1,
     "score365_id": 6316
   },
   "ligat_haal": {
     "name_en": "Israeli Premier League",
     "name_he": "ליגת ווינר",
     "country": "Israel",
-    "primary_source": "sofascore",
+    "primary_source": "score365",
     "bsd_id": null,
-    "sofascore_id": 266,
     "score365_id": 42
   }
 }

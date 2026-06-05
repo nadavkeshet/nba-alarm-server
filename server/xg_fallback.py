@@ -1,6 +1,6 @@
 """Local xG estimator (P1 stub).
 
-Goal: decouple the Drama Engine from Sofascore's xG numbers. If Sofascore is
+Goal: a local xG estimator the Drama Engine can fall back to when upstream xG is
 down or doesn't have xG for a particular shot, compute it locally from
 `(x, y, body_part, situation)`.
 
@@ -25,7 +25,7 @@ _warned = False
 def estimate_xg(shot: dict) -> float | None:
     """Estimate xG from a shot dict.
 
-    Expected shot shape (Sofascore-compatible):
+    Expected shot shape:
         {
             "playerCoordinates": {"x": float, "y": float},
             "bodyPart": str,

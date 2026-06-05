@@ -240,8 +240,8 @@ def _tick() -> None:
 
     # Low-latency wake: subscribe the BSD-canonical matches we're watching to the
     # BSD WebSocket so their `event` frames flip `_wake` and the next tick runs
-    # within ~1s of a real state change (instead of waiting POLL_INTERVAL). 365/
-    # Sofascore matches have no WS and rely on the normal poll — that's expected.
+    # within ~1s of a real state change (instead of waiting POLL_INTERVAL). 365
+    # matches have no WS and rely on the normal poll — that's expected.
     # Best-effort: a WS hiccup must never break the radar tick.
     try:
         bsd_event_ids = {
@@ -727,7 +727,7 @@ def _pick_imminent(fixtures: list[dict], now) -> dict | None:
 
 def _fetch_lineup_status(cid: str) -> str | None:
     """lineup_status for a canonical match id, dispatching by id prefix:
-    bsd-* → bzzoiro_adapter.event_lineups; sofa-/s365- → soccer_source.get_sofa_lineups.
+    bsd-* → bzzoiro_adapter.event_lineups; s365-* → soccer_source.get_365_lineups.
     Best-effort: any failure returns None."""
     try:
         source, native = ss.parse_canonical_id(cid)
@@ -738,7 +738,7 @@ def _fetch_lineup_status(cid: str) -> str | None:
         if source == "bsd":
             data = bzzoiro_adapter.event_lineups(eid)
         else:
-            data = ss.get_sofa_lineups(eid)
+            data = ss.get_365_lineups(eid)
     except Exception as exc:
         logger.warning("prematch: lineup fetch failed for %s: %s", cid, exc)
         return None
@@ -877,7 +877,7 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
         # that only carry `enabled` still fire every moment. Each moment carries a
         # STATE-ENCODED dedup signal so it fires exactly once regardless of which
         # tick catches it; one_shot=False keeps the row alive for later moments.
-        # Works identically for BSD- and 365/Sofascore-sourced matches.
+        # Works identically for BSD- and 365-sourced matches.
         cfg = alarm.get("config") or {}
         if not cfg.get("enabled", True):
             return
@@ -1315,8 +1315,8 @@ def _recent_incident(match: dict, *, types: tuple[str, ...], window_min: int) ->
     minute_now = match.get("minute") or 0
     cutoff = minute_now - window_min
     for inc in incidents:
-        # BSD shape: type=penalty, minute=N
-        # Sofascore shape: incidentType=penalty, time=N
+        # Canonical shape: type=penalty, minute=N (older shapes used
+        # incidentType=penalty, time=N — tolerate both).
         inc_type = (inc.get("type") or inc.get("incidentType") or "").lower()
         inc_min = inc.get("minute") or inc.get("time") or 0
         if any(t in inc_type for t in types) and inc_min >= cutoff:
@@ -1327,8 +1327,8 @@ def _recent_incident(match: dict, *, types: tuple[str, ...], window_min: int) ->
 def _recent_penalty_minute(match: dict) -> int | None:
     """Minute of the most recent penalty-award incident, or None. Used to dedup
     a match_moments penalty alert by the incident minute (stable across ticks),
-    NOT by the live clock which advances every poll. Handles both BSD
-    (type=penalty, minute=N) and Sofascore (incidentType=penalty, time=N)."""
+    NOT by the live clock which advances every poll. Handles the canonical
+    (type=penalty, minute=N) and older (incidentType=penalty, time=N) shapes."""
     incidents = match.get("incidents") or []
     minutes: list[int] = []
     for inc in incidents:
@@ -1353,7 +1353,7 @@ def _find_recent_red_card(match: dict) -> dict | None:
                 "minute": inc.get("minute") or inc.get("time") or 0,
                 "player": inc.get("player") or inc.get("playerName") or "",
             })
-        # Sofascore sometimes types red cards as "card" with class "red"
+        # Some sources type red cards as "red"/"redcard" directly.
         if inc_type == "red" or card_type == "redcard":
             candidates.append({
                 "minute": inc.get("minute") or inc.get("time") or 0,

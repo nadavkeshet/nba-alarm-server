@@ -13,7 +13,7 @@ we need for the Drama Engine in a single well-documented JSON shape:
 - Pre-match ML predictions (CatBoost)
 - Standings with xG totals
 
-BSD is the **primary** football source for v3. Sofascore stays as the
+BSD is the **primary** football source for v3, with 365scores as the
 secondary for the two competitions BSD doesn't cover (Euros, Ligat Ha'al)
 and as fallback when BSD has an outage.
 
@@ -89,7 +89,7 @@ class BzzoiroError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# Cache (mirrors sofascore_adapter._Cache; deliberately not shared so the two
+# Cache (a small TTL cache; deliberately not shared so the two
 # can have different TTLs without coordination)
 
 class _Cache:

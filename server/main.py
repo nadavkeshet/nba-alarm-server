@@ -2987,7 +2987,7 @@ def soccer_games(
 @app.get("/soccer/match/{canonical_id}")
 def soccer_match_detail(canonical_id: str):
     """Full match payload including xG, momentum, shotmap, incidents.
-    `canonical_id` is the source-tagged id ('bsd-372' or 'sofa-14023956')
+    `canonical_id` is the source-tagged id ('bsd-372' or 's365-4702049')
     returned by /soccer/games.
     """
     import soccer_source as _ss
@@ -3001,7 +3001,7 @@ def soccer_match_detail(canonical_id: str):
 def soccer_match_prediction(canonical_id: str):
     """Pre-match prediction for the alarm sheet: win probabilities, the clear
     underdog if any (Sensation Watch), and a heuristic 'alert chance' for the
-    Drama Radar slider. BSD-only — degrades to has_prediction=false for sofa-*
+    Drama Radar slider. BSD-only — degrades to has_prediction=false for s365-*
     ids or when no prediction exists, so the client just hides that UI.
     """
     import soccer_source as _ss
@@ -3173,9 +3173,9 @@ def soccer_drama_timeline(canonical_id: str, step: int = 2):
 @app.get("/soccer/team/{team_id}/matches")
 def soccer_team_matches(team_id: str, league: str = "", name: str = ""):
     """All of a team's matches this season across competitions (one call).
-    BSD for its leagues; Sofascore for sofa-primary leagues. `league` is the
-    team's primary league slug (used to pick the source); `name` helps resolve
-    a Sofascore id when needed."""
+    BSD for its leagues; 365scores for the 365-primary leagues (euros,
+    ligat_haal). `league` is the team's primary league slug (used to pick the
+    source). `name` is accepted for backward compatibility but unused."""
     import soccer_source as _ss
     return _ss.get_team_season(team_id, league or None, name or None)
 
@@ -3195,8 +3195,8 @@ def soccer_team_squad(team_id: str):
 
 @app.get("/soccer/match/{canonical_id}/lineups")
 def soccer_match_lineups(canonical_id: str):
-    """Confirmed / predicted lineups for a soccer match. Supports both BSD- and
-    Sofascore-sourced ids; unknown sources return lineup_status=unavailable."""
+    """Confirmed / predicted lineups for a soccer match. Supports BSD- and
+    365scores-sourced ids; unknown sources return lineup_status=unavailable."""
     if canonical_id.startswith("bsd-"):
         try:
             event_id = int(canonical_id[4:])
@@ -3220,15 +3220,19 @@ def soccer_match_lineups(canonical_id: str):
             log.warning("player-stats merge failed for %s: %s", event_id, exc)
         return _normalize_lineups(result, ratings)
 
-    if canonical_id.startswith("sofa-"):
+    if canonical_id.startswith("s365-"):
         try:
             event_id = int(canonical_id[5:])
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid canonical_id format")
         import soccer_source as _ss
-        result = _ss.get_sofa_lineups(event_id)
+        result = _ss.get_365_lineups(event_id)
         if result is None:
             return {"lineup_status": "unavailable", "lineups": None, "event_id": event_id}
+        # The 365 normalizer already emits the final per-player shape (name,
+        # position, jersey, ai_score = the 365 `ranking`, and the same value as
+        # `rating` since 365's ranking IS the post-match player rating). No BSD
+        # ratings-merge applies here.
         return result
 
     return {"lineup_status": "unavailable", "lineups": None, "event_id": None}
@@ -3301,13 +3305,20 @@ def soccer_league_standings(slug: str):
             raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
         return _normalize_soccer_standings(raw, league_id)
 
-    # Sofascore-primary leagues (e.g. the Israeli Premier League) have no BSD
-    # competition id — fall back to Sofascore's table.
-    import soccer_source as _ss
-    result = _ss.get_sofa_standings(slug)
-    if result is None:
-        raise HTTPException(status_code=404, detail=f"No standings for league '{slug}'")
-    return result
+    # 365-primary leagues (euros, ligat_haal) have no BSD competition id — serve
+    # the table from 365scores. Group-based competitions (Euros groups, the
+    # Israeli Championship/Relegation split) come back as a `groups[]` array.
+    from score365_soccer_adapter import COMPETITION_IDS, soccer_league_standings_table
+    comp_id = COMPETITION_IDS.get(slug)
+    if comp_id is not None:
+        try:
+            result = soccer_league_standings_table(comp_id)
+        except Exception as exc:
+            log.warning("365 soccer standings error for %s: %s", slug, exc)
+            raise HTTPException(status_code=503, detail="Standings temporarily unavailable")
+        if result is not None:
+            return result
+    raise HTTPException(status_code=404, detail=f"No standings for league '{slug}'")
 
 
 def _normalize_soccer_standings(raw: dict, league_id: int) -> dict:

@@ -293,7 +293,7 @@ def test_translator_picks_up_recent_red_card():
 
 
 def test_translator_normalizes_high_signed_pressure():
-    """Both BSD and Sofa emit signed values ~[-80, +80] per minute. The
+    """Momentum emits signed values ~[-80, +80] per minute. The
     translator must normalize to the engine's [-1, +1] expected range
     (clamped — sustained dominance ≥30 saturates to ±1)."""
     detail = {
