@@ -104,20 +104,30 @@ def _tag(matches: list[dict], sport: str) -> list[dict]:
 
 # ── per-league / per-team windows (memoized via the per-render cache) ─────────
 
-def _fetch_window(fetcher, slug: str, label: str) -> list[dict]:
-    """Fan the per-day fetches for one league window out across the pool, in
-    parallel. `fetcher(slug, date_iso)` is a blocking source call."""
-    dates = _window_dates()
+def _feed_fetch(sport: str, slug: str, date_iso: str) -> list[dict]:
+    """Fetch one (league, day) through the app's `/feed` cache layer, which uses
+    the SAME standard BSD-primary → 365-fallback cascade as the rest of the app
+    and reuses the prewarmed/already-downloaded matches (+ an empty-date memo
+    that skips confirmed-empty days). Lazy `import main` to avoid a load-time
+    circular import (main imports calendar_scope lazily inside its route)."""
+    import main
+    if sport == "soccer":
+        return main._feed_soccer(slug, date_iso, None) or []
+    return main._feed_basketball(slug, date_iso, None) or []
 
+
+def _fetch_window(sport: str, slug: str) -> list[dict]:
+    """Fan one league window's per-day fetches out across the pool, in parallel,
+    through the feed cache layer."""
     def _one(date_iso: str) -> list[dict]:
         try:
-            return fetcher(slug, date_iso=date_iso) or []
+            return _feed_fetch(sport, slug, date_iso)
         except Exception as exc:
-            logger.warning("calendar_scope: %s %s/%s failed: %s", label, slug, date_iso, exc)
+            logger.warning("calendar_scope: %s %s/%s failed: %s", sport, slug, date_iso, exc)
             return []
 
     out: list[dict] = []
-    for res in _FETCH_POOL.map(_one, dates):
+    for res in _FETCH_POOL.map(_one, _window_dates()):
         out += res
     return out
 
@@ -126,7 +136,7 @@ def _soccer_league_window(slug: str, cache: dict) -> list[dict]:
     key = ("soccer_league", slug)
     if key in cache:
         return cache[key]
-    tagged = _tag(_fetch_window(soccer_source.get_soccer_matches, slug, "soccer"), "soccer")
+    tagged = _tag(_fetch_window("soccer", slug), "soccer")
     cache[key] = tagged
     return tagged
 
@@ -135,7 +145,7 @@ def _bball_league_window(slug: str, cache: dict) -> list[dict]:
     key = ("bball_league", slug)
     if key in cache:
         return cache[key]
-    tagged = _tag(_fetch_window(basketball_source.get_basketball_games, slug, "bball"), "basketball")
+    tagged = _tag(_fetch_window("basketball", slug), "basketball")
     cache[key] = tagged
     return tagged
 
@@ -143,13 +153,13 @@ def _bball_league_window(slug: str, cache: dict) -> list[dict]:
 def _prefetch_windows(soccer_slugs: list[str], bball_slugs: list[str], cache: dict) -> None:
     """Warm many league windows in ONE flat parallel batch (every league × every
     day concurrent, not league-by-league). Used by the heavy "all" scope so a
-    cold render fans out fully instead of serializing ~19 leagues. Populates the
-    per-render `cache` so the window helpers then read it. Source adapters keep
-    their own caches, so already-downloaded days are instant."""
+    cold render fans out fully instead of serializing ~19 leagues. Goes through
+    the feed cache (standard BSD→365 cascade), so already-downloaded/prewarmed
+    days are instant and confirmed-empty days are skipped."""
     dates = _window_dates()
     tasks = (
         [("soccer", s, d) for s in soccer_slugs if ("soccer_league", s) not in cache for d in dates]
-        + [("bball", s, d) for s in bball_slugs if ("bball_league", s) not in cache for d in dates]
+        + [("basketball", s, d) for s in bball_slugs if ("bball_league", s) not in cache for d in dates]
     )
     if not tasks:
         return
@@ -157,12 +167,7 @@ def _prefetch_windows(soccer_slugs: list[str], bball_slugs: list[str], cache: di
     def _one(task):
         sport, slug, date_iso = task
         try:
-            if sport == "soccer":
-                # Use 365's all-competitions day payload (shared + cached per date),
-                # so 14 leagues on one day = ONE download, not 14 BSD round-trips.
-                # Safe for "all" — 365 covers the same fixtures (incl. World Cup).
-                return (sport, slug, soccer_source._fetch_365(slug, date_iso) or [])
-            return (sport, slug, basketball_source.get_basketball_games(slug, date_iso=date_iso) or [])
+            return (sport, slug, _feed_fetch(sport, slug, date_iso))
         except Exception as exc:
             logger.warning("calendar_scope: prefetch %s %s/%s failed: %s", sport, slug, date_iso, exc)
             return (sport, slug, [])
@@ -174,7 +179,7 @@ def _prefetch_windows(soccer_slugs: list[str], bball_slugs: list[str], cache: di
     for s in soccer_slugs:
         cache.setdefault(("soccer_league", s), _tag(agg.get(("soccer", s), []), "soccer"))
     for s in bball_slugs:
-        cache.setdefault(("bball_league", s), _tag(agg.get(("bball", s), []), "basketball"))
+        cache.setdefault(("bball_league", s), _tag(agg.get(("basketball", s), []), "basketball"))
 
 
 def _soccer_team_matches(team_id, cache: dict, league: str | None = None) -> list[dict]:

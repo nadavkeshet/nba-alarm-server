@@ -14,6 +14,19 @@ import basketball_source
 import main
 
 
+@pytest.fixture(autouse=True)
+def _route_feed_to_sources(monkeypatch):
+    """calendar_scope fetches through main._feed_soccer/_feed_basketball (the
+    /feed cache layer). For tests, route those straight to the source functions
+    the individual tests monkeypatch — bypassing the real feed cache and keeping
+    every existing `monkeypatch.setattr(soccer_source, "get_soccer_matches", ...)`
+    valid. Attribute lookup at call time picks up each test's fake."""
+    monkeypatch.setattr(main, "_feed_soccer",
+                        lambda lg, d, tz=None: soccer_source.get_soccer_matches(lg, date_iso=d))
+    monkeypatch.setattr(main, "_feed_basketball",
+                        lambda lg, d, tz=None: basketball_source.get_basketball_games(lg, date_iso=d))
+
+
 # ── fixtures / helpers ────────────────────────────────────────────────────────
 
 def _soccer_match(mid, slug, date_iso, home=("1", "A"), away=("2", "B")):
@@ -86,9 +99,6 @@ def test_all_scope_hits_every_catalog_slug(monkeypatch):
         bball_slugs.add(slug)
         return []
 
-    # The "all" scope's soccer prefetch uses the shared 365 allscores path
-    # (soccer_source._fetch_365), not per-league get_soccer_matches.
-    monkeypatch.setattr(soccer_source, "_fetch_365", lambda slug, date_iso: fake_soccer(slug, date_iso=date_iso))
     monkeypatch.setattr(soccer_source, "get_soccer_matches", fake_soccer)
     monkeypatch.setattr(basketball_source, "get_basketball_games", fake_bball)
 
