@@ -2822,6 +2822,25 @@ def _normalize_bsd_player(p: dict) -> dict:
         "BLK": p.get("blocks"),
         "TO":  p.get("turnovers"),
         "PF":  p.get("personal_fouls"),
+        # Shooting splits + plus/minus + advanced stats. Both the BSD raw box
+        # score and the 365 normalizer (_s365_box_player) emit these exact
+        # snake_case keys, so passing them straight through fixes FG / 3P / +/-
+        # (which were showing "-") for BOTH sources.
+        "field_goals_made":         p.get("field_goals_made"),
+        "field_goals_attempted":    p.get("field_goals_attempted"),
+        "three_pointers_made":      p.get("three_pointers_made"),
+        "three_pointers_attempted": p.get("three_pointers_attempted"),
+        "free_throws_made":         p.get("free_throws_made"),
+        "free_throws_attempted":    p.get("free_throws_attempted"),
+        "plus_minus":               p.get("plus_minus"),
+        "offensive_rebounds":       p.get("offensive_rebounds"),
+        "defensive_rebounds":       p.get("defensive_rebounds"),
+        "field_goal_pct":           p.get("field_goal_pct"),
+        "three_point_pct":          p.get("three_point_pct"),
+        "true_shooting_pct":        p.get("true_shooting_pct"),
+        "effective_fg_pct":         p.get("effective_fg_pct"),
+        "usage_pct":                p.get("usage_pct"),
+        "rating":                   p.get("rating"),
         # 365 headshot stamped onto the player by get_basketball_box_score —
         # keep it through normalization so the box score shows player photos.
         "photo": p.get("photo"),
