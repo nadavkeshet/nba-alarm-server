@@ -160,6 +160,7 @@ def test_favorites_scope(monkeypatch):
     with Session(eng) as s:
         s.add(main.SoccerFavoriteTeamDB(
             user_token="tok", team_id="club1", alt_team_ids="club2",
+            competitions="premier_league",
         ))
         s.add(main.FavoriteLeagueDB(user_token="tok", league="nba"))
         s.add(main.SoccerFavoritePlayerDB(
@@ -171,8 +172,15 @@ def test_favorites_scope(monkeypatch):
     league_calls = set()
 
     def fake_season(team_id, league_slug=None, name=None):
+        # Only the player path (club3/nat3) routes through team-season now.
         season_calls.add(team_id)
         return [_soccer_match(f"s-team-{team_id}", "premier_league", d)]
+
+    def fake_league(slug, date_iso=None, tz=None):
+        # fav team (idset club1/club2) is matched via its competitions' window.
+        if slug == "premier_league" and date_iso == d:
+            return [_soccer_match("s-fav-pl", slug, date_iso, home=("club2", "Club"))]
+        return []
 
     def fake_bball(slug, date_iso=None, tz=None):
         league_calls.add(slug)
@@ -180,14 +188,17 @@ def test_favorites_scope(monkeypatch):
 
     monkeypatch.setattr(soccer_source, "get_team_season", fake_season)
     monkeypatch.setattr(basketball_source, "get_basketball_games", fake_bball)
-    monkeypatch.setattr(soccer_source, "get_soccer_matches", lambda *a, **k: [])
+    monkeypatch.setattr(soccer_source, "get_soccer_matches", fake_league)
 
     with Session(eng) as s:
         out = cs.collect_matches(s, "favorites", {"include_players": True}, "tok")
 
-    # fav team (club1 + alt club2) AND player (club3 club + nat3 national)
-    assert season_calls == {"club1", "club2", "club3", "nat3"}
+    # Player path still uses team-season (club3 club + nat3 national).
+    assert season_calls == {"club3", "nat3"}
     assert "nba" in league_calls
+
+    ids = {m["id"] for m in out}
+    assert "s-fav-pl" in ids   # fav team matched by id-set via its competition window
 
     sports = {m["_sport"] for m in out}
     assert sports == {"soccer", "basketball"}
@@ -339,3 +350,53 @@ def test_custom_soccer_teams_with_league(monkeypatch):
     out = cs.collect_matches(None, "custom",
         {"custom_soccer_teams": [{"id": "567", "league": "ligat_haal"}]}, "tok")
     assert any(m["home"]["id"] == "567" for m in out)
+
+
+# ── 9. id-set team matching across leagues ────────────────────────────────────
+
+def test_team_matches_soccer_by_idset_across_leagues(monkeypatch):
+    import calendar_scope as cs, soccer_source
+    def fake(slug, date_iso=None, tz=None):
+        d5 = cs._window_dates()[5]
+        if slug == "europa_league" and date_iso == d5:
+            return [{"id": "e1", "competition": "europa_league", "kickoff": f"{date_iso}T18:00:00Z",
+                     "home": {"id": "130", "name": "Maccabi"}, "away": {"id": "9", "name": "X"}}]
+        if slug == "ligat_haal" and date_iso == d5:
+            return [{"id": "l1", "competition": "ligat_haal", "kickoff": f"{date_iso}T18:00:00Z",
+                     "home": {"id": "566", "name": "Maccabi"}, "away": {"id": "8", "name": "Y"}}]
+        return []
+    monkeypatch.setattr(soccer_source, "get_soccer_matches", fake)
+    out = cs._team_matches(["130", "566"], ["europa_league", "ligat_haal"], "soccer", {})
+    ids = {m["id"] for m in out}
+    assert ids == {"e1", "l1"}   # matched via 130 (BSD) and 566 (365)
+
+
+def test_team_matches_basketball_scans_all_leagues_when_no_league(monkeypatch):
+    import calendar_scope as cs, basketball_source
+    d5 = cs._window_dates()[5]
+    def fake(slug, date_iso=None, tz=None):
+        if slug == "winner_league" and date_iso == d5:
+            return [{"id": "g1", "league": "winner_league", "date": f"{date_iso}T18:00:00Z",
+                     "competitions": [{"competitors": [
+                         {"homeAway": "home", "team": {"id": "631", "displayName": "Maccabi"}},
+                         {"homeAway": "away", "team": {"id": "633", "displayName": "Holon"}}]}]}]
+        return []
+    monkeypatch.setattr(basketball_source, "get_basketball_games", fake)
+    out = cs._team_matches(["33", "631"], [], "basketball", {})   # no league → scan all bball
+    assert [m["id"] for m in out] == ["g1"]   # matched via 631
+
+
+def test_custom_idset_teams_collect(monkeypatch):
+    import calendar_scope as cs, basketball_source
+    d3 = cs._window_dates()[3]
+    def fake(slug, date_iso=None, tz=None):
+        if slug == "winner_league" and date_iso == d3:
+            return [{"id": "g9", "league": "winner_league", "date": f"{date_iso}T20:00:00Z",
+                     "competitions": [{"competitors": [
+                         {"homeAway": "home", "team": {"id": "631", "displayName": "Maccabi"}},
+                         {"homeAway": "away", "team": {"id": "1", "displayName": "Z"}}]}]}]
+        return []
+    monkeypatch.setattr(basketball_source, "get_basketball_games", fake)
+    out = cs.collect_matches(None, "custom",
+        {"custom_bball_teams": [{"ids": ["33", "631"], "leagues": []}]}, "tok")
+    assert any(m["id"] == "g9" for m in out)

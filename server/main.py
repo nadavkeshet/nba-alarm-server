@@ -3834,10 +3834,10 @@ class CalendarSubscribeRequest(BaseModel):
     user_token: str
     scope: str
     include_players: bool = False
-    custom_soccer_teams: list[dict] = []        # [{"id": "..", "league": ".."}]
+    custom_soccer_teams: list[dict] = []        # [{"ids":[..], "leagues":[..]}] (old {"id","league"} ok)
     custom_soccer_team_ids: list[str] = []      # legacy (no league), kept for back-compat
     custom_soccer_league_slugs: list[str] = []
-    custom_bball_teams: list[dict] = []         # [{"id": "..", "league": ".."}]
+    custom_bball_teams: list[dict] = []         # [{"ids":[..], "leagues":[..]}] (old {"id","league"} ok)
     custom_bball_league_slugs: list[str] = []
 
 

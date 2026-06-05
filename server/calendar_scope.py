@@ -174,6 +174,33 @@ def _bball_team_matches(team_id, league, cache: dict) -> list[dict]:
     return [g for g in games if tid in _bball_competitor_ids(g)]
 
 
+def _team_matches(ids, leagues, sport: str, cache: dict) -> list[dict]:
+    """Matches for a team identified by its FULL provider id-set, found by
+    scanning its leagues' windows (already _sport-tagged + 365-cascaded) and
+    keeping any match whose team ids intersect `ids`. Basketball with no known
+    leagues scans ALL basketball leagues (search gives bball teams no league)."""
+    idset = {str(i) for i in (ids or []) if i is not None and str(i).strip()}
+    if not idset:
+        return []
+    out: list[dict] = []
+    if sport == "basketball":
+        slugs = [l for l in (leagues or []) if l] or _all_bball_slugs()
+        for slug in slugs:
+            for g in _bball_league_window(slug, cache):
+                if _bball_competitor_ids(g) & idset:
+                    out.append(g)
+    else:  # soccer
+        for slug in (leagues or []):
+            if not slug:
+                continue
+            for m in _soccer_league_window(slug, cache):
+                h = str((m.get("home") or {}).get("id"))
+                a = str((m.get("away") or {}).get("id"))
+                if h in idset or a in idset:
+                    out.append(m)
+    return out
+
+
 # ── favorites ─────────────────────────────────────────────────────────────────
 
 def _alt_ids(raw: str | None) -> list[str]:
@@ -191,19 +218,15 @@ def _favorites_matches(session, params: dict, user_token: str, cache: dict) -> l
 
     raw: list[dict] = []
 
-    # Soccer favorite teams (primary + alternate provider ids).
+    # Soccer favorite teams — matched by the club's FULL provider id-set
+    # (primary + alternate provider ids for the SAME club) across all of the
+    # team's competitions' windows.
     try:
         rows = session.query(SoccerFavoriteTeamDB).filter_by(user_token=user_token).all()
         for r in rows:
-            # The team's league = first non-empty slug in its comma-sep competitions.
-            league = next((s.strip() for s in (r.competitions or "").split(",") if s.strip()), None)
-            if r.team_id:
-                raw += _soccer_team_matches(r.team_id, cache, league=league)
-            # Alternate provider ids are national-team ids; BSD usually covers
-            # those, so leave league=None.
-            for tid in _alt_ids(r.alt_team_ids):
-                if tid:
-                    raw += _soccer_team_matches(tid, cache, league=None)
+            ids = [r.team_id] + _alt_ids(r.alt_team_ids)
+            leagues = [s for s in (r.competitions or "").split(",") if s.strip()]
+            raw += _team_matches(ids, leagues, "soccer", cache)
     except Exception as exc:
         logger.warning("calendar_scope: soccer fav teams query failed: %s", exc)
 
@@ -220,7 +243,7 @@ def _favorites_matches(session, params: dict, user_token: str, cache: dict) -> l
     try:
         rows = session.query(FavoriteTeamDB).filter_by(user_token=user_token).all()
         for r in rows:
-            raw += _bball_team_matches(r.team_id, r.league, cache)
+            raw += _team_matches([r.team_id], [r.league] if r.league else [], "basketball", cache)
     except Exception as exc:
         logger.warning("calendar_scope: bball fav teams query failed: %s", exc)
 
@@ -300,11 +323,16 @@ def collect_matches(session, scope: str, params: dict, user_token: str) -> list[
         for slug in params.get("custom_bball_league_slugs", []) or []:
             raw += _bball_league_window(slug, cache)
         for t in params.get("custom_soccer_teams", []) or []:
-            raw += _soccer_team_matches(t.get("id"), cache, league=t.get("league"))
-        for tid in params.get("custom_soccer_team_ids", []) or []:   # legacy (no league)
-            raw += _soccer_team_matches(tid, cache, league=None)
+            ids = t.get("ids") or ([t["id"]] if t.get("id") else [])
+            leagues = t.get("leagues") or ([t["league"]] if t.get("league") else [])
+            raw += _team_matches(ids, leagues, "soccer", cache)
         for t in params.get("custom_bball_teams", []) or []:
-            raw += _bball_team_matches(t.get("id"), t.get("league"), cache)
+            ids = t.get("ids") or ([t["id"]] if t.get("id") else [])
+            leagues = t.get("leagues") or ([t["league"]] if t.get("league") else [])
+            raw += _team_matches(ids, leagues, "basketball", cache)
+        # Legacy single-id key (pre-v3): best-effort via team-season.
+        for tid in params.get("custom_soccer_team_ids", []) or []:
+            raw += _soccer_team_matches(tid, cache, league=None)
 
     elif scope == "favorites":
         raw += _favorites_matches(session, params, user_token, cache)
