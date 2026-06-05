@@ -1652,10 +1652,12 @@ def get_sofa_standings(slug: str) -> dict | None:
             tid = team.get("id") or 0
             gf = _to_int(row.get("scoresFor")) or 0
             ga = _to_int(row.get("scoresAgainst")) or 0
-            out.append({
+            team_name = team.get("name") or ""
+            team_name_he = team_names_he.hebrew_name(team_name)
+            entry = {
                 "position":   _to_int(row.get("position")) or 0,
                 "team_id":    tid,
-                "team_name":  team.get("name") or "",
+                "team_name":  team_name,
                 "team_crest": f"https://api.sofascore.app/api/v1/team/{tid}/image" if tid else None,
                 "played":     _to_int(row.get("matches")) or 0,
                 "won":        _to_int(row.get("wins")) or 0,
@@ -1665,7 +1667,10 @@ def get_sofa_standings(slug: str) -> dict | None:
                 "pts":        _to_int(row.get("points")) or 0,
                 "form":       None,
                 "live":       None,
-            })
+            }
+            if team_name_he:
+                entry["team_name_he"] = team_name_he
+            out.append(entry)
         return out
 
     # When a league splits into playoff rounds, those "Round" groups ARE the

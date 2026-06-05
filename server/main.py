@@ -12,6 +12,7 @@ from typing import Optional
 
 log = logging.getLogger("nba_monitor")
 
+import team_names_he
 from epg import get_broadcasts_for_game, get_all_broadcasts
 from i18n import (t_title, t_body_game, t_body_period_start, t_body_scoring,
                   t_body_early_pts, t_body_triple_double, translate_game_name)
@@ -577,6 +578,16 @@ def _league_for_team_id(team_id: str | int | None) -> str | None:
     return None
 
 
+def _with_team_name_he(entry: dict) -> dict:
+    """Stamp `team_name_he` onto a favorite-team dict (keyed `team_name`) in
+    place. No-op on a lookup miss. Favorites are stored with English names, so
+    Hebrew is resolved on read."""
+    he = team_names_he.hebrew_name(entry.get("team_name"))
+    if he:
+        entry["team_name_he"] = he
+    return entry
+
+
 def _league_for_alarm(home_team_id: str | None,
                       away_team_id: str | None,
                       provided: str | None) -> str:
@@ -858,7 +869,7 @@ def _get_all_users_for_radar() -> list[dict]:
                 for p in players
             }
             fav_teams = [
-                {
+                _with_team_name_he({
                     "team_id":        t.team_id,
                     "team_name":      t.team_name or "",
                     "league":         (t.league or "nba"),
@@ -867,7 +878,7 @@ def _get_all_users_for_radar() -> list[dict]:
                     "alert_type":     t.alert_type or "silent",
                     "broadcast_only":  getattr(t, 'broadcast_only', False),
                     "notify_at_start": getattr(t, 'notify_at_start', False),
-                }
+                })
                 for t in teams
             ]
             fav_leagues = [
@@ -1963,7 +1974,7 @@ def get_settings(user_token: str = ""):
                 for p in players
             }
             fav_teams = [
-                {
+                _with_team_name_he({
                     "team_id":        t.team_id,
                     "team_name":      t.team_name or "",
                     "league":         (t.league or "nba"),
@@ -1975,7 +1986,7 @@ def get_settings(user_token: str = ""):
                     "paused":          getattr(t, 'paused', False),
                     "skip_euroleague_evening": getattr(t, 'skip_euroleague_evening', False),
                     "team_ids":        (t.alt_team_ids.split(",") if t.alt_team_ids else [t.team_id]),
-                }
+                })
                 for t in teams
             ]
             fav_leagues = [
@@ -3311,7 +3322,8 @@ def _normalize_soccer_standings(raw: dict, league_id: int) -> dict:
             gf   = _i(row, "goals_for",      "gf", "scored",   "goals_scored")
             ga   = _i(row, "goals_against",  "ga", "conceded", "goals_conceded")
             gd   = _i(row, "goal_difference", "gd") or (gf - ga)
-            out.append({
+            name_he = team_names_he.hebrew_name(name)
+            entry = {
                 "position":   _i(row, "position", "rank"),
                 "team_id":    tid,
                 "team_name":  name,
@@ -3324,7 +3336,10 @@ def _normalize_soccer_standings(raw: dict, league_id: int) -> dict:
                 "pts":        _i(row, "points", "pts"),
                 "form":       row.get("form"),
                 "live":       row.get("live"),
-            })
+            }
+            if name_he:
+                entry["team_name_he"] = name_he
+            out.append(entry)
         return out
 
     out = {
@@ -3404,9 +3419,11 @@ def _normalize_basketball_standings(raw: dict, league_id: int, slug: str) -> dic
             pct = None
         sf  = _i(row, "points_scored",  "points_for",     "pf") or None
         sa  = _i(row, "points_allowed", "points_against",  "pa") or None
+        team_obj = {"id": tid, "name": name, "short_name": short_name,
+                    "logo": _bb._basketball_logo_url(slug, name, tid)}
+        team_names_he.attach(team_obj)
         out.append({
-            "team": {"id": tid, "name": name, "short_name": short_name,
-                     "logo": _bb._basketball_logo_url(slug, name, tid)},
+            "team": team_obj,
             "position":       _i(row, "position", "rank", "standing") or i,
             "matches":        matches,
             "wins":           wins,
@@ -3834,7 +3851,7 @@ def soccer_fav_teams_list(user_token: str = ""):
             comps   = [c for c in (r.competitions or "").split(",") if c]
             if not comps and r.competition_id:
                 comps = [r.competition_id]
-            out.append({
+            out.append(_with_team_name_he({
                 "team_id":           r.team_id,
                 "team_ids":          [r.team_id] + alt_ids,
                 "team_name":         r.team_name,
@@ -3846,7 +3863,7 @@ def soccer_fav_teams_list(user_token: str = ""):
                 "notify_at_kickoff": r.notify_at_kickoff,
                 "config":            r.config,
                 "created_at":        r.created_at.isoformat() if r.created_at else None,
-            })
+            }))
     return {"teams": out}
 
 
@@ -4512,7 +4529,7 @@ def active_monitors(user_token: str = ""):
                         for p in player_rows
                     }
                     fav_teams = [
-                        {
+                        _with_team_name_he({
                             "team_id":        t.team_id,
                             "team_name":      t.team_name or "",
                             "max_diff":       t.score_gap or 5,
@@ -4520,7 +4537,7 @@ def active_monitors(user_token: str = ""):
                             "alert_type":     t.alert_type or "silent",
                             "notify_at_start": getattr(t, 'notify_at_start', False),
                             "paused":          getattr(t, 'paused', False),
-                        }
+                        })
                         for t in team_rows
                     ]
                     if pref:

@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 from score365.client import Client365
 from score365.scraper import get_games_by_date, get_game_detail, extract_box_score, extract_players
+import team_names_he
 
 log = logging.getLogger("nba_monitor")
 
@@ -412,13 +413,20 @@ def _make_team_obj(comp: dict) -> dict:
         raw_sym = comp.get("symbolicName", "???")
         abbr = _SYMBOL_NORMALIZE.get(raw_sym, raw_sym)
     display_name, short_name = _DISPLAY_NAMES.get(abbr, (comp.get("name", ""), comp.get("shortName", "")))
-    return {
+    team = {
         "id":          str(comp.get("id", "")),
         "name":        short_name or comp.get("shortName", ""),
         "displayName": display_name or comp.get("name", ""),
         "abbreviation": abbr,
         "logo":        _365_team_crest_url(comp.get("id")),
     }
+    # The full English name lives in `displayName`; resolve Hebrew off it and
+    # emit both `displayName_he` and `name_he` (mirroring each English key).
+    he = team_names_he.hebrew_name(team["displayName"] or comp.get("name"))
+    if he:
+        team["displayName_he"] = he
+        team["name_he"] = he
+    return team
 
 
 # ── Games (scoreboard) ────────────────────────────────────────────────────────
@@ -726,13 +734,15 @@ def fetch_all_teams(league: str = "nba") -> list[dict]:
         team_obj = _make_team_obj(comp)
         tid = team_obj["id"]
         if tid and tid not in seen:
-            seen[tid] = {
+            entry = {
                 "id":           tid,
                 "name":         team_obj["displayName"],
                 "abbreviation": team_obj["abbreviation"],
                 "logo":         team_obj["logo"],
                 "players":      [],
             }
+            team_names_he.attach(entry)
+            seen[tid] = entry
 
     # Pass 1: Standings (critical for all teams in the league)
     try:

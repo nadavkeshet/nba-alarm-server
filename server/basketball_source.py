@@ -31,8 +31,22 @@ from zoneinfo import ZoneInfo
 
 import bsd_basketball as bsd
 import score365_adapter as s365
+import team_names_he
 
 logger = logging.getLogger(__name__)
+
+
+def _attach_espn_team_he(team: dict | None) -> None:
+    """Stamp Hebrew onto an ESPN-shape team dict in place. The full English
+    name lives in `displayName` (the `name` field carries the short name), so
+    resolve off `displayName` and emit both `displayName_he` and `name_he`
+    (mirroring each English key). No-op on a lookup miss."""
+    if not isinstance(team, dict):
+        return
+    he = team_names_he.hebrew_name(team.get("displayName") or team.get("name"))
+    if he:
+        team["displayName_he"] = he
+        team["name_he"] = he
 
 
 # ---------------------------------------------------------------------------
@@ -141,10 +155,15 @@ def get_basketball_event_detail(canonical: str) -> dict | None:
     BSD natively; 365scores (Winner League / BCL) built to the same shape."""
     source, native = parse_canonical_id(canonical)
     if source == "bsd":
-        return bsd.event_detail(int(native))
-    if source == "s365":
-        return _s365_event_detail(native)
-    return None
+        detail = bsd.event_detail(int(native))
+    elif source == "s365":
+        detail = _s365_event_detail(native)
+    else:
+        return None
+    if isinstance(detail, dict):
+        team_names_he.attach(detail.get("home_team"))
+        team_names_he.attach(detail.get("away_team"))
+    return detail
 
 
 def get_basketball_team_stats(canonical: str) -> dict | None:
@@ -153,10 +172,15 @@ def get_basketball_team_stats(canonical: str) -> dict | None:
     tab is populated for Winner League / BCL too."""
     source, native = parse_canonical_id(canonical)
     if source == "bsd":
-        return bsd.event_team_stats(int(native))
-    if source == "s365":
-        return _s365_team_stats(native)
-    return None
+        stats = bsd.event_team_stats(int(native))
+    elif source == "s365":
+        stats = _s365_team_stats(native)
+    else:
+        return None
+    if isinstance(stats, dict):
+        team_names_he.attach(stats.get("home_team"))
+        team_names_he.attach(stats.get("away_team"))
+    return stats
 
 
 def get_basketball_box_score(canonical: str) -> dict | None:
@@ -168,18 +192,21 @@ def get_basketball_box_score(canonical: str) -> dict | None:
     """
     source, native = parse_canonical_id(canonical)
     if source == "s365":
-        return _s365_box_score(native)
-    if source != "bsd":
+        box = _s365_box_score(native)
+    elif source == "bsd":
+        box = bsd.event_box_score(int(native))
+        if isinstance(box, dict):
+            for team_key, box_key in (("home_team", "home_box"), ("away_team", "away_box")):
+                team = box.get(team_key) or {}
+                team_name = team.get("name") if isinstance(team, dict) else None
+                for player in box.get(box_key) or []:
+                    if isinstance(player, dict) and not player.get("photo"):
+                        player["photo"] = athlete_365_photo_url(team_name, player.get("name"))
+    else:
         return None
-    box = bsd.event_box_score(int(native))
-    if not isinstance(box, dict):
-        return box
-    for team_key, box_key in (("home_team", "home_box"), ("away_team", "away_box")):
-        team = box.get(team_key) or {}
-        team_name = team.get("name") if isinstance(team, dict) else None
-        for player in box.get(box_key) or []:
-            if isinstance(player, dict) and not player.get("photo"):
-                player["photo"] = athlete_365_photo_url(team_name, player.get("name"))
+    if isinstance(box, dict):
+        team_names_he.attach(box.get("home_team"))
+        team_names_he.attach(box.get("away_team"))
     return box
 
 
@@ -252,13 +279,15 @@ def _s365_int(value: Any) -> int | None:
 
 def _s365_team_obj(comp: dict) -> dict:
     tid = comp.get("id")
-    return {
+    team = {
         "id": tid,
         "name": comp.get("name"),
         "short_name": comp.get("symbolicName") or comp.get("shortName"),
         "country_code": None,
         "logo": s365._365_team_crest_url(tid) if tid else None,
     }
+    team_names_he.attach(team)
+    return team
 
 
 def _s365_status_to_bsd(game: dict) -> str:
@@ -443,11 +472,13 @@ def get_s365_basketball_standings(slug: str) -> dict | None:
             )
         except (TypeError, ValueError):
             pct = None
+        team_obj = {"id": comp.get("id") or 0,
+                    "name": comp.get("name") or "",
+                    "short_name": comp.get("symbolicName"),
+                    "logo": (f"{_365_LOGO_BASE}{comp.get('id')}" if comp.get("id") else "")}
+        team_names_he.attach(team_obj)
         rows_out.append({
-            "team": {"id": comp.get("id") or 0,
-                     "name": comp.get("name") or "",
-                     "short_name": comp.get("symbolicName"),
-                     "logo": (f"{_365_LOGO_BASE}{comp.get('id')}" if comp.get("id") else "")},
+            "team": team_obj,
             "position":       _s365_int(row.get("position")) or i,
             "matches":        played or 0,
             "wins":           wins or 0,
@@ -826,6 +857,8 @@ def _from_bsd_event(event: dict, *, slug: str) -> dict:
             "logo": _basketball_logo_url(slug, away_team.get("name"), away_team.get("id")),
         },
     }
+    _attach_espn_team_he(home_competitor["team"])
+    _attach_espn_team_he(away_competitor["team"])
 
     return {
         "id": canonical_id("bsd", eid),
@@ -1067,4 +1100,7 @@ def _from_365_event(event: dict, *, slug: str) -> dict:
     event["source"] = "score365"
     event["source_event_id"] = raw_id
     event["league"] = slug
+    for comp in (event.get("competitions") or []):
+        for c in (comp.get("competitors") or []):
+            _attach_espn_team_he(c.get("team"))
     return event

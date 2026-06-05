@@ -18,6 +18,7 @@ import unicodedata
 from typing import Any
 
 import bb_team_crosswalk as _bx
+import team_names_he
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Soccer team accumulator — populated by soccer_source as matches are fetched.
@@ -370,8 +371,19 @@ def search(query: str, limit: int = 10) -> dict[str, list[dict]]:
     leagues.sort( key=lambda r: (_featured_rank(r["id"]), -r["score"], r["name"].lower()))
     players.sort( key=lambda r: (-r["score"], r["name"].lower()))
 
+    out_teams = teams[:limit]
+    out_players = players[:limit]
+    # Stamp Hebrew: team rows carry `name` → `name_he`; player rows carry the
+    # team they play for as `team_name` → `team_name_he`. Misses omit the key.
+    for t in out_teams:
+        team_names_he.attach(t)
+    for p in out_players:
+        he = team_names_he.hebrew_name(p.get("team_name"))
+        if he:
+            p["team_name_he"] = he
+
     return {
-        "teams":   teams[:limit],
+        "teams":   out_teams,
         "leagues": leagues[:limit],
-        "players": players[:limit],
+        "players": out_players,
     }

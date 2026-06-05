@@ -21,6 +21,7 @@ from score365.scraper import (
     get_game_detail,
     get_all_competitions,
 )
+import team_names_he
 
 # ---------------------------------------------------------------------------
 # Competition map (loaded once at import time)
@@ -244,5 +245,6 @@ def soccer_league_standings(competition_id: int) -> list[dict]:
     for r in rows:
         if r["id"] not in seen:
             seen.add(r["id"])
+            team_names_he.attach(r)
             unique.append(r)
     return unique
