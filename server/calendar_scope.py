@@ -25,8 +25,11 @@ import basketball_source
 
 logger = logging.getLogger("nba_monitor")
 
-DATE_BACK = 7
-DATE_FWD = 120
+# Future-only window: today through +60 days. Past/finished games are excluded
+# (a subscription calendar is about upcoming fixtures), and +60d keeps the
+# "all" scope's per-(league, day) fan-out manageable.
+DATE_BACK = 0
+DATE_FWD = 60
 
 # Hardcoded fallbacks used only if the catalog file/attr can't be read.
 _SOCCER_SLUGS_FALLBACK = [
