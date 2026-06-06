@@ -26,6 +26,7 @@ def _wire_capture(monkeypatch):
     # goal-attribution caches so each test starts from a clean baseline.
     sm._armed_minute.clear()
     sm._goal_state.clear()
+    sm._drama_suppressed.clear()
     return sent
 
 

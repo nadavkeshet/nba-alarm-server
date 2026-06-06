@@ -20,6 +20,7 @@ def _wire(monkeypatch):
     monkeypatch.setattr(sm, "_get_user_language", lambda t: "en")
     monkeypatch.setattr(sm, "_db_engine", None)
     monkeypatch.setattr(sm, "_alarm_model", None)
+    sm._drama_suppressed.clear()   # retroactive-guard state persists across tests
     return sent
 
 
@@ -44,6 +45,10 @@ def test_score_computed_once_for_many_followers(monkeypatch):
         {"id": 2, "user_token": "u2", "threshold": 7.5, "alert_type": "alarm"},  # fires
         {"id": 3, "user_token": "u3", "threshold": 9.0, "alert_type": "alarm"},  # below
     ]
+    # Arm each follower below threshold first, so what alerts is a real crossing
+    # — not a retroactive "already dramatic the first time I saw it" first sight.
+    for f in followers:
+        sm._evaluate_drama_radar(f, match, score=_Score(4.0))
     for f in followers:
         sm._evaluate_drama_radar(f, match, score=score)
 
@@ -65,7 +70,9 @@ def test_evaluate_without_precomputed_still_computes(monkeypatch):
     monkeypatch.setattr(sm.drama_engine, "compute_drama", lambda ctx: _Score(8.5))
     monkeypatch.setattr(sm, "_log_drama_snapshot", lambda *a: None)
     match = _live_match()
-    sm._evaluate_drama_radar({"id": 9, "user_token": "u", "threshold": 7.0, "alert_type": "alarm"}, match)
+    a = {"id": 9, "user_token": "u", "threshold": 7.0, "alert_type": "alarm"}
+    sm._evaluate_drama_radar(a, match, score=_Score(4.0))   # arm below threshold
+    sm._evaluate_drama_radar(a, match)                        # no precomputed → computes 8.5 → crosses → fire
     assert len(sent) == 1
 
 
@@ -144,3 +151,29 @@ def test_match_drama_blends_attack_surge_into_momentum(monkeypatch):
     sm._match_drama({"id": "bsd-1", "status": "live", "minute": 85})
     # blend(dangerous=0.4, surge=0.9) = 0.4*0.4 + 0.6*0.9 = 0.70
     assert abs(captured["momentum_pressure"] - 0.70) < 1e-9
+
+
+def test_drama_radar_fires_once_per_alert(monkeypatch):
+    """Crossing the threshold alerts ONCE per alert — not again as the score climbs."""
+    sent = _wire(monkeypatch)
+    match = _live_match()
+    a = {"id": 5, "user_token": "u", "match_id": "bsd-1", "threshold": 7.0, "alert_type": "alarm"}
+    sm._evaluate_drama_radar(a, match, score=_Score(5.0))   # arm below
+    sm._evaluate_drama_radar(a, match, score=_Score(7.5))   # cross → 1 alert
+    sm._evaluate_drama_radar(a, match, score=_Score(8.9))   # climbs → NO re-alert
+    sm._evaluate_drama_radar(a, match, score=_Score(9.5))
+    assert len(sent) == 1
+
+
+def test_drama_radar_no_retroactive_then_fresh_crossing(monkeypatch):
+    """First sight already above threshold (followed a league mid-drama) does NOT
+    alert; a fresh crossing after it cools off does."""
+    sent = _wire(monkeypatch)
+    match = _live_match()
+    a = {"id": 6, "user_token": "u", "match_id": "bsd-1", "threshold": 7.0, "alert_type": "alarm"}
+    sm._evaluate_drama_radar(a, match, score=_Score(8.5))   # already dramatic at arm → suppress
+    sm._evaluate_drama_radar(a, match, score=_Score(9.0))   # still above → no alert
+    assert sent == []
+    sm._evaluate_drama_radar(a, match, score=_Score(5.0))   # cools below → re-arm
+    sm._evaluate_drama_radar(a, match, score=_Score(8.0))   # fresh crossing → alert once
+    assert len(sent) == 1

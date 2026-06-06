@@ -882,6 +882,13 @@ def _goal_scorer(match: dict, home_score: int, away_score: int) -> str | None:
 # (the match was in progress), so they must NOT fire retroactively.
 _armed_minute: dict[str, int] = {}
 
+# (alarm_id : match_id) -> whether the drama_radar alarm is currently suppressed.
+# Key present = the alarm has seen this match. True = the match was already over
+# the threshold when first seen (don't fire retroactively); flips to False once it
+# drops back below, so only a FRESH crossing alerts. Combined with a per-match
+# (not per-bucket) dedup signal, the radar fires at most once per match.
+_drama_suppressed: dict[str, bool] = {}
+
 
 def _arm_minute(alarm: dict, match: dict) -> int:
     key = f"{alarm.get('id')}:{match.get('id')}"
@@ -1358,22 +1365,39 @@ def _evaluate_drama_radar(alarm: dict, match: dict, *, score=None) -> None:
         return
 
     threshold = alarm.get("threshold") if alarm.get("threshold") is not None else _DEFAULT_DRAMA_THRESHOLD
-    if score.total < threshold:
+    above = score.total >= threshold
+
+    # Once-only + no-retroactive guard. If the match was ALREADY over the
+    # threshold the first time this alarm saw it (e.g. you started following a
+    # league mid-drama), suppress it until it cools back under the line — only a
+    # fresh crossing alerts. The per-match dedup signal then caps it at one alert.
+    key = f"{alarm.get('id')}:{match.get('id')}"
+    if key not in _drama_suppressed:
+        _drama_suppressed[key] = above          # already dramatic at arm → suppress
+    if _drama_suppressed[key]:
+        if not above:
+            _drama_suppressed[key] = False       # cooled off → re-arm for a real crossing
+        return
+    if not above:
         return
 
-    # Bucket the score so a hovering 7.2 doesn't re-fire each tick. A bump
-    # from 7.x → 8.x will, because the bucket changes.
-    bucket = int(score.total)
     home_name = (match.get("home") or {}).get("name", "")
     away_name = (match.get("away") or {}).get("name", "")
     competition = match.get("competition", "")
     match_id = match.get("id", "")
 
+    # Dedup ONCE PER ALERT (not once per match). _fire already scopes the key by
+    # alarm['id'], and a per-match / followed-league alarm's id already encodes
+    # its match — so a bare "drama" signal fires that alert exactly once. Only a
+    # comp-scoped radar row (match_id None — one alarm spanning many matches)
+    # needs the match in the signal to alert once per match.
+    signal = "drama" if alarm.get("match_id") else f"drama_{match_id}"
+
     _fire(
         alarm, "soccer_drama_radar",
         lambda h, a, c, lang: t_soccer_body_drama_radar(h, a, c, score.total, lang),
         home_name, away_name, competition,
-        signal=f"drama_{match_id}_{bucket}",
+        signal=signal,
         one_shot=False,  # radar keeps watching other matches
     )
 
