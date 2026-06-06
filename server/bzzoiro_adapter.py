@@ -62,7 +62,7 @@ def _headers() -> dict[str, str]:
 _TTL_SECONDS: dict[str, float] = {
     "league_standings": 300.0,
     "live_events":     20.0,
-    "league_events":   60.0,    # listings; minute-fresh is plenty
+    "league_events":   25.0,    # listings carry LIVE scores — keep them fresh
     "event_detail":    30.0,
     # Stats / incidents are the heaviest BSD calls and dominate Match
     # Summary load time. Bumped to 120s — for live games that's still
