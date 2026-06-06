@@ -358,12 +358,10 @@ def t_soccer_body_kickoff(home: str, away: str, competition: str, lang: str) -> 
     return f"{m}\nkicking off now"
 
 
-def t_soccer_body_halftime(home: str, away: str, competition: str, lang: str) -> str:
-    m = soccer_match_label(home, away, lang)
-    comp = soccer_competition_name(competition, lang)
+def t_soccer_body_halftime(home: str, away: str, home_score: int, away_score: int, lang: str) -> str:
     if lang == "he":
-        return f"{m}\nמחצית"
-    return f"{m}\nhalf-time"
+        return f"מחצית: {home} {home_score}-{away_score} {away}"
+    return f"Half-time: {home} {home_score}-{away_score} {away}"
 
 
 def t_soccer_body_sensation(underdog_name: str, competition: str, minute: int, lang: str) -> str:
@@ -472,8 +470,8 @@ def t_soccer_body_drama_radar(home: str, away: str, competition: str, drama: flo
     m    = soccer_match_label(home, away, lang)
     drama_tag = f"{drama:.1f}/10 · " if drama is not None else ""
     if lang == "he":
-        return f"{m}\n{drama_tag}שווה לפתוח את האפליקציה"
-    return f"{m}\n{drama_tag}worth opening the app"
+        return f"{m}\n{drama_tag}שווה לפתוח שידור"
+    return f"{m}\n{drama_tag}worth opening a broadcast"
 
 
 # ── Soccer match-moments (v3) ──────────────────────────────────────────────────
@@ -481,15 +479,19 @@ def t_soccer_body_drama_radar(home: str, away: str, competition: str, drama: flo
 # DO reveal the scoreline — the user opted in to follow the match's flow.
 
 def t_soccer_body_goal(home: str, away: str, home_score: int, away_score: int,
-                       scored_side: str | None, lang: str) -> str:
+                       scored_side: str | None, lang: str, scorer: str | None = None) -> str:
     """Goal body: the real score with the SCORING side's tally parenthesized,
-    then only the team that scored (the title already says "GOAL"). Plain
-    scoreline when the scorer can't be attributed (rare — first sighting)."""
+    then the team that scored (the title already says "GOAL"). Appends the
+    goalscorer when it's already available — the REST incident with the scorer
+    lags the live score, so it's included best-effort and omitted otherwise.
+    Plain scoreline when the scorer side can't be attributed."""
     if scored_side == "home":
-        return f"({home_score}) - {away_score}  {home}"
-    if scored_side == "away":
-        return f"{home_score} - ({away_score})  {away}"
-    return f"{home_score} - {away_score}"
+        base = f"({home_score}) - {away_score}  {home}"
+    elif scored_side == "away":
+        base = f"{home_score} - ({away_score})  {away}"
+    else:
+        base = f"{home_score} - {away_score}"
+    return f"{base} · {scorer}" if scorer else base
 
 
 def t_soccer_body_second_half(home: str, away: str, competition: str, lang: str) -> str:

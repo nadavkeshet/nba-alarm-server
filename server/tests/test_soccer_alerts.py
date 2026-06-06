@@ -292,3 +292,37 @@ def test_goal_body_names_only_scorer_with_real_score(monkeypatch):
     sm._evaluate_alarm(a, m1)                          # home scores → 1-0
     bodies = [s["body"] for s in sent]
     assert bodies == ["(1) - 0  Home"], bodies          # scorer parenthesized, only scorer named, no competition
+
+
+def test_goal_scorer_from_incidents():
+    match = {"incidents": [
+        {"type": "goal", "home_score": 1, "away_score": 0, "player": "W. Semedo"},
+        {"type": "goal", "home_score": 1, "away_score": 1, "player": "J. Doe"},
+    ]}
+    assert sm._goal_scorer(match, 1, 0) == "W. Semedo"
+    assert sm._goal_scorer(match, 1, 1) == "J. Doe"
+    assert sm._goal_scorer(match, 2, 0) is None        # incident not landed yet → omit
+    assert sm._goal_scorer({}, 1, 0) is None
+
+
+def test_goal_body_includes_scorer_when_incident_present(monkeypatch):
+    sm._goal_state.clear()
+    sent = _wire_capture(monkeypatch)
+    a = _goals_only_alarm()
+    m0 = _match(status="live", minute=10, hs=0, as_=0); m0["id"] = "g2"; m0["period"] = "1h"
+    sm._evaluate_alarm(a, m0)                            # 0-0 baseline
+    m1 = _match(status="live", minute=20, hs=1, as_=0); m1["id"] = "g2"; m1["period"] = "1h"
+    m1["incidents"] = [{"type": "goal", "home_score": 1, "away_score": 0, "player": "W. Semedo"}]
+    sm._evaluate_alarm(a, m1)
+    assert [s["body"] for s in sent] == ["(1) - 0  Home · W. Semedo"]
+
+
+def test_halftime_body_shows_score(monkeypatch):
+    sent = _wire_capture(monkeypatch)
+    a = _alarm("match_moments", {"enabled": True, "kickoff": False, "goals": False,
+                                 "halftime": True, "second_half": False, "red_cards": False,
+                                 "penalties": False, "match_end": False, "lineups": False,
+                                 "reminder_minutes": 0})
+    m = _match(status="ht", minute=45, hs=1, as_=0); m["id"] = "h1"; m["period"] = "ht"
+    sm._evaluate_alarm(a, m)
+    assert sent and sent[0]["body"] == "Half-time: Home 1-0 Away"

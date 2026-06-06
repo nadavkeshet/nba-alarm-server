@@ -860,6 +860,23 @@ def _scoring_side(match_id: str, home_score: int, away_score: int) -> str | None
     return side
 
 
+def _goal_scorer(match: dict, home_score: int, away_score: int) -> str | None:
+    """Scorer of the goal that produced this exact scoreline, read from the
+    detail's `incidents` (already fetched — no extra call, no delay). None when
+    the incident hasn't landed yet (the REST incidents lag the WS-fast score),
+    so the alert simply omits the scorer rather than waiting for it."""
+    for inc in match.get("incidents") or []:
+        if not isinstance(inc, dict):
+            continue
+        if ("goal" in (inc.get("type") or "").lower()
+                and inc.get("home_score") == home_score
+                and inc.get("away_score") == away_score):
+            name = inc.get("player") or inc.get("player_name")
+            if name:
+                return str(name)
+    return None
+
+
 def _evaluate_alarm(alarm: dict, match: dict) -> None:
     alarm_type = alarm["alarm_type"]
     status = match.get("status")
@@ -945,13 +962,15 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
                   home_name, away_name, competition, signal="mm_kickoff", one_shot=False)
         # Goals — dedup per scoreline so each distinct goal fires exactly once.
         if want("goals") and (home_score + away_score) > 0 and status not in ("scheduled", None):
+            scorer = _goal_scorer(match, home_score, away_score)   # best-effort, no wait
             _fire(alarm, "soccer_goal",
-                  lambda h, a, c, lang: t_soccer_body_goal(h, a, home_score, away_score, scored, lang),
+                  lambda h, a, c, lang: t_soccer_body_goal(h, a, home_score, away_score, scored, lang, scorer),
                   home_name, away_name, competition,
                   signal=f"mm_goal_{home_score}-{away_score}", one_shot=False)
         # Half-time start.
         if want("halftime") and (status == "ht" or period == "ht"):
-            _fire(alarm, "soccer_halftime", t_soccer_body_halftime,
+            _fire(alarm, "soccer_halftime",
+                  lambda h, a, c, lang: t_soccer_body_halftime(h, a, home_score, away_score, lang),
                   home_name, away_name, competition, signal="mm_ht", one_shot=False)
         # Second-half kickoff (HT end). NB: a bare `minute >= 46` also matches
         # FIRST-HALF stoppage time — 45+1 reads minute 46 while period is still
