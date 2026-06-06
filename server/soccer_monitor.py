@@ -44,6 +44,7 @@ from i18n import (
     t_soccer_body_lineups,
     t_soccer_body_halftime,
     t_soccer_body_goal,
+    t_soccer_title_goal,
     t_soccer_body_second_half,
     t_soccer_body_match_end,
     t_soccer_body_knockout_et,
@@ -1005,7 +1006,8 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
             _fire(alarm, "soccer_goal",
                   lambda h, a, c, lang: t_soccer_body_goal(h, a, home_score, away_score, scored, lang, scorer),
                   home_name, away_name, competition,
-                  signal=f"mm_goal_{home_score}-{away_score}", one_shot=False)
+                  signal=f"mm_goal_{home_score}-{away_score}", one_shot=False,
+                  title_fn=t_soccer_title_goal)
         # Half-time start.
         if want("halftime") and fresh(45) and (status == "ht" or period == "ht"):
             _fire(alarm, "soccer_halftime",
@@ -1569,8 +1571,11 @@ def _fire(
     *,
     signal: str,
     one_shot: bool,
+    title_fn=None,
 ) -> None:
-    """Send the notification + persist fired_at. Dedup via _fire_once_fn."""
+    """Send the notification + persist fired_at. Dedup via _fire_once_fn.
+    `title_fn(home, away, competition, lang)` overrides the static title when the
+    headline needs the teams (e.g. the goal alert shows the full match)."""
     if _send_push is None or _fire_once_fn is None:
         logger.debug("soccer monitor not fully wired; would have fired alarm %s/%s", alarm["id"], signal)
         return
@@ -1587,7 +1592,7 @@ def _fire(
         except Exception:
             pass
 
-    title = t_title(title_key, lang)
+    title = title_fn(home_name, away_name, competition, lang) if title_fn else t_title(title_key, lang)
     body = body_fn(home_name, away_name, competition, lang)
     alert_type = alarm.get("alert_type") or "alarm"
 

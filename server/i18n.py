@@ -342,6 +342,12 @@ def soccer_match_label(home_name: str, away_name: str, lang: str) -> str:
     return f"{home_name} vs {away_name}"
 
 
+def t_soccer_title_goal(home: str, away: str, competition: str, lang: str) -> str:
+    """Goal alert TITLE: the goal marker + the full match (the score + scorer
+    live in the body). e.g. '⚽ Venezuela vs Türkiye'."""
+    return f"⚽ {soccer_match_label(home, away, lang)}"
+
+
 def t_soccer_body_late_drama(home: str, away: str, competition: str, minute: int, lang: str) -> str:
     m = soccer_match_label(home, away, lang)
     comp = soccer_competition_name(competition, lang)

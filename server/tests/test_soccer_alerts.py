@@ -79,14 +79,14 @@ def test_match_moments_modular_disabled_event_is_suppressed(monkeypatch):
     sm._evaluate_alarm(a, _match(status="live", minute=0, hs=1, as_=0))
     titles = [s["title"] for s in sent]
     assert any("Kicking Off" in t for t in titles)
-    assert not any("GOAL" in t.upper() or "גול" in t for t in titles)
+    assert not any("⚽" in t for t in titles)   # ⚽ = the goal-alert marker
 
     # The inverse: goals ON, kickoff OFF → goal fires, kickoff does not.
     sent2 = _wire_capture(monkeypatch)
     b = _alarm("match_moments", {"enabled": True, "kickoff": False, "goals": True}, aid=2)
     sm._evaluate_alarm(b, _match(status="live", minute=0, hs=1, as_=0))
     titles2 = [s["title"] for s in sent2]
-    assert any("GOAL" in t.upper() or "גול" in t for t in titles2)
+    assert any("⚽" in t for t in titles2)       # goal title = "⚽ Home vs Away"
     assert not any("Kicking Off" in t for t in titles2)
 
 
@@ -107,8 +107,8 @@ def test_match_moments_fires_full_set(monkeypatch):
     # full-time
     sm._evaluate_alarm(alarm, _match(status="ft", minute=90, hs=2, as_=0))
 
-    # exactly 2 goal alerts (1-0 and 2-0)
-    goal_count = sum(1 for s in sent if "GOAL" in s["title"].upper() or "גול" in s["title"])
+    # exactly 2 goal alerts (1-0 and 2-0) — goal titles carry the ⚽ marker
+    goal_count = sum(1 for s in sent if "⚽" in s["title"])
     assert goal_count == 2
     # exactly one kickoff (deduped across the two live ticks)
     assert sum(1 for s in sent if "Kicking Off" in s["title"]) == 1
@@ -354,3 +354,12 @@ def test_no_retroactive_fire_when_armed_mid_match(monkeypatch):
     m2["incidents"] = m["incidents"] + [{"type": "goal", "home_score": 3, "away_score": 1, "minute": 70, "player": "New"}]
     sm._evaluate_alarm(a, m2)
     assert len(sent) == 1 and "New" in sent[0]["body"], [s["body"] for s in sent]
+
+
+def test_goal_alert_title_shows_full_match(monkeypatch):
+    sent = _wire_capture(monkeypatch)
+    a = _alarm("match_moments", {"enabled": True, "goals": True})
+    m = _match(status="live", minute=0, hs=1, as_=0); m["id"] = "gt1"
+    sm._evaluate_alarm(a, m)
+    goal = [s for s in sent if "⚽" in s["title"]]
+    assert goal and goal[0]["title"] == "⚽ Home vs Away"   # full match in the title
