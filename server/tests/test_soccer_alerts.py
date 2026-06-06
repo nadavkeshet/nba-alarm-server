@@ -22,6 +22,10 @@ def _wire_capture(monkeypatch):
     monkeypatch.setattr(sm, "_get_user_language", lambda t: "en")
     monkeypatch.setattr(sm, "_db_engine", None)
     monkeypatch.setattr(sm, "_alarm_model", None)
+    # Module-level state persists across tests — reset the retroactive-guard and
+    # goal-attribution caches so each test starts from a clean baseline.
+    sm._armed_minute.clear()
+    sm._goal_state.clear()
     return sent
 
 
@@ -59,9 +63,9 @@ def test_late_drama_config_diff_zero_means_tied_only(monkeypatch):
 def test_match_moments_fires_each_enabled_once(monkeypatch):
     sent = _wire_capture(monkeypatch)
     a = _alarm("match_moments", {"kickoff": True, "halftime": True})
-    sm._evaluate_alarm(a, _match(status="live"))          # kickoff
-    sm._evaluate_alarm(a, _match(status="live"))          # dedup → no 2nd kickoff
-    sm._evaluate_alarm(a, _match(status="ht"))            # halftime
+    sm._evaluate_alarm(a, _match(status="live", minute=0))  # armed at kickoff → kickoff fires
+    sm._evaluate_alarm(a, _match(status="live", minute=0))  # dedup → no 2nd kickoff
+    sm._evaluate_alarm(a, _match(status="ht", minute=45))   # halftime
     titles = [s["title"] for s in sent]
     assert sum("Kicking Off" in t for t in titles) == 1
     assert sum("Half-Time" in t for t in titles) == 1
@@ -71,7 +75,7 @@ def test_match_moments_modular_disabled_event_is_suppressed(monkeypatch):
     sent = _wire_capture(monkeypatch)
     # Everything ON except goals → kickoff fires, the goal does NOT.
     a = _alarm("match_moments", {"enabled": True, "kickoff": True, "goals": False})
-    sm._evaluate_alarm(a, _match(status="live", hs=1, as_=0))
+    sm._evaluate_alarm(a, _match(status="live", minute=0, hs=1, as_=0))
     titles = [s["title"] for s in sent]
     assert any("Kicking Off" in t for t in titles)
     assert not any("GOAL" in t.upper() or "גול" in t for t in titles)
@@ -79,7 +83,7 @@ def test_match_moments_modular_disabled_event_is_suppressed(monkeypatch):
     # The inverse: goals ON, kickoff OFF → goal fires, kickoff does not.
     sent2 = _wire_capture(monkeypatch)
     b = _alarm("match_moments", {"enabled": True, "kickoff": False, "goals": True}, aid=2)
-    sm._evaluate_alarm(b, _match(status="live", hs=1, as_=0))
+    sm._evaluate_alarm(b, _match(status="live", minute=0, hs=1, as_=0))
     titles2 = [s["title"] for s in sent2]
     assert any("GOAL" in t.upper() or "גול" in t for t in titles2)
     assert not any("Kicking Off" in t for t in titles2)
@@ -89,6 +93,8 @@ def test_match_moments_modular_disabled_event_is_suppressed(monkeypatch):
 def test_match_moments_fires_full_set(monkeypatch):
     sent = _wire_capture(monkeypatch)
     alarm = _alarm("match_moments", config={"enabled": True})
+    # armed at kickoff (minute 0) so kickoff + the later goals are all "fresh"
+    sm._evaluate_alarm(alarm, _match(status="live", minute=0, hs=0, as_=0))
     # goal at 1-0
     sm._evaluate_alarm(alarm, _match(status="live", minute=20, hs=1, as_=0))
     # same scoreline again → no duplicate goal (and no duplicate kickoff)
@@ -121,7 +127,7 @@ def test_match_moments_disabled_fires_nothing(monkeypatch):
 def test_match_moments_second_half_fires_once(monkeypatch):
     sent = _wire_capture(monkeypatch)
     alarm = _alarm("match_moments", config={"enabled": True})
-    sm._evaluate_alarm(alarm, _match(status="live", minute=48, hs=0, as_=0))
+    sm._evaluate_alarm(alarm, _match(status="live", minute=46, hs=0, as_=0))
     sm._evaluate_alarm(alarm, _match(status="live", minute=50, hs=0, as_=0))
     sh = [s for s in sent if "second half" in s["body"].lower()]
     assert len(sh) == 1
@@ -154,10 +160,11 @@ def test_match_moments_penalty_dedup_by_incident_minute(monkeypatch):
 def test_card_penalty_fires_on_any_red_and_penalty(monkeypatch):
     sent = _wire_capture(monkeypatch)
     a = _alarm("card_penalty", {"red_card": True, "penalty": True})
-    red_match = _match(minute=30, incidents=[{"type": "card", "card_type": "red", "minute": 28}])
+    # The event happens at the current minute (armed there), so it's not retroactive.
+    red_match = _match(minute=28, incidents=[{"type": "card", "card_type": "red", "minute": 28}])
     sm._evaluate_alarm(a, red_match)
     assert any("Red Card" in s["title"] for s in sent)
-    pen_match = _match(minute=55, incidents=[{"type": "penalty", "minute": 54}])
+    pen_match = _match(minute=54, incidents=[{"type": "penalty", "minute": 54}])
     sm._evaluate_alarm(a, pen_match)
     assert any("Penalty" in s["title"] for s in sent)
 
@@ -326,3 +333,23 @@ def test_halftime_body_shows_score(monkeypatch):
     m = _match(status="ht", minute=45, hs=1, as_=0); m["id"] = "h1"; m["period"] = "ht"
     sm._evaluate_alarm(a, m)
     assert sent and sent[0]["body"] == "Half-time: Home 1-0 Away"
+
+
+def test_no_retroactive_fire_when_armed_mid_match(monkeypatch):
+    """Arming an alarm on an already-live match must NOT replay past moments."""
+    sent = _wire_capture(monkeypatch)
+    a = _alarm("match_moments", {"enabled": True, "kickoff": True, "goals": True,
+                                 "halftime": True, "second_half": True, "match_end": True})
+    # Armed at minute 60, already 2-1 (the 2-1 goal was scored back at minute 58).
+    m = _match(status="live", minute=60, hs=2, as_=1)
+    m["id"] = "ret1"; m["period"] = "2h"
+    m["incidents"] = [{"type": "goal", "home_score": 2, "away_score": 1, "minute": 58, "player": "Past"}]
+    sm._evaluate_alarm(a, m)
+    assert sent == [], f"pre-arm moments must not fire; got {[s['body'] for s in sent]}"
+
+    # A NEW goal at minute 70 → 3-1 DOES fire.
+    m2 = _match(status="live", minute=70, hs=3, as_=1)
+    m2["id"] = "ret1"; m2["period"] = "2h"
+    m2["incidents"] = m["incidents"] + [{"type": "goal", "home_score": 3, "away_score": 1, "minute": 70, "player": "New"}]
+    sm._evaluate_alarm(a, m2)
+    assert len(sent) == 1 and "New" in sent[0]["body"], [s["body"] for s in sent]

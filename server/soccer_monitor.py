@@ -877,6 +877,29 @@ def _goal_scorer(match: dict, home_score: int, away_score: int) -> str | None:
     return None
 
 
+# (alarm_id : match_id) -> match minute when this alarm FIRST saw this match.
+# Moments at an earlier minute were already in the books when the alarm was armed
+# (the match was in progress), so they must NOT fire retroactively.
+_armed_minute: dict[str, int] = {}
+
+
+def _arm_minute(alarm: dict, match: dict) -> int:
+    key = f"{alarm.get('id')}:{match.get('id')}"
+    if key not in _armed_minute:
+        _armed_minute[key] = int(match.get("minute") or 0)
+    return _armed_minute[key]
+
+
+def _goal_minute(match: dict, home_score: int, away_score: int) -> int | None:
+    """Minute of the goal that produced this scoreline (from incidents), or None."""
+    for inc in match.get("incidents") or []:
+        if (isinstance(inc, dict) and "goal" in (inc.get("type") or "").lower()
+                and inc.get("home_score") == home_score
+                and inc.get("away_score") == away_score):
+            return inc.get("minute")
+    return None
+
+
 def _evaluate_alarm(alarm: dict, match: dict) -> None:
     alarm_type = alarm["alarm_type"]
     status = match.get("status")
@@ -884,9 +907,17 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
     away_name = (match.get("away") or {}).get("name", "")
     competition = match.get("competition", "")
 
+    # Retroactive guard (see _arm_minute): a DISCRETE moment fires only if it
+    # happened at/after the minute this alarm first saw the match — so arming an
+    # alarm on an already-live match doesn't replay the whole history.
+    armed = _arm_minute(alarm, match)
+
+    def fresh(moment_minute) -> bool:
+        return moment_minute is None or int(moment_minute) >= armed
+
     if alarm_type == "match":
         # Kickoff notify — fire the first tick after status transitions from scheduled to live.
-        if status in ("live", "1h"):
+        if fresh(0) and status in ("live", "1h"):
             _fire(alarm, "soccer_kickoff",
                   t_soccer_body_kickoff, home_name, away_name, competition,
                   signal="kickoff", one_shot=True)
@@ -957,18 +988,19 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
         scored = _scoring_side(match.get("id") or "", home_score, away_score)
 
         # Kickoff — first live tick (status live with period 1h, or period 1h).
-        if want("kickoff") and (status in ("live", "1h") or period == "1h"):
+        if want("kickoff") and fresh(0) and (status in ("live", "1h") or period == "1h"):
             _fire(alarm, "soccer_kickoff", t_soccer_body_kickoff,
                   home_name, away_name, competition, signal="mm_kickoff", one_shot=False)
         # Goals — dedup per scoreline so each distinct goal fires exactly once.
-        if want("goals") and (home_score + away_score) > 0 and status not in ("scheduled", None):
+        if want("goals") and (home_score + away_score) > 0 and status not in ("scheduled", None) \
+                and fresh(_goal_minute(match, home_score, away_score)):
             scorer = _goal_scorer(match, home_score, away_score)   # best-effort, no wait
             _fire(alarm, "soccer_goal",
                   lambda h, a, c, lang: t_soccer_body_goal(h, a, home_score, away_score, scored, lang, scorer),
                   home_name, away_name, competition,
                   signal=f"mm_goal_{home_score}-{away_score}", one_shot=False)
         # Half-time start.
-        if want("halftime") and (status == "ht" or period == "ht"):
+        if want("halftime") and fresh(45) and (status == "ht" or period == "ht"):
             _fire(alarm, "soccer_halftime",
                   lambda h, a, c, lang: t_soccer_body_halftime(h, a, home_score, away_score, lang),
                   home_name, away_name, competition, signal="mm_ht", one_shot=False)
@@ -977,7 +1009,7 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
         # "1h" — which wrongly fired "second half underway" before halftime even
         # arrived. So the minute fallback must exclude the first-half and
         # halftime periods; the reliable signal is period == "2h".
-        if want("second_half") and (
+        if want("second_half") and fresh(46) and (
             period == "2h"
             or (status == "live" and minute >= 46 and period not in ("1h", "ht"))
         ):
@@ -988,20 +1020,22 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
             red = _find_recent_red_card(match)
             if red:
                 rmin = red.get("minute") or 0
-                _fire(alarm, "soccer_red_card",
-                      lambda h, a, c, lang: t_soccer_body_red_card(h, a, c, rmin, lang),
-                      home_name, away_name, competition, signal=f"mm_red_{rmin}", one_shot=False)
+                if fresh(rmin):
+                    _fire(alarm, "soccer_red_card",
+                          lambda h, a, c, lang: t_soccer_body_red_card(h, a, c, rmin, lang),
+                          home_name, away_name, competition, signal=f"mm_red_{rmin}", one_shot=False)
         # Penalty awarded — dedup by the penalty INCIDENT's minute (stable),
         # NOT the live clock which advances every tick.
         if want("penalties"):
             pen_min = _recent_penalty_minute(match)
-            if pen_min is not None:
+            if pen_min is not None and fresh(pen_min):
                 _fire(alarm, "soccer_penalty", t_soccer_body_penalty,
                       home_name, away_name, competition, signal=f"mm_pen_{pen_min}", one_shot=False)
         # Match end — MUST fire before the terminal-status sweep deactivates the
         # row. _tick special-cases match_moments alarms so this still runs on the
-        # ft tick (see _tick's terminal handling).
-        if want("match_end") and status in ("ft", "aet", "ap"):
+        # ft tick (see _tick's terminal handling). fresh(90): don't fire FT for an
+        # alarm armed AFTER the match was already over.
+        if want("match_end") and fresh(90) and status in ("ft", "aet", "ap"):
             _fire(alarm, "soccer_match_end",
                   lambda h, a, c, lang: t_soccer_body_match_end(h, a, c, home_score, away_score, lang),
                   home_name, away_name, competition, signal="mm_ft", one_shot=False)
@@ -1013,16 +1047,17 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
         cfg = alarm.get("config") or {}
         if cfg.get("red_card"):
             red = _find_recent_red_card(match)
-            if red:
+            if red and fresh(red.get("minute")):
                 _fire(alarm, "soccer_red_card",
                       lambda h, a, c, lang: t_soccer_body_red_card(h, a, c, red["minute"], lang),
                       home_name, away_name, competition,
                       signal=f"cp_red_{red.get('minute', 0)}", one_shot=False)
         if cfg.get("penalty") and _recent_incident(match, types=("penalty",), window_min=2):
             minute = match.get("minute") or 0
-            _fire(alarm, "soccer_penalty",
-                  t_soccer_body_penalty, home_name, away_name, competition,
-                  signal=f"cp_pen_{minute}", one_shot=False)
+            if fresh(minute):
+                _fire(alarm, "soccer_penalty",
+                      t_soccer_body_penalty, home_name, away_name, competition,
+                      signal=f"cp_pen_{minute}", one_shot=False)
         return
 
     if alarm_type == "sensation":
