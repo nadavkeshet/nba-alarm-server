@@ -230,16 +230,15 @@ def _bsd_players(query: str, limit: int) -> list[dict]:
     except Exception:
         pass
     try:
-        import bsd_basketball as bb
-        for p in bb.player_search(query, limit=limit):
-            team = p.get("team") or {}
+        import basketball_source as bbsrc
+        for p in bbsrc.s365_player_search(query, limit=limit):
             basketball.append({
-                "id": str(p.get("id") or ""),
+                "id": p.get("id") or "",
                 "name": p.get("name") or "",
-                "team_id": str(team.get("id") or "") or None,
-                "team_name": team.get("name"),
+                "team_id": p.get("team_id"),
+                "team_name": p.get("team_name"),
                 "sport": "basketball",
-                "photo": ps.basketball_photo_url(p.get("id")),
+                "photo": p.get("photo") or ps.basketball_photo_url(p.get("id")),
             })
     except Exception:
         pass

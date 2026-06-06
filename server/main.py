@@ -1520,7 +1520,6 @@ def _bsd_ws_sub_manager_loop() -> None:
     """
     import bsd_websocket
     import bzzoiro_adapter as _bsd_soccer
-    import bsd_basketball as _bsd_basketball
 
     log.info("BSD WS sub-manager started (30s sync cycle)")
     while True:
@@ -1532,6 +1531,8 @@ def _bsd_ws_sub_manager_loop() -> None:
                 continue
 
             desired: set[int] = set()
+            # Soccer only — BSD basketball was disconnected (all basketball is
+            # 365-sourced now), so the WS only tracks live football events.
             try:
                 for e in _bsd_soccer.live_events() or []:
                     eid = e.get("id")
@@ -1539,13 +1540,6 @@ def _bsd_ws_sub_manager_loop() -> None:
                         desired.add(eid)
             except Exception as exc:
                 log.debug("BSD soccer live_events failed in sub-manager: %s", exc)
-            try:
-                for e in _bsd_basketball.live_events() or []:
-                    eid = e.get("id")
-                    if isinstance(eid, int):
-                        desired.add(eid)
-            except Exception as exc:
-                log.debug("BSD basketball live_events failed in sub-manager: %s", exc)
 
             # Cap to BSD's per-socket limit. We could shard later, but
             # 10 simultaneous live events across our sports is usually
@@ -2822,14 +2816,13 @@ def _prewarm_feed_cache() -> None:
         time.sleep(5)   # let boot settle before the warm burst
         from datetime import date as _d
         from monitor import _eastern_today
-        from bsd_basketball import BSD_BASKETBALL_LEAGUE_IDS
         from score365_soccer_adapter import DEFAULT_LEAGUE_ORDER
 
         t = _eastern_today()
         base = _d(int(t[0:4]), int(t[4:6]), int(t[6:8]))
         dates = [(base + timedelta(days=off)).strftime("%Y-%m-%d") for off in _PREWARM_OFFSETS]
-        # winner_league is 365-sourced (not BSD) but popular with the audience.
-        bb_leagues = list(BSD_BASKETBALL_LEAGUE_IDS) + ["winner_league"]
+        # All basketball leagues we surface are 365-sourced.
+        bb_leagues = ["nba", "euroleague", "eurocup", "bcl", "winner_league"]
         sc_leagues = list(DEFAULT_LEAGUE_ORDER)
 
         work: list[tuple[str, str, str]] = []
@@ -3070,29 +3063,26 @@ def _normalize_bsd_player(p: dict) -> dict:
 
 @app.get("/basketball/player/{player_id}")
 def basketball_player(player_id: str):
-    """Normalized basketball player detail (bio + season averages)."""
-    import bsd_basketball as bb
+    """Normalized basketball player detail (365scores bio). All basketball is
+    365-sourced now; 365's API exposes athlete bio but no per-player season
+    averages, so only bio fields populate."""
     import basketball_source as bbsrc
     import player_source as ps
-    raw = bb.player_detail(player_id)
+    raw = bbsrc.s365_player_detail(player_id)
     if not raw:
         raise HTTPException(status_code=404, detail="player not found")
     detail = ps.normalize_basketball_detail(raw, player_id=player_id)
-    # BSD has no basketball headshots; resolve a 365 athlete photo by
-    # team-scoped name match (falls back to the BSD URL → iOS initials).
-    photo_365 = bbsrc.athlete_365_photo_url(detail.get("team_name"), detail.get("name"))
-    if photo_365:
-        detail["photo"] = photo_365
+    # Prefer the 365 athlete headshot over the default (BSD) photo URL.
+    if raw.get("photo_365"):
+        detail["photo"] = raw["photo_365"]
     return detail
 
 
 @app.get("/basketball/player/{player_id}/games")
 def basketball_player_games(player_id: str, limit: int = 10):
-    """Recent basketball box-score lines (opponent + date + per-game stats)."""
-    import bsd_basketball as bb
-    import player_source as ps
-    rows = bb.player_games(player_id, limit=limit)
-    return {"games": ps.normalize_basketball_games({"results": rows}, limit=limit)}
+    """Recent basketball box-score lines. 365scores' public API does not expose
+    a per-player game log, so this is empty (basketball moved off BSD)."""
+    return {"games": []}
 
 
 # ── Soccer endpoints (v3) ────────────────────────────────────────────────────
@@ -3550,19 +3540,9 @@ def basketball_team_games(team_id: str, league: str = "nba"):
 
 @app.get("/basketball/league/{slug}/standings")
 def basketball_league_standings(slug: str):
-    """Current standings for a basketball league slug (e.g. nba, euroleague)."""
-    import bsd_basketball as _bsd_bb
-    league_id = _bsd_bb.slug_to_league_id(slug)
-    if league_id is not None:
-        try:
-            raw = _bsd_bb.league_standings(league_id)
-        except Exception as exc:
-            log.warning("basketball standings error for %s: %s", slug, exc)
-            raw = None
-        if raw is not None:
-            return _normalize_basketball_standings(raw, league_id, slug)
-    # 365scores fallback (Winner League, BCL — leagues BSD doesn't cover, plus a
-    # safety net if BSD upstream is down for a covered league).
+    """Current standings for a basketball league slug (e.g. nba, euroleague).
+    365scores is the sole basketball source — it covers every league we
+    surface (nba, euroleague, eurocup, bcl, winner_league)."""
     import basketball_source as _bb
     s365_result = _bb.get_s365_basketball_standings(slug)
     if s365_result is not None:
@@ -4504,11 +4484,10 @@ def watch_scores(date: str = "", league: str = "nba", tz: Optional[str] = None):
     def _compute(item: tuple[str, str, str, str]):
         home_abbr, away_abbr, gid, state = item
         try:
-            # BSD-sourced ids (bsd-*) score directly from BSD — live + final.
-            # Legacy s365-* games keep the 365 play-by-play path (final only).
-            if gid.startswith("bsd-"):
-                result = calculate_watch_score_bsd(int(gid[4:]), league=league)
-            elif state == "post":
+            # 365scores is the sole basketball source. The 365 play-by-play path
+            # scores FINISHED games; live games are not scored here (there is no
+            # live 365 watch-score path), so live drama badges aren't computed.
+            if state == "post":
                 result = calculate_watch_score_by_teams(
                     home_abbr=home_abbr, away_abbr=away_abbr,
                     date_yyyymmdd=game_date, league=league)

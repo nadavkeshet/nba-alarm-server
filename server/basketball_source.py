@@ -98,55 +98,31 @@ def get_basketball_games_status(
         date_iso = datetime.now(anchor_tz).date().isoformat()
 
     games: list[dict] = []
-    any_source_replied = False  # at least one source returned without raising
+    any_source_replied = False  # the source returned without raising
 
-    # BSD primary if covered. Query a ±1 day window because BSD filters by
-    # UTC event_date but we want games landing on `date_iso` in the user's
-    # TZ — late local-night games on the requested day can spill into the
-    # next UTC day (or vice versa). The dedupe filter narrows back to the
-    # target day after.
-    if bsd.is_supported(league_slug):
-        try:
-            league_id = bsd.slug_to_league_id(league_slug)
-            from_iso, to_iso = _bsd_query_window(date_iso)
-            events = bsd.league_events(league_id, date_from=from_iso, date_to=to_iso)
-            games = [_from_bsd_event(e, slug=league_slug) for e in events]
-            any_source_replied = True
-            if games:
-                logger.info("bsd basketball served %s/%s with %d games (raw, pre-filter)",
-                            league_slug, date_iso, len(games))
-        except Exception as exc:
-            logger.warning("bsd basketball failed for %s/%s: %s",
-                           league_slug, date_iso, exc)
-
-    # 365scores fallback (covers everything BSD doesn't, and rescues BSD failures)
-    if not games:
-        try:
-            # 365 expects YYYYMMDD form; the adapter normalizes either shape.
-            raw = s365.fetch_games(date_iso.replace("-", ""), league=league_slug)
-            games = [_from_365_event(e, slug=league_slug) for e in raw]
-            any_source_replied = True
-            if games:
-                logger.info("365scores basketball served %s/%s with %d games",
-                            league_slug, date_iso, len(games))
-        except Exception as exc:
-            logger.warning("365scores basketball failed for %s/%s: %s",
-                           league_slug, date_iso, exc)
+    # 365scores is the SOLE basketball source. BSD basketball was disconnected
+    # (the bsd_basketball / bsd_websocket modules remain on disk but are no
+    # longer wired into any basketball read path). Every league we surface —
+    # nba, euroleague, eurocup, bcl, winner_league — is covered by 365, and 365
+    # ids match the id space used by /search and stored favorites.
+    try:
+        # 365 expects YYYYMMDD form; the adapter normalizes either shape.
+        raw = s365.fetch_games(date_iso.replace("-", ""), league=league_slug)
+        games = [_from_365_event(e, slug=league_slug) for e in raw]
+        any_source_replied = True
+        if games:
+            logger.info("365scores basketball served %s/%s with %d games",
+                        league_slug, date_iso, len(games))
+    except Exception as exc:
+        logger.warning("365scores basketball failed for %s/%s: %s",
+                       league_slug, date_iso, exc)
 
     games = _enforce_date_and_dedupe(games, date_iso, anchor_tz)
-    # Drop cancelled / postponed events — series games that won't be played
-    # show up as "pre" otherwise, which pollutes the schedule with phantom games.
+    # Drop cancelled / postponed events so they don't pollute the schedule.
     games = [
         g for g in games
         if g.get("status", {}).get("type", {}).get("detail") not in ("Cancelled", "Postponed")
     ]
-    # Drop phantom playoff games: even when BSD is slow to mark a cancelled
-    # game, if one team already has 4 wins in the series we know the game
-    # will never be played.
-    if bsd.is_supported(league_slug):
-        league_id = bsd.slug_to_league_id(league_slug)
-        if league_id is not None:
-            games = _filter_completed_series_games(games, league_id, date_iso)
     return games, any_source_replied
 
 
@@ -1072,6 +1048,79 @@ def athlete_365_photo_url(team_name: str | None, player_name: str | None) -> str
                 if pid:
                     return f"{_365_ATHLETE_BASE}{pid}"
     return None
+
+
+# ---------------------------------------------------------------------------
+# 365scores basketball PLAYER endpoints (search + bio).
+#
+# 365's public web API exposes athlete search (/search/) and athlete bio
+# (/athletes/) but NOT a per-player game log or season-average endpoint. So the
+# player screen shows bio (+ current team) while the recent-games list is empty
+# and season averages are omitted — the accepted tradeoff of moving basketball
+# off BSD (which did expose those) onto 365. Athlete ids here are the SAME 365
+# ids the box score emits, so a tapped box-score / search row resolves cleanly.
+
+
+def s365_player_search(query: str, limit: int = 10) -> list[dict]:
+    """365scores basketball athlete search → rows shaped for search_index:
+    {id, name, team_id, team_name, photo}."""
+    try:
+        from score365.client import Client365
+        with Client365() as client:
+            data = client.get("/search/", params={"query": query, "sports": "2"})
+    except Exception as exc:
+        logger.warning("s365 player search failed for %r: %s", query, exc)
+        return []
+    comps = {str(c.get("id")): c.get("name") for c in (data.get("competitors") or [])}
+    out: list[dict] = []
+    for a in data.get("athletes") or []:
+        if a.get("sportId") != 2:          # basketball only
+            continue
+        cid = str(a.get("clubId") or "")
+        aid = a.get("id")
+        out.append({
+            "id": str(aid or ""),
+            "name": a.get("name") or "",
+            "team_id": cid or None,
+            "team_name": comps.get(cid),
+            "photo": f"{_365_ATHLETE_BASE}{aid}" if aid else None,
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+def s365_player_detail(athlete_id: str | int) -> dict | None:
+    """365scores athlete bio, shaped for `player_source.normalize_basketball_detail`.
+    `season_avg` is empty (365 exposes no per-player averages). Returns None for
+    an unknown athlete."""
+    try:
+        from score365.client import Client365
+        with Client365() as client:
+            data = client.get("/athletes/", params={"athletes": str(athlete_id)})
+    except Exception as exc:
+        logger.warning("s365 player detail failed for %s: %s", athlete_id, exc)
+        return None
+    aths = data.get("athletes") or []
+    if not aths:
+        return None
+    a = aths[0]
+    comps = {str(c.get("id")): c.get("name") for c in (data.get("competitors") or [])}
+    pos = a.get("position") or {}
+    cid = str(a.get("clubId") or "")
+    aid = a.get("id")
+    return {
+        "id": aid,
+        "name": a.get("name") or "",
+        "team": {"name": comps.get(cid)},
+        "position": pos.get("name") if isinstance(pos, dict) else None,
+        "jersey_number": a.get("jerseyNumber"),
+        "height_cm": None,
+        "country": a.get("nationalityName"),
+        "season_avg": {},
+        # 365 athlete headshot; the endpoint prefers this over the default URL.
+        "photo_365": f"{_365_ATHLETE_BASE}{aid}" if aid else None,
+    }
 
 
 def _bsd_status_to_espn(status: str) -> tuple[str, str, int]:

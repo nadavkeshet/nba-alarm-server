@@ -37,34 +37,14 @@ _INDEX_TTL = 6 * 3600.0
 _index_cache: tuple[float, dict[str, str]] | None = None
 
 def bsd_team_index() -> dict[str, str]:
-    """{bsd_team_id (str): team name} across BSD-primary leagues. Cached 6h.
-    Best-effort: any upstream failure yields an empty/partial dict, never raises."""
-    global _index_cache
-    now = _time.monotonic()
-    if _index_cache and now - _index_cache[0] < _INDEX_TTL:
-        return _index_cache[1]
-    out: dict[str, str] = {}
-    try:
-        import bsd_basketball as bb
-        for slug in _BSD_LEAGUE_SLUGS:
-            lid = bb.slug_to_league_id(slug)
-            if lid is None:
-                continue
-            try:
-                events = bb.league_events(lid) or []
-            except Exception:
-                continue
-            for ev in events:
-                if not isinstance(ev, dict):
-                    continue
-                for side in ("home_team", "away_team", "home", "away"):
-                    t = ev.get(side)
-                    if isinstance(t, dict) and t.get("id") is not None:
-                        out[str(t["id"])] = t.get("name") or t.get("displayName") or ""
-    except Exception:
-        pass
-    _index_cache = (now, out)
-    return out
+    """{bsd_team_id (str): team name} across BSD-primary basketball leagues.
+
+    BSD basketball is disconnected — every league is 365-sourced now, so there
+    are no BSD-sourced games whose team ids a 365 search row would need to merge
+    with. This returns an empty index (no BSD calls); the curated `_BSD_TO_365`
+    map below still serves any historical id callers pass in. Kept as a stable
+    no-op so search's name-merge fallback degrades cleanly."""
+    return {}
 
 
 def norm_name(name: str) -> str:
