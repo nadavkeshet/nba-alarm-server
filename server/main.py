@@ -2738,7 +2738,10 @@ def _feed_basketball(league: str, iso_date: str, tz: Optional[str]) -> list[dict
         if trustworthy:
             _empty_feed_cache[key] = time.monotonic() + _feed_empty_ttl(iso_date)
     else:
-        _feed_cache_put(key, games, _feed_ttl(iso_date))
+        # Live day → short TTL regardless of date classification (see _feed_soccer):
+        # an in-progress game read as a future fixture would otherwise freeze for hours.
+        has_live = any((g.get("status") or {}).get("type", {}).get("state") == "in" for g in games)
+        _feed_cache_put(key, games, 25.0 if has_live else _feed_ttl(iso_date))
     return games
 
 
@@ -2765,7 +2768,15 @@ def _feed_soccer(league: str, iso_date: str, tz: Optional[str]) -> list[dict]:
         if trustworthy:
             _empty_feed_cache[key] = time.monotonic() + _feed_empty_ttl(iso_date)
     else:
-        _feed_cache_put(key, matches, _feed_ttl(iso_date))
+        # A day holding a LIVE match must stay fresh regardless of how _feed_ttl
+        # classifies the calendar date. _feed_ttl keys "today" off US-Eastern, but
+        # the feed is requested in the user's tz — a match near the UTC boundary
+        # (e.g. a 22:00 UTC friendly = next-day in Israel, same-day in Eastern)
+        # reads as a FUTURE fixture and otherwise caches for HOURS, freezing the
+        # live minute/score.
+        live = {"live", "ht", "et", "pens"}
+        has_live = any((m.get("status") or "") in live for m in matches)
+        _feed_cache_put(key, matches, 25.0 if has_live else _feed_ttl(iso_date))
     return matches
 
 
