@@ -403,7 +403,7 @@ export default function FeedScreen() {
 
     // Silent refreshes only cover the "active" window (yesterday → next 7 days)
     // Full loads cover a wider range for schedule browsing
-    const dates = silent ? dateRange(1, 7) : dateRange(3, 14);
+    const dates = silent ? dateRange(1, 14) : dateRange(3, 21);
 
     // Always run a flush interval — in silent mode the seed data is already visible
     // so intermediate flushes just update individual rows as requests complete.

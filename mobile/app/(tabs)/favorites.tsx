@@ -40,6 +40,7 @@ import {
   searchAll,
   getStandings,
 } from '../../services/soccer-service';
+import { followTeam, unfollowTeam } from '../../services/follow-service';
 import type { SoccerFavoritesResponse, SoccerFavTeam, SoccerFavPlayer, SoccerFavCompetition } from '../../types/soccer';
 import type { SearchTeam, SearchPlayer } from '../../services/soccer-service';
 import { LeagueCatalog } from '../../services/league-catalog';
@@ -454,6 +455,14 @@ export default function FavoritesScreen() {
           const sEdits: Record<string, { drama_threshold: number; alert_type: 'alarm' | 'silent'; paused: boolean; notify_at_kickoff: boolean }> = {};
           for (const tm of favs.teams) {
             sEdits[tm.team_id] = { drama_threshold: tm.drama_threshold, alert_type: tm.alert_type, paused: tm.paused, notify_at_kickoff: tm.notify_at_kickoff ?? false };
+            // Sync each server-side soccer fav team to the local follow store so the
+            // feed tab can filter matches for this team without a separate API call.
+            followTeam({
+              id: tm.team_id,
+              name: tm.team_name || tm.team_id,
+              sport: 'football',
+              altIds: tm.team_ids ?? [],
+            }).catch(() => {});
           }
           setSoccerTeamEdits(sEdits);
         }).catch(() => {});
@@ -800,6 +809,7 @@ export default function FavoritesScreen() {
     if (!userToken) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     await deleteSoccerFavTeam(teamId, userToken).catch(() => {});
+    unfollowTeam(teamId).catch(() => {});
     setSoccerFavs(prev => prev ? { ...prev, teams: prev.teams.filter(t => t.team_id !== teamId) } : prev);
     setSoccerTeamEdits(prev => { const n = { ...prev }; delete n[teamId]; return n; });
   };
@@ -856,6 +866,13 @@ export default function FavoritesScreen() {
         notify_at_kickoff: newSoccerNotifyKickoff,
         user_token: userToken,
       });
+      // Sync to local follow store so the feed shows this team's games immediately.
+      followTeam({
+        id: pickedSoccerTeam.id,
+        name: pickedSoccerTeam.name,
+        sport: 'football',
+        altIds: pickedSoccerTeam.ids ?? [],
+      }).catch(() => {});
       const newTeam: SoccerFavTeam = {
         team_id: pickedSoccerTeam.id,
         team_name: pickedSoccerTeam.name,
