@@ -25,7 +25,7 @@ import { CompactMatchRow } from '../../components/compact-match-row';
 import { tabHeaderTitle } from '../../constants/tokens';
 import { LeagueLogo } from '../../components/league-logo';
 import { LeagueCatalog } from '../../services/league-catalog';
-import { getMatchesCached, invalidateMatchCache, searchAll } from '../../services/soccer-service';
+import { getMatchesCached, invalidateMatchCache, searchAll, getTeamMatches } from '../../services/soccer-service';
 import type { SearchTeam, SearchLeague } from '../../services/soccer-service';
 import type { SoccerMatch } from '../../types/soccer';
 import { isLiveLike, displayMinute, soccerMatchRoute } from '../../types/soccer';
@@ -697,6 +697,17 @@ export default function FeedScreen() {
 
 // ── Search modal ──────────────────────────────────────────────────────────────
 
+function _formatKickoff(kickoff: string | null | undefined): string {
+  if (!kickoff) return '—';
+  const d = new Date(kickoff);
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function _compLabel(comp: string | null | undefined): string {
+  if (!comp || comp === 'other') return 'Friendly';
+  return LeagueCatalog.info(comp).label;
+}
+
 function SearchFollowsModal({
   visible, onClose, followStore, onChanged, colors,
 }: {
@@ -714,12 +725,35 @@ function SearchFollowsModal({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef    = useRef<TextInput>(null);
 
+  // Team preview panel
+  const [previewTeam, setPreviewTeam]           = useState<SearchTeam | null>(null);
+  const [teamMatches, setTeamMatches]           = useState<SoccerMatch[]>([]);
+  const [teamMatchesLoading, setTeamMatchesLoading] = useState(false);
+  const [addedConfirm, setAddedConfirm]         = useState(false);
+
   useEffect(() => { setLocalStore(followStore); }, [followStore]);
 
   useEffect(() => {
-    if (!visible) { setQuery(''); setResults({ teams: [], leagues: [] }); }
-    else setTimeout(() => inputRef.current?.focus(), 100);
+    if (!visible) {
+      setQuery('');
+      setResults({ teams: [], leagues: [] });
+      setPreviewTeam(null);
+      setAddedConfirm(false);
+    } else {
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
   }, [visible]);
+
+  // Fetch matches when a football team is previewed
+  useEffect(() => {
+    if (!previewTeam || previewTeam.sport !== 'football') return;
+    setTeamMatches([]);
+    setTeamMatchesLoading(true);
+    getTeamMatches(previewTeam.id)
+      .then(m => setTeamMatches(m))
+      .catch(() => {})
+      .finally(() => setTeamMatchesLoading(false));
+  }, [previewTeam]);
 
   useEffect(() => {
     const q = query.trim();
@@ -734,7 +768,7 @@ function SearchFollowsModal({
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [query]);
 
-  const toggleTeam = async (team: SearchTeam) => {
+  const doToggleTeam = async (team: SearchTeam) => {
     const already = isTeamFollowed(localStore, team.id);
     const altIds = (team.ids ?? []).filter(id => id !== team.id);
     const teamLeagues = team.leagues ?? (team.league ? [team.league] : []);
@@ -772,94 +806,239 @@ function SearchFollowsModal({
     }
   };
 
+  const handleTeamRowPress = (team: SearchTeam) => {
+    if (team.sport === 'football') {
+      // Open preview panel for football teams
+      setPreviewTeam(team);
+      setAddedConfirm(false);
+    } else {
+      // Basketball: instant toggle (no preview needed)
+      doToggleTeam(team);
+    }
+  };
+
+  const handleAddRemove = async () => {
+    if (!previewTeam) return;
+    const already = isTeamFollowed(localStore, previewTeam.id);
+    await doToggleTeam(previewTeam);
+    if (!already) {
+      setAddedConfirm(true);
+      setTimeout(() => { setPreviewTeam(null); setAddedConfirm(false); }, 900);
+    } else {
+      setPreviewTeam(null);
+    }
+  };
+
   const hasResults = results.teams.length > 0 || results.leagues.length > 0;
+  const upcomingMatches = teamMatches.filter(m => m.status === 'scheduled').slice(0, 6);
+  const recentMatches   = teamMatches.filter(m => m.status === 'ft' || m.status === 'aet').slice(-4);
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <View style={[searchStyles.container, { backgroundColor: colors.bg }]}>
-        <View style={[searchStyles.searchBar, { paddingTop: insets.top + 8, borderBottomColor: colors.border }]}>
-          <View style={[searchStyles.inputWrap, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Ionicons name="search-outline" size={16} color={colors.textMuted} style={{ marginLeft: 10 }} />
-            <TextInput
-              ref={inputRef}
-              style={[searchStyles.input, { color: colors.textPrimary }]}
-              placeholder="Search teams & leagues…"
-              placeholderTextColor={colors.textMuted}
-              value={query}
-              onChangeText={setQuery}
-              returnKeyType="search"
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            {query.length > 0 && (
-              <TouchableOpacity onPress={() => setQuery('')} style={{ padding: 8 }}>
-                <Ionicons name="close-circle" size={16} color={colors.textMuted} />
-              </TouchableOpacity>
-            )}
-          </View>
-          <TouchableOpacity onPress={onClose} style={searchStyles.doneBtn}>
-            <Text style={[searchStyles.doneTxt, { color: colors.textPrimary }]}>Done</Text>
-          </TouchableOpacity>
-        </View>
 
-        {searching ? (
-          <ActivityIndicator style={{ marginTop: 40 }} color={colors.textMuted} />
-        ) : !query.trim() ? (
-          <View style={searchStyles.placeholder}>
-            <Ionicons name="search-outline" size={40} color={colors.textMuted} style={{ marginBottom: 10 }} />
-            <Text style={[searchStyles.placeholderTxt, { color: colors.textMuted }]}>Type a team or league name</Text>
-          </View>
-        ) : !hasResults ? (
-          <View style={searchStyles.placeholder}>
-            <Text style={[searchStyles.placeholderTxt, { color: colors.textMuted }]}>No results for "{query}"</Text>
+        {/* ── Team preview panel ── */}
+        {previewTeam ? (
+          <View style={{ flex: 1 }}>
+            {/* Header */}
+            <View style={[searchStyles.searchBar, { paddingTop: insets.top + 8, borderBottomColor: colors.border }]}>
+              <TouchableOpacity onPress={() => setPreviewTeam(null)} style={{ paddingHorizontal: 8, paddingVertical: 4 }}>
+                <Ionicons name="chevron-back" size={22} color={colors.textPrimary} />
+              </TouchableOpacity>
+              {previewTeam.logo
+                ? <Image source={{ uri: previewTeam.logo }} style={searchStyles.teamLogo} contentFit="contain" />
+                : null}
+              <Text style={[searchStyles.rowName, { flex: 1, marginLeft: 6, fontSize: 17, color: colors.textPrimary }]} numberOfLines={1}>
+                {previewTeam.name}
+              </Text>
+              <TouchableOpacity onPress={onClose} style={searchStyles.doneBtn}>
+                <Text style={[searchStyles.doneTxt, { color: colors.textPrimary }]}>Done</Text>
+              </TouchableOpacity>
+            </View>
+
+            {teamMatchesLoading ? (
+              <ActivityIndicator style={{ marginTop: 48 }} color={colors.textMuted} />
+            ) : (
+              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
+                {upcomingMatches.length > 0 && (
+                  <>
+                    <Text style={[searchStyles.sectionHeader, { color: colors.textMuted }]}>UPCOMING</Text>
+                    {upcomingMatches.map(m => {
+                      const isHome = m.home?.name === previewTeam.name;
+                      const opp   = isHome ? m.away?.name : m.home?.name;
+                      return (
+                        <View key={m.id} style={[searchStyles.matchRow, { borderBottomColor: colors.border }]}>
+                          <Text style={[searchStyles.matchDate, { color: colors.textMuted }]}>{_formatKickoff(m.kickoff)}</Text>
+                          <View style={{ flex: 1 }}>
+                            <Text style={[searchStyles.matchName, { color: colors.textPrimary }]} numberOfLines={1}>
+                              {isHome ? 'vs' : '@'} <Text style={{ fontWeight: '700' }}>{opp}</Text>
+                            </Text>
+                            <Text style={[searchStyles.matchLeague, { color: colors.textMuted }]}>{_compLabel(m.competition)}</Text>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </>
+                )}
+                {recentMatches.length > 0 && (
+                  <>
+                    <Text style={[searchStyles.sectionHeader, { color: colors.textMuted, marginTop: 8 }]}>RECENT</Text>
+                    {recentMatches.map(m => {
+                      const isHome = m.home?.name === previewTeam.name;
+                      const myScore  = isHome ? m.home?.score : m.away?.score;
+                      const oppScore = isHome ? m.away?.score : m.home?.score;
+                      const opp = isHome ? m.away?.name : m.home?.name;
+                      const won = myScore != null && oppScore != null && myScore > oppScore;
+                      const drew = myScore != null && oppScore != null && myScore === oppScore;
+                      return (
+                        <View key={m.id} style={[searchStyles.matchRow, { borderBottomColor: colors.border }]}>
+                          <Text style={[searchStyles.matchDate, { color: colors.textMuted }]}>{_formatKickoff(m.kickoff)}</Text>
+                          <View style={{ flex: 1 }}>
+                            <Text style={[searchStyles.matchName, { color: colors.textPrimary }]} numberOfLines={1}>
+                              {isHome ? 'vs' : '@'} <Text style={{ fontWeight: '700' }}>{opp}</Text>
+                            </Text>
+                            <Text style={[searchStyles.matchLeague, { color: colors.textMuted }]}>{_compLabel(m.competition)}</Text>
+                          </View>
+                          <View style={[searchStyles.scoreBadge, {
+                            backgroundColor: won ? '#14532d' : drew ? colors.card : '#450a0a',
+                          }]}>
+                            <Text style={[searchStyles.scoreTxt, { color: won ? '#4ade80' : drew ? colors.textMuted : '#f87171' }]}>
+                              {myScore ?? '—'}–{oppScore ?? '—'}
+                            </Text>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </>
+                )}
+                {upcomingMatches.length === 0 && recentMatches.length === 0 && (
+                  <View style={searchStyles.placeholder}>
+                    <Text style={[searchStyles.placeholderTxt, { color: colors.textMuted }]}>No recent or upcoming games found</Text>
+                  </View>
+                )}
+              </ScrollView>
+            )}
+
+            {/* Add / Remove button */}
+            <View style={[searchStyles.previewFooter, { borderTopColor: colors.border, backgroundColor: colors.bg }]}>
+              {(() => {
+                const followed = isTeamFollowed(localStore, previewTeam.id);
+                if (addedConfirm) {
+                  return (
+                    <View style={[searchStyles.addBtn, { backgroundColor: '#14532d' }]}>
+                      <Ionicons name="checkmark-circle" size={20} color="#4ade80" />
+                      <Text style={[searchStyles.addBtnTxt, { color: '#4ade80' }]}>Added to Favorites!</Text>
+                    </View>
+                  );
+                }
+                if (followed) {
+                  return (
+                    <TouchableOpacity style={[searchStyles.addBtn, { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border }]} onPress={handleAddRemove}>
+                      <Ionicons name="star" size={18} color="#F59E0B" />
+                      <Text style={[searchStyles.addBtnTxt, { color: colors.textPrimary }]}>Following · Tap to remove</Text>
+                    </TouchableOpacity>
+                  );
+                }
+                return (
+                  <TouchableOpacity style={[searchStyles.addBtn, { backgroundColor: colors.orange }]} onPress={handleAddRemove}>
+                    <Ionicons name="star-outline" size={18} color="#fff" />
+                    <Text style={[searchStyles.addBtnTxt, { color: '#fff' }]}>Add to Favorites</Text>
+                  </TouchableOpacity>
+                );
+              })()}
+            </View>
           </View>
         ) : (
-          <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-            {results.leagues.length > 0 && (
-              <>
-                <Text style={[searchStyles.sectionHeader, { color: colors.textMuted }]}>LEAGUES</Text>
-                {results.leagues.map(league => {
-                  const followed = isLeagueFollowed(localStore, league.id);
-                  return (
-                    <TouchableOpacity key={`league-${league.id}`} style={[searchStyles.row, { borderBottomColor: colors.border }]} onPress={() => toggleLeague(league)} activeOpacity={0.7}>
-                      <LeagueLogo leagueId={league.id} size={28} />
-                      <View style={{ flex: 1 }}>
-                        <Text style={[searchStyles.rowName, { color: colors.textPrimary }]}>{league.name}</Text>
-                        <Text style={[searchStyles.rowSub, { color: colors.textMuted }]}>{league.sport === 'football' ? '⚽ Football' : '🏀 Basketball'}</Text>
-                      </View>
-                      <Ionicons name={followed ? 'star' : 'star-outline'} size={22} color={followed ? '#F59E0B' : colors.textMuted} />
-                    </TouchableOpacity>
-                  );
-                })}
-              </>
+          /* ── Search results panel ── */
+          <>
+            <View style={[searchStyles.searchBar, { paddingTop: insets.top + 8, borderBottomColor: colors.border }]}>
+              <View style={[searchStyles.inputWrap, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <Ionicons name="search-outline" size={16} color={colors.textMuted} style={{ marginLeft: 10 }} />
+                <TextInput
+                  ref={inputRef}
+                  style={[searchStyles.input, { color: colors.textPrimary }]}
+                  placeholder="Search teams & leagues…"
+                  placeholderTextColor={colors.textMuted}
+                  value={query}
+                  onChangeText={setQuery}
+                  returnKeyType="search"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                {query.length > 0 && (
+                  <TouchableOpacity onPress={() => setQuery('')} style={{ padding: 8 }}>
+                    <Ionicons name="close-circle" size={16} color={colors.textMuted} />
+                  </TouchableOpacity>
+                )}
+              </View>
+              <TouchableOpacity onPress={onClose} style={searchStyles.doneBtn}>
+                <Text style={[searchStyles.doneTxt, { color: colors.textPrimary }]}>Done</Text>
+              </TouchableOpacity>
+            </View>
+
+            {searching ? (
+              <ActivityIndicator style={{ marginTop: 40 }} color={colors.textMuted} />
+            ) : !query.trim() ? (
+              <View style={searchStyles.placeholder}>
+                <Ionicons name="search-outline" size={40} color={colors.textMuted} style={{ marginBottom: 10 }} />
+                <Text style={[searchStyles.placeholderTxt, { color: colors.textMuted }]}>Type a team or league name</Text>
+              </View>
+            ) : !hasResults ? (
+              <View style={searchStyles.placeholder}>
+                <Text style={[searchStyles.placeholderTxt, { color: colors.textMuted }]}>No results for "{query}"</Text>
+              </View>
+            ) : (
+              <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+                {results.leagues.length > 0 && (
+                  <>
+                    <Text style={[searchStyles.sectionHeader, { color: colors.textMuted }]}>LEAGUES</Text>
+                    {results.leagues.map(league => {
+                      const followed = isLeagueFollowed(localStore, league.id);
+                      return (
+                        <TouchableOpacity key={`league-${league.id}`} style={[searchStyles.row, { borderBottomColor: colors.border }]} onPress={() => toggleLeague(league)} activeOpacity={0.7}>
+                          <LeagueLogo leagueId={league.id} size={28} />
+                          <View style={{ flex: 1 }}>
+                            <Text style={[searchStyles.rowName, { color: colors.textPrimary }]}>{league.name}</Text>
+                            <Text style={[searchStyles.rowSub, { color: colors.textMuted }]}>{league.sport === 'football' ? '⚽ Football' : '🏀 Basketball'}</Text>
+                          </View>
+                          <Ionicons name={followed ? 'star' : 'star-outline'} size={22} color={followed ? '#F59E0B' : colors.textMuted} />
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </>
+                )}
+                {results.teams.length > 0 && (
+                  <>
+                    <Text style={[searchStyles.sectionHeader, { color: colors.textMuted }]}>TEAMS</Text>
+                    {results.teams.map(team => {
+                      const followed = isTeamFollowed(localStore, team.id);
+                      const initials = team.name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
+                      return (
+                        <TouchableOpacity key={`team-${team.id}`} style={[searchStyles.row, { borderBottomColor: colors.border }]} onPress={() => handleTeamRowPress(team)} activeOpacity={0.7}>
+                          {team.logo
+                            ? <Image source={{ uri: team.logo }} style={searchStyles.teamLogo} contentFit="contain" />
+                            : <View style={[searchStyles.teamBadge, { backgroundColor: colors.card, borderColor: colors.border }]}><Text style={[searchStyles.teamBadgeTxt, { color: colors.textMuted }]}>{initials}</Text></View>
+                          }
+                          <View style={{ flex: 1 }}>
+                            <Text style={[searchStyles.rowName, { color: colors.textPrimary }]}>{team.name}</Text>
+                            <Text style={[searchStyles.rowSub, { color: colors.textMuted }]}>
+                              {team.sport === 'football' ? '⚽ Football' : '🏀 Basketball'}
+                              {team.league ? ` · ${leagueDisplayName(team.league)}` : ''}
+                            </Text>
+                          </View>
+                          {team.sport === 'football'
+                            ? <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+                            : <Ionicons name={followed ? 'star' : 'star-outline'} size={22} color={followed ? '#F59E0B' : colors.textMuted} />
+                          }
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </>
+                )}
+                <View style={{ height: 40 }} />
+              </ScrollView>
             )}
-            {results.teams.length > 0 && (
-              <>
-                <Text style={[searchStyles.sectionHeader, { color: colors.textMuted }]}>TEAMS</Text>
-                {results.teams.map(team => {
-                  const followed = isTeamFollowed(localStore, team.id);
-                  const initials = team.name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
-                  return (
-                    <TouchableOpacity key={`team-${team.id}`} style={[searchStyles.row, { borderBottomColor: colors.border }]} onPress={() => toggleTeam(team)} activeOpacity={0.7}>
-                      {team.logo
-                        ? <Image source={{ uri: team.logo }} style={searchStyles.teamLogo} contentFit="contain" />
-                        : <View style={[searchStyles.teamBadge, { backgroundColor: colors.card, borderColor: colors.border }]}><Text style={[searchStyles.teamBadgeTxt, { color: colors.textMuted }]}>{initials}</Text></View>
-                      }
-                      <View style={{ flex: 1 }}>
-                        <Text style={[searchStyles.rowName, { color: colors.textPrimary }]}>{team.name}</Text>
-                        <Text style={[searchStyles.rowSub, { color: colors.textMuted }]}>
-                          {team.sport === 'football' ? '⚽ Football' : '🏀 Basketball'}
-                          {team.league ? ` · ${leagueDisplayName(team.league)}` : ''}
-                        </Text>
-                      </View>
-                      <Ionicons name={followed ? 'star' : 'star-outline'} size={22} color={followed ? '#F59E0B' : colors.textMuted} />
-                    </TouchableOpacity>
-                  );
-                })}
-              </>
-            )}
-            <View style={{ height: 40 }} />
-          </ScrollView>
+          </>
         )}
       </View>
     </Modal>
@@ -1015,4 +1194,14 @@ const searchStyles = StyleSheet.create({
   teamLogo: { width: 36, height: 36, borderRadius: 4 },
   teamBadge: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   teamBadgeTxt: { fontSize: 11, fontWeight: '700' },
+  // ── Team preview panel ─────────────────────────────────────────────
+  matchRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 11, borderBottomWidth: StyleSheet.hairlineWidth, gap: 12 },
+  matchDate: { fontSize: 12, fontWeight: '600', width: 50 },
+  matchName: { fontSize: 14, fontWeight: '500' },
+  matchLeague: { fontSize: 11, marginTop: 2 },
+  scoreBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, minWidth: 46, alignItems: 'center' },
+  scoreTxt: { fontSize: 12, fontWeight: '700' },
+  previewFooter: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 16, borderTopWidth: StyleSheet.hairlineWidth },
+  addBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 15, borderRadius: 14 },
+  addBtnTxt: { fontSize: 16, fontWeight: '700' },
 });
