@@ -1077,11 +1077,15 @@ def athlete_365_photo_url(team_name: str | None, player_name: str | None) -> str
 def _bsd_status_to_espn(status: str) -> tuple[str, str, int]:
     """BSD basketball status → ESPN's (state, detail, period) tuple.
 
-    BSD uses: 'notstarted' | 'inprogress' | 'finished' | 'postponed' | 'cancelled'.
+    The live BSD basketball API emits: 'scheduled' | 'live' | 'finished' |
+    'postponed' | 'cancelled'. (The legacy 'notstarted'/'inprogress' spellings
+    are still honored defensively — `_s365_status_to_bsd` produces them for the
+    365scores summary path.) Mapping 'live' is what keeps an in-progress game
+    from showing in the schedule feed as "Scheduled" with a frozen score.
     """
     if status == "finished":
         return "post", "Final", 4
-    if status == "inprogress":
+    if status in ("live", "inprogress"):
         return "in", "In Progress", 0
     if status == "postponed":
         return "pre", "Postponed", 0
