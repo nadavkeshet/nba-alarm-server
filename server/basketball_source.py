@@ -106,12 +106,20 @@ def get_basketball_games_status(
     # nba, euroleague, eurocup, bcl, winner_league — is covered by 365, and 365
     # ids match the id space used by /search and stored favorites.
     try:
-        # 365 expects YYYYMMDD form; the adapter normalizes either shape.
-        raw = s365.fetch_games(date_iso.replace("-", ""), league=league_slug)
+        # 365 buckets each game by its US-Eastern date, but the user's "today"
+        # is in `anchor_tz` — a late-night game can sit one Eastern day off from
+        # the local day (e.g. a 00:30 UTC tip-off is "yesterday" in Eastern but
+        # "today" in Israel). Fetch a ±1 day Eastern window and let
+        # `_enforce_date_and_dedupe` narrow back to the user's local calendar day.
+        d = date.fromisoformat(date_iso)
+        raw: list[dict] = []
+        for off in (-1, 0, 1):
+            ymd = (d + timedelta(days=off)).strftime("%Y%m%d")
+            raw.extend(s365.fetch_games(ymd, league=league_slug))
         games = [_from_365_event(e, slug=league_slug) for e in raw]
         any_source_replied = True
         if games:
-            logger.info("365scores basketball served %s/%s with %d games",
+            logger.info("365scores basketball served %s/%s with %d games (window, pre-filter)",
                         league_slug, date_iso, len(games))
     except Exception as exc:
         logger.warning("365scores basketball failed for %s/%s: %s",
