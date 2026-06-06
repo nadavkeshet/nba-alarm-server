@@ -4196,17 +4196,28 @@ def calendar_subscriptions(user_token: str = ""):
 
 
 @app.get("/soccer/player/{player_id}")
-def soccer_player(player_id: str):
+def soccer_player(player_id: str, source: str = ""):
     """Normalized football player detail (bio + latest-season summary), with
     the player's current club and national team (ids + names) so the client
-    can link to both."""
+    can link to both.
+
+    `source` disambiguates the id space: BSD player ids and 365 athlete ids
+    overlap numerically (e.g. 13557 is a different player in each), so a caller
+    that knows the match source ("s365"/"bsd") should pass it. Without it we try
+    BSD then fall back to 365 — fine for non-colliding ids, but the explicit hint
+    is what makes a 365-sourced match's scorer resolve to the RIGHT player."""
     import bzzoiro_adapter as bz
     import player_source as ps
+    import soccer_source as ss
+    if source == "s365":
+        s365 = ss.s365_soccer_player(player_id)
+        if s365:
+            return s365
+        raise HTTPException(status_code=404, detail="player not found")
     detail = bz.player_detail(player_id)
     if not detail:
         # Not a BSD id — a 365-sourced match's scorer (e.g. friendlies). Resolve
         # the 365 athlete so the incident tap still opens a player page.
-        import soccer_source as ss
         s365 = ss.s365_soccer_player(player_id)
         if s365:
             return s365
