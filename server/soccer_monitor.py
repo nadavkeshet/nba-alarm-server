@@ -1226,20 +1226,35 @@ def _match_drama(match: dict):
     if status not in {"live", "ht", "et", "pens", "1h", "2h"}:
         return None
     ctx = drama_engine.context_from_match_detail(match)
-    # context_from_match_detail leaves win_prob_swing as None BY DESIGN — the
-    # caller (which has the WS client in scope) injects it. Pull the live swing
-    # from the BSD WebSocket so a sharp favorite-flip (a goal / red card that
-    # turns the match) spikes the score via _score_odds (up to +0.8). Without
-    # this, drama_radar ALARMS never saw the swing that watch scores already get
-    # through soccer_source._live_drama_ctx. Best-effort; only bsd-* ids have a
-    # WS feed, and a missing snapshot just leaves the (None) default.
+    # Enrich with LIVE WebSocket signals the REST detail doesn't carry, so
+    # drama_radar ALARMS score off the same real-time data the watch badges do:
+    #   • win_prob_swing — a favorite-flip (goal / red card) spikes _score_odds
+    #     (up to +0.8). context_from_match_detail leaves it None "by design, the
+    #     caller injects it" — and the caller never did, until now.
+    #   • big_chances / big_chances_missed / hit_woodwork / big_saves — feed the
+    #     enriched _score_chances "thrill" term (near-miss agony + keeper heroics).
+    #   • dangerous-attack pressure → momentum_pressure, a faster-updating
+    #     momentum signal than the per-minute xG array.
+    # Best-effort; only bsd-* ids have a WS feed, so a miss just leaves defaults.
     mid = match.get("id") or ""
     if mid.startswith("bsd-") and mid[4:].isdigit():
         try:
             import bsd_websocket as _ws
-            swing = _ws.get_winprob_swing(int(mid[4:]))
+            eid = int(mid[4:])
+            swing = _ws.get_winprob_swing(eid)
             if swing is not None:
                 ctx["win_prob_swing"] = swing
+            sig = drama_engine.live_signals_from_ws_event(_ws.get_live_event_state(eid))
+            for side in ("home", "away"):
+                side_sig = sig.get(side) or {}
+                dst = ctx.setdefault(side, {})
+                for k, v in side_sig.items():
+                    if v is not None:
+                        dst[k] = v
+            # Live dangerous-attack pressure is more responsive than the REST
+            # momentum array — prefer it when present.
+            if sig.get("momentum_pressure") is not None:
+                ctx["momentum_pressure"] = sig["momentum_pressure"]
         except Exception:
             pass
     score = drama_engine.compute_drama(ctx)

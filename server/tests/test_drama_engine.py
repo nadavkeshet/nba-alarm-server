@@ -338,3 +338,54 @@ def test_round_keyword_routing(round_name, expected_min_multiplier):
     else:
         # The lift should be at least proportional to the multiplier
         assert scored.total > base.total
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Live WS signal extraction + near-miss / keeper-heroics scoring
+
+from drama_engine import live_signals_from_ws_event, _score_chances
+
+
+def test_live_signals_reads_stats_path_not_team_identity():
+    # Stats live under snap['stats']['home']; snap['home'] is only identity.
+    snap = {
+        "home": {"id": 1, "name": "Home", "short_name": "HOM"},
+        "away": {"id": 2, "name": "Away", "short_name": "AWY"},
+        "stats": {
+            "home": {"big_chances": 3, "big_chances_missed": 2, "hit_woodwork": 1,
+                     "big_saves": 2, "shots_on_target": 7, "dangerous_attack_pct": 60},
+            "away": {"big_chances": 1, "big_chances_missed": 0, "hit_woodwork": 0,
+                     "big_saves": 1, "shots_on_target": 3, "dangerous_attack_pct": 40},
+        },
+    }
+    sig = live_signals_from_ws_event(snap)
+    assert sig["home"]["big_chances"] == 3
+    assert sig["home"]["big_chances_missed"] == 2
+    assert sig["home"]["big_saves"] == 2
+    # dangerous-attack asymmetry: (60-40)/(60+40) = 0.2, + = home
+    assert abs(sig["momentum_pressure"] - 0.2) < 1e-9
+
+
+def test_live_signals_empty_without_stats():
+    assert live_signals_from_ws_event(None) == {}
+    assert live_signals_from_ws_event({"home": {"name": "X"}}) == {}  # no 'stats' key
+
+
+def test_chances_rewards_near_misses_and_keeper_heroics():
+    # Same big_chances both ways, but one match adds misses + woodwork + saves.
+    plain = _score_chances({"home": {"big_chances": 2}, "away": {"big_chances": 2}})
+    thrilling = _score_chances({
+        "home": {"big_chances": 2, "big_chances_missed": 2, "hit_woodwork": 1, "big_saves": 2},
+        "away": {"big_chances": 2, "big_chances_missed": 1, "big_saves": 1},
+    })
+    assert thrilling > plain, (thrilling, plain)
+    assert thrilling <= 1.5  # never escapes the widened cap
+
+
+def test_chances_zero_without_any_chance_data():
+    assert _score_chances({"home": {"score": 1}, "away": {"score": 0}}) == 0.0
+
+
+def test_chances_backward_compatible_for_big_chances_only():
+    # Original formula: created*0.12 + min*0.15. 2+2 → 4*0.12 + 2*0.15 = 0.78.
+    assert abs(_score_chances({"home": {"big_chances": 2}, "away": {"big_chances": 2}}) - 0.78) < 1e-9

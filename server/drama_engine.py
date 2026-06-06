@@ -365,16 +365,35 @@ def _score_events(ctx: dict) -> float:
 
 
 def _score_chances(ctx: dict) -> float:
-    """0–1 (in the core). Rewards END-TO-END matches — both teams racking up big
-    chances — not one-sided pressure. 0 when there's no chance data."""
+    """0–1.5 (in the core). Rewards END-TO-END thrillers AND near-miss agony:
+      • big chances created (both ways) — an open, end-to-end game,
+      • big chances MISSED + shots off the WOODWORK — the gasp of a sitter
+        spurned or a strike that rattled the bar,
+      • big SAVES — a keeper denying a certain goal.
+    These live signals come off the BSD stats overlay (see
+    `live_signals_from_ws_event`). 0 when there's no chance data at all."""
     home = ctx.get("home") or {}
     away = ctx.get("away") or {}
-    hbc, abc = home.get("big_chances"), away.get("big_chances")
-    if hbc is None and abc is None:
+
+    def g(d: dict, k: str) -> int | float:
+        v = d.get(k)
+        return v if isinstance(v, (int, float)) else 0
+
+    keys = ("big_chances", "big_chances_missed", "hit_woodwork", "big_saves")
+    if all(home.get(k) is None and away.get(k) is None for k in keys):
         return 0.0
-    hbc = hbc or 0
-    abc = abc or 0
-    return min(1.0, (hbc + abc) * 0.12 + min(hbc, abc) * 0.15)
+
+    hbc, abc = g(home, "big_chances"), g(away, "big_chances")
+    created    = hbc + abc
+    end_to_end = min(hbc, abc)                                   # both ways = thriller
+    near_miss  = (g(home, "big_chances_missed") + g(away, "big_chances_missed")
+                  + g(home, "hit_woodwork") + g(away, "hit_woodwork"))
+    heroics    = g(home, "big_saves") + g(away, "big_saves")
+    # Base (created + end-to-end) is unchanged from the original calibration; the
+    # near-miss / heroics terms ride on top, capped a touch higher (1.5) so a
+    # genuine chance-fest reads hotter without ever escaping the core's 7-cap.
+    raw = created * 0.12 + end_to_end * 0.15 + near_miss * 0.10 + heroics * 0.08
+    return min(1.5, raw)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -534,6 +553,47 @@ def _stakes_multiplier(ctx: dict) -> float:
 # Translator — takes the rich match-detail payload that
 # soccer_source.get_soccer_match_detail() returns and reduces it to the slim
 # ctx dict compute_drama() consumes. Still pure: no network, no I/O.
+
+
+def live_signals_from_ws_event(snap: dict | None) -> dict:
+    """Reduce a BSD WebSocket `event` snapshot to the drama-context enrichment.
+
+    CRITICAL field-path note: the live per-team stats live under
+    `snap['stats']['home'|'away']`, NOT `snap['home']` (which is only team
+    identity — id/name/short_name). Reading the wrong path silently yields all
+    None, which is exactly the no-op bug this replaces.
+
+    Returns a dict like
+        {"home": {big_chances, big_chances_missed, hit_woodwork, big_saves,
+                  shots_on_target}, "away": {...},
+         "momentum_pressure": float | None}   # dangerous-attack asymmetry, [-1,1]
+    Empty dict when there's no usable snapshot. Pure — no I/O.
+    """
+    if not isinstance(snap, dict):
+        return {}
+    stats = snap.get("stats") or {}
+    hs = stats.get("home") or {}
+    as_ = stats.get("away") or {}
+    if not hs and not as_:
+        return {}
+
+    def num(d: dict, k: str):
+        v = d.get(k)
+        return v if isinstance(v, (int, float)) else None
+
+    _fields = ("big_chances", "big_chances_missed", "hit_woodwork",
+               "big_saves", "shots_on_target")
+    out: dict = {
+        "home": {k: num(hs, k) for k in _fields},
+        "away": {k: num(as_, k) for k in _fields},
+    }
+    # Live pressure from dangerous-attack share → [-1, +1] (+ = home pressing).
+    # This is a faster-updating momentum signal than the per-minute xG array.
+    h_dng = num(hs, "dangerous_attack_pct") or 0.0
+    a_dng = num(as_, "dangerous_attack_pct") or 0.0
+    if (h_dng + a_dng) > 0:
+        out["momentum_pressure"] = (h_dng - a_dng) / (h_dng + a_dng)
+    return out
 
 
 def context_from_match_detail(detail: dict) -> dict:

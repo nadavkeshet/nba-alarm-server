@@ -100,3 +100,28 @@ def test_match_drama_no_swing_injection_for_s365(monkeypatch):
     monkeypatch.setattr(bsd_websocket, "get_winprob_swing", _boom)
     sm._match_drama({"id": "s365-4671395", "status": "live", "minute": 80})
     assert captured.get("win_prob_swing") is None
+
+
+def test_match_drama_overlays_live_ws_stats(monkeypatch):
+    """_match_drama must overlay the live WS event stats (near-miss / saves /
+    dangerous-attack pressure) onto the scoring ctx for bsd-* matches."""
+    import bsd_websocket
+    captured = {}
+    monkeypatch.setattr(sm.drama_engine, "context_from_match_detail",
+                        lambda d: {"home": {"score": 1}, "away": {"score": 1},
+                                   "momentum_pressure": None, "win_prob_swing": None})
+    monkeypatch.setattr(sm.drama_engine, "compute_drama",
+                        lambda ctx: captured.update(ctx) or _Score(8.0))
+    monkeypatch.setattr(sm, "_log_drama_snapshot", lambda *a: None)
+    monkeypatch.setattr(bsd_websocket, "get_winprob_swing", lambda eid, **k: 0.3)
+    monkeypatch.setattr(bsd_websocket, "get_live_event_state", lambda eid: {
+        "home": {"id": 1, "name": "H"},
+        "stats": {"home": {"big_chances_missed": 2, "big_saves": 1, "dangerous_attack_pct": 70},
+                  "away": {"big_chances_missed": 0, "big_saves": 0, "dangerous_attack_pct": 30}},
+    })
+    sm._match_drama({"id": "bsd-9096", "status": "live", "minute": 80})
+    assert captured["home"]["big_chances_missed"] == 2
+    assert captured["home"]["big_saves"] == 1
+    assert captured["win_prob_swing"] == 0.3
+    # dangerous-attack pressure (70-30)/100 = 0.4 overrides the None REST value
+    assert abs(captured["momentum_pressure"] - 0.4) < 1e-9

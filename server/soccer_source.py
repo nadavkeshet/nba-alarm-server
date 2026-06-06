@@ -359,23 +359,22 @@ def _live_drama_ctx(eid, status, minute, hs, aw, slug, round_name, is_derby) -> 
 
     home: dict = {"score": hs}
     away: dict = {"score": aw}
-    pressure = None
-    if snap:
-        h_side = snap.get("home") or {}
-        a_side = snap.get("away") or {}
-        home["xg"] = _to_float(h_side.get("xg"))
-        away["xg"] = _to_float(a_side.get("xg"))
-        home["big_chances"] = h_side.get("big_chances")
-        away["big_chances"] = a_side.get("big_chances")
-        h_dng = _to_float(h_side.get("dangerous_attack_pct")) or 0.0
-        a_dng = _to_float(a_side.get("dangerous_attack_pct")) or 0.0
-        if (h_dng + a_dng) > 0:
-            pressure = (h_dng - a_dng) / (h_dng + a_dng)   # [-1,1], + = home pressure
+    # Live per-team stats live under snap['stats']['home'|'away']; the shared
+    # helper reads the correct path. (This previously read snap['home'], which is
+    # only team identity — id/name/short_name — so big_chances/pressure were
+    # silently always None and this whole WS enrichment was a no-op.)
+    sig = drama_engine.live_signals_from_ws_event(snap)
+    for k, v in (sig.get("home") or {}).items():
+        if v is not None:
+            home[k] = v
+    for k, v in (sig.get("away") or {}).items():
+        if v is not None:
+            away[k] = v
     return {
         "minute": minute or 0, "status": status, "competition": slug,
         "round_name": round_name, "is_derby": is_derby,
         "home": home, "away": away,
-        "momentum_pressure": pressure, "recent_events": [],
+        "momentum_pressure": sig.get("momentum_pressure"), "recent_events": [],
         "win_prob": win_probability.win_prob_from_snapshot(odds),
         "win_prob_swing": swing,
     }
