@@ -881,6 +881,29 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
         cfg = alarm.get("config") or {}
         if not cfg.get("enabled", True):
             return
+
+        # Pre-kickoff reminder + confirmed-lineups alert. These were previously
+        # wired ONLY into the favorite-team follow pre-match pass (_prematch_team),
+        # so a PER-MATCH match_moments alarm (set on a specific game from the alarm
+        # sheet) never fired its "starts in N min" reminder or its lineups alert.
+        # Evaluate them here too. Only meaningful before kickoff; a missing/
+        # unparseable kickoff just skips.
+        ko = _parse_kickoff(match.get("kickoff"))
+        if ko is not None:
+            secs_to_ko = (ko - datetime.now(timezone.utc)).total_seconds()
+            reminder_minutes = int(cfg.get("reminder_minutes") or 0)
+            if reminder_minutes > 0 and 0 < secs_to_ko <= reminder_minutes * 60:
+                _fire(alarm, "soccer_reminder",
+                      lambda h, a, c, lang: t_soccer_body_reminder(h, a, c, reminder_minutes, lang),
+                      home_name, away_name, competition,
+                      signal="mm_reminder", one_shot=False)
+            if bool(cfg.get("lineups", True)) and 0 < secs_to_ko <= _LINEUP_WINDOW:
+                cid = match.get("id")
+                if cid and _fetch_lineup_status(cid) == "confirmed":
+                    _fire(alarm, "soccer_lineups", t_soccer_body_lineups,
+                          home_name, away_name, competition,
+                          signal="mm_lineups", one_shot=False)
+
         def want(flag: str) -> bool:
             return bool(cfg.get(flag, True))
         minute = match.get("minute") or 0
