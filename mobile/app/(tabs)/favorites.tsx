@@ -49,9 +49,10 @@ import { tabHeaderTitle } from '../../constants/tokens';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface GlobalRadar      { enabled: boolean; max_diff: number; start_quarter: number; alert_type: string; leagues?: string[] }
-interface FavTeam          { team_id: string; team_name: string; max_diff: number; start_quarter: number; alert_type: string; broadcast_only: boolean; notify_at_start?: boolean; paused?: boolean }
+interface FavTeam          { team_id: string; team_name: string; league?: string; max_diff: number; start_quarter: number; alert_type: string; broadcast_only: boolean; notify_at_start?: boolean; paused?: boolean }
 interface FavPlayerEntry {
   name:           string;
+  league?:        string;
   total_pts:      number | null;
   early_pts_q:    number | null;
   early_pts:      number | null;
@@ -97,7 +98,7 @@ const QRow = React.memo(function QRow({ value, onChange, quarters = ['1', '2', '
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-type FavTab = 'basketball' | 'football' | 'leagues' | 'general';
+type FavTab = 'basketball' | 'football' | 'radar' | 'historical';
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
 function SoccerTeamLogo({
@@ -608,6 +609,7 @@ export default function FavoritesScreen() {
     await saveTeam({
       team_id:         pickedTeam.id,
       team_name:       pickedTeam.name,
+      league:          pickedTeam.league ?? 'nba',
       max_diff:        newTeamMaxDiff || 5,
       notify_at_start: newTeamNoCondition,
       start_quarter:   parseInt(newTeamStartQ, 10) || 4,
@@ -645,6 +647,7 @@ export default function FavoritesScreen() {
       user_token:     userToken,
       player_id:      pickedPlayer.id,
       name:           pickedPlayer.name,
+      league:         pickedTeamForPlayer?.league ?? 'nba',
       total_pts:      newTotalPtsEnabled  ? (newTotalPts  || 40) : null,
       early_pts_q:    newHotStartEnabled  ? (parseInt(newHotStartQ, 10) || 1) : null,
       early_pts:      newHotStartEnabled  ? (newHotStartPts || 15) : null,
@@ -718,6 +721,7 @@ export default function FavoritesScreen() {
       user_token:     userToken,
       player_id,
       name,
+      league:         settings?.FavoritePlayers?.[player_id]?.league ?? 'nba',
       total_pts:      edit.totalPtsEnabled  ? (edit.total_pts || 40) : null,
       early_pts_q:    edit.hotStartEnabled  ? (parseInt(edit.early_pts_q, 10) || 1) : null,
       early_pts:      edit.hotStartEnabled  ? (edit.early_pts || 15) : null,
@@ -971,8 +975,8 @@ export default function FavoritesScreen() {
   const FAV_TABS: { id: FavTab; label: string; icon: IoniconName }[] = [
     { id: 'basketball', label: 'Basketball', icon: 'basketball-outline' },
     { id: 'football',   label: 'Football',   icon: 'football-outline'  },
-    { id: 'leagues',    label: 'Leagues',    icon: 'trophy-outline'    },
-    { id: 'general',    label: 'General',    icon: 'settings-outline'  },
+    { id: 'radar',      label: 'Radar',      icon: 'radio-outline'     },
+    { id: 'historical', label: 'Historical', icon: 'time-outline'      },
   ];
 
   return (
@@ -1354,13 +1358,72 @@ export default function FavoritesScreen() {
         )}
 
         {/* ══════════════════════════════════════════════════════════════
-            LEAGUES TAB
+            RADAR TAB
         ══════════════════════════════════════════════════════════════ */}
-        {activeTab === 'leagues' && (
+        {activeTab === 'radar' && (<>
+
+          {/* ── Basketball Radar ──────────────────────────────────────── */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>LEAGUE ALERT MONITORS</Text>
+            <Text style={styles.sectionTitle}>🏀 BASKETBALL</Text>
+            <Text style={styles.sectionDesc}>{t('settings.radarSub')}</Text>
+
+            <View style={styles.switchRow}>
+              <Text style={styles.rowLabel}>{t('settings.enableRadar')}</Text>
+              <BasketballToggle value={radar?.enabled ?? false} onValueChange={v => { signal('Radar.Toggled', { enabled: String(v), mode: radar?.alert_type ?? 'silent', maxDiff: String(radar?.max_diff ?? 5), leagueCount: String(radar?.leagues?.length ?? 1) }); patchGlobalRadar({ enabled: v }); }} />
+            </View>
+
+            <View style={[styles.alertTypeRow, !settings && { opacity: 0.4 }]}>
+              {(['alarm', 'silent'] as const).map(type => (
+                <TouchableOpacity key={type} activeOpacity={1} disabled={!settings} style={[styles.alertTypeBtn, (radar?.alert_type ?? 'silent') === type && styles.alertTypeBtnActive]} onPress={() => patchGlobalRadar({ alert_type: type })}>
+                  <Ionicons name={type === 'alarm' ? 'notifications-outline' : 'notifications-off-outline'} size={14} color={C.textMuted} />
+                  <Text style={[styles.alertTypeText, (radar?.alert_type ?? 'silent') === type && styles.alertTypeTextActive]}>{type === 'alarm' ? t('settings.alarm') : t('settings.silent')}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {radar?.enabled && (
+              <>
+                <Text style={[styles.inputLabel, { marginTop: 12 }]}>LEAGUES</Text>
+                <View style={styles.radarLeagueRow}>
+                  {LEAGUES.map(lg => {
+                    const active = radarLeagues.includes(lg.id);
+                    return (
+                      <TouchableOpacity key={lg.id} style={[styles.radarLeaguePill, active && styles.radarLeaguePillActive]} onPress={() => { if (active && radarLeagues.length === 1) return; const next = active ? radarLeagues.filter(l => l !== lg.id) : [...radarLeagues, lg.id]; setRadarLeagues(next); patchGlobalRadar({ leagues: next }); }}>
+                        {active && <Ionicons name="checkmark" size={13} color={C.orange} />}
+                        <Text style={[styles.radarLeaguePillText, active && styles.radarLeaguePillTextActive]}>{lg.label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                <View style={styles.sliderRow}>
+                  <Text style={styles.inputLabel}>{t('settings.maxDiff')}</Text>
+                  <Text style={styles.sliderValue}>{radarMaxDiff}</Text>
+                </View>
+                <Slider style={styles.slider} minimumValue={1} maximumValue={25} step={1} value={Number(radarMaxDiff)} onValueChange={v => setRadarMaxDiff(String(v))} minimumTrackTintColor={C.orange} maximumTrackTintColor={C.border} thumbTintColor={C.orange} />
+                <Text style={styles.inputLabel}>{t('settings.startFrom')}</Text>
+                <QRow value={radarStartQ} onChange={setRadarStartQ} styles={styles} />
+                <TouchableOpacity style={styles.updateBtn} onPress={() => patchGlobalRadar({ max_diff: parseInt(radarMaxDiff, 10) || 5, start_quarter: parseInt(radarStartQ, 10) || 4, leagues: radarLeagues })} disabled={saving}>
+                  <Text style={[styles.updateBtnText, savedId === 'radar' && styles.savedBtnText]}>
+                    {saving ? t('settings.saving') : savedId === 'radar' ? t('settings.saved') : t('settings.saveRadar')}
+                  </Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            <View style={[styles.switchRow, { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderColor: C.border }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rowLabel}>{t('settings.radarStatus')}</Text>
+                <Text style={styles.rowSub}>{radarRunning ? t('settings.radarRunning') : t('settings.radarStopped')}</Text>
+              </View>
+              <View style={[styles.statusDot, { backgroundColor: radarRunning ? C.liveGreen : C.border }]} />
+            </View>
+          </View>
+
+          {/* ── Football Radar ────────────────────────────────────────── */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>⚽ FOOTBALL</Text>
             <Text style={styles.sectionDesc}>
-              Receive notifications when any match in these leagues has high drama.{'\n'}
+              Receive alerts when any match in these leagues reaches your drama threshold.{'\n'}
               To follow a league for display only, tap ★ in the Sports tab.
             </Text>
 
@@ -1369,159 +1432,80 @@ export default function FavoritesScreen() {
               <Text style={styles.addRowBtnText}>Add League Monitor</Text>
             </TouchableOpacity>
 
-            {/* Soccer competitions */}
-            {soccerFavs && soccerFavs.competitions.length > 0 && (
-              <>
-                <Text style={[styles.inputLabel, { marginBottom: 8 }]}>SOCCER</Text>
-                {soccerFavs.competitions.map(comp => {
-                  const info = LeagueCatalog.info(comp.competition_id);
-                  return (
-                    <View key={comp.competition_id} style={styles.leagueRow}>
-                      <LeagueBadge leagueId={comp.competition_id} size={36} />
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.favName}>{info.label}</Text>
-                        <Text style={styles.pickerRowSub}>Drama ≥ {comp.drama_threshold.toFixed(1)}</Text>
-                      </View>
-                      <TouchableOpacity
-                        onPress={async () => {
-                          if (!userToken) return;
-                          await deleteFavCompetition(comp.competition_id, userToken).catch(() => {});
-                          setSoccerFavs(prev => prev ? { ...prev, competitions: prev.competitions.filter(c => c.competition_id !== comp.competition_id) } : prev);
-                        }}
-                        style={styles.removeBtn}
-                      >
-                        <Text style={styles.removeBtnText}>{t('settings.remove')}</Text>
-                      </TouchableOpacity>
-                    </View>
-                  );
-                })}
-              </>
-            )}
-
-            {(!soccerFavs || soccerFavs.competitions.length === 0) && (
-              <Text style={[styles.emptyHint, { marginBottom: 12 }]}>{t('soccer.favorites.noCompetitions')}</Text>
-            )}
-
-            {/* Basketball radar leagues */}
-            <Text style={[styles.inputLabel, { marginTop: 12, marginBottom: 8 }]}>BASKETBALL (RADAR)</Text>
-            <View style={styles.radarLeagueRow}>
-              {LEAGUES.map(lg => {
-                const active = radarLeagues.includes(lg.id);
+            {soccerFavs && soccerFavs.competitions.map(comp => {
+                const info = LeagueCatalog.info(comp.competition_id);
                 return (
-                  <TouchableOpacity
-                    key={lg.id}
-                    style={[styles.radarLeaguePill, active && styles.radarLeaguePillActive]}
-                    onPress={() => {
-                      if (active && radarLeagues.length === 1) return;
-                      const next = active ? radarLeagues.filter(l => l !== lg.id) : [...radarLeagues, lg.id];
-                      setRadarLeagues(next);
-                      patchGlobalRadar({ leagues: next });
-                    }}
-                  >
-                    {active && <Ionicons name="checkmark" size={13} color={C.orange} />}
-                    <Text style={[styles.radarLeaguePillText, active && styles.radarLeaguePillTextActive]}>{lg.label}</Text>
-                  </TouchableOpacity>
+                  <View key={comp.competition_id} style={styles.leagueRow}>
+                    <LeagueBadge leagueId={comp.competition_id} size={36} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.favName}>{info.label}</Text>
+                      <Text style={styles.pickerRowSub}>Drama ≥ {comp.drama_threshold.toFixed(1)}</Text>
+                    </View>
+                    <TouchableOpacity
+                      onPress={async () => {
+                        if (!userToken) return;
+                        await deleteFavCompetition(comp.competition_id, userToken).catch(() => {});
+                        setSoccerFavs(prev => prev ? { ...prev, competitions: prev.competitions.filter(c => c.competition_id !== comp.competition_id) } : prev);
+                      }}
+                      style={styles.removeBtn}
+                    >
+                      <Text style={styles.removeBtnText}>{t('settings.remove')}</Text>
+                    </TouchableOpacity>
+                  </View>
                 );
               })}
-            </View>
           </View>
-        )}
+        </>)}
 
         {/* ══════════════════════════════════════════════════════════════
-            GENERAL SETTINGS TAB (Radar + Historical)
+            HISTORICAL MODE TAB
         ══════════════════════════════════════════════════════════════ */}
-        {activeTab === 'general' && (<>
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t('settings.radar')}</Text>
-          <Text style={styles.sectionDesc}>{t('settings.radarSub')}</Text>
+        {activeTab === 'historical' && (<>
 
-          <View style={styles.switchRow}>
-            <Text style={styles.rowLabel}>{t('settings.enableRadar')}</Text>
-            <BasketballToggle value={radar?.enabled ?? false} onValueChange={v => { signal('Radar.Toggled', { enabled: String(v), mode: radar?.alert_type ?? 'silent', maxDiff: String(radar?.max_diff ?? 5), leagueCount: String(radar?.leagues?.length ?? 1) }); patchGlobalRadar({ enabled: v }); }} />
-          </View>
+          {/* ── Basketball Historical ─────────────────────────────────── */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>🏀 BASKETBALL</Text>
+            <Text style={styles.sectionDesc}>{t('settings.historicalSub')}</Text>
 
-          <View style={[styles.alertTypeRow, !settings && { opacity: 0.4 }]}>
-            {(['alarm', 'silent'] as const).map(type => (
-              <TouchableOpacity key={type} activeOpacity={1} disabled={!settings} style={[styles.alertTypeBtn, (radar?.alert_type ?? 'silent') === type && styles.alertTypeBtnActive]} onPress={() => patchGlobalRadar({ alert_type: type })}>
-                <Ionicons name={type === 'alarm' ? 'notifications-outline' : 'notifications-off-outline'} size={14} color={C.textMuted} />
-                <Text style={[styles.alertTypeText, (radar?.alert_type ?? 'silent') === type && styles.alertTypeTextActive]}>{type === 'alarm' ? t('settings.alarm') : t('settings.silent')}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          {radar?.enabled && (
-            <>
-              <Text style={[styles.inputLabel, { marginTop: 12 }]}>LEAGUES</Text>
-              <View style={styles.radarLeagueRow}>
-                {LEAGUES.map(lg => {
-                  const active = radarLeagues.includes(lg.id);
-                  return (
-                    <TouchableOpacity key={lg.id} style={[styles.radarLeaguePill, active && styles.radarLeaguePillActive]} onPress={() => { if (active && radarLeagues.length === 1) return; const next = active ? radarLeagues.filter(l => l !== lg.id) : [...radarLeagues, lg.id]; setRadarLeagues(next); patchGlobalRadar({ leagues: next }); }}>
-                      {active && <Ionicons name="checkmark" size={13} color={C.orange} />}
-                      <Text style={[styles.radarLeaguePillText, active && styles.radarLeaguePillTextActive]}>{lg.label}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-              <View style={styles.sliderRow}>
-                <Text style={styles.inputLabel}>{t('settings.maxDiff')}</Text>
-                <Text style={styles.sliderValue}>{radarMaxDiff}</Text>
-              </View>
-              <Slider style={styles.slider} minimumValue={1} maximumValue={25} step={1} value={Number(radarMaxDiff)} onValueChange={v => setRadarMaxDiff(String(v))} minimumTrackTintColor={C.orange} maximumTrackTintColor={C.border} thumbTintColor={C.orange} />
-              <Text style={styles.inputLabel}>{t('settings.startFrom')}</Text>
-              <QRow value={radarStartQ} onChange={setRadarStartQ} styles={styles} />
-              <TouchableOpacity style={styles.updateBtn} onPress={() => patchGlobalRadar({ max_diff: parseInt(radarMaxDiff, 10) || 5, start_quarter: parseInt(radarStartQ, 10) || 4, leagues: radarLeagues })} disabled={saving}>
-                <Text style={[styles.updateBtnText, savedId === 'radar' && styles.savedBtnText]}>
-                  {saving ? t('settings.saving') : savedId === 'radar' ? t('settings.saved') : t('settings.saveRadar')}
-                </Text>
-              </TouchableOpacity>
-            </>
-          )}
-
-          <View style={[styles.switchRow, { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderColor: C.border }]}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowLabel}>{t('settings.radarStatus')}</Text>
-              <Text style={styles.rowSub}>{radarRunning ? t('settings.radarRunning') : t('settings.radarStopped')}</Text>
+            <View style={styles.switchRow}>
+              <Text style={styles.rowLabel}>{t('settings.enableHistorical')}</Text>
+              <BasketballToggle value={hist?.enabled ?? false} onValueChange={v => { signal('Historical.Toggled', { enabled: String(v), mode: (hist as any)?.alert_type ?? 'silent', scoring_40_half: String(hist?.categories?.scoring_40_half), threes_11: String(hist?.categories?.threes_11), quad_double: String(hist?.categories?.quad_double_threat) }); patchHistorical({ enabled: v }); }} />
             </View>
-            <View style={[styles.statusDot, { backgroundColor: radarRunning ? C.liveGreen : C.border }]} />
-          </View>
-        </View>
 
-        {/* ── Historical Alerts ─────────────────────────────────────── */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t('settings.historical')}</Text>
-          <Text style={styles.sectionDesc}>{t('settings.historicalSub')}</Text>
+            <View style={[styles.alertTypeRow, !settings && { opacity: 0.4 }]}>
+              {(['alarm', 'silent'] as const).map(type => (
+                <TouchableOpacity key={type} activeOpacity={1} disabled={!settings} style={[styles.alertTypeBtn, ((hist as any)?.alert_type ?? 'silent') === type && styles.alertTypeBtnActive]} onPress={() => patchHistorical({ alert_type: type })}>
+                  <Ionicons name={type === 'alarm' ? 'notifications-outline' : 'notifications-off-outline'} size={14} color={C.textMuted} />
+                  <Text style={[styles.alertTypeText, ((hist as any)?.alert_type ?? 'silent') === type && styles.alertTypeTextActive]}>{type === 'alarm' ? t('settings.alarm') : t('settings.silent')}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
 
-          <View style={styles.switchRow}>
-            <Text style={styles.rowLabel}>{t('settings.enableHistorical')}</Text>
-            <BasketballToggle value={hist?.enabled ?? false} onValueChange={v => { signal('Historical.Toggled', { enabled: String(v), mode: (hist as any)?.alert_type ?? 'silent', scoring_40_half: String(hist?.categories?.scoring_40_half), threes_11: String(hist?.categories?.threes_11), quad_double: String(hist?.categories?.quad_double_threat) }); patchHistorical({ enabled: v }); }} />
-          </View>
-
-          <View style={[styles.alertTypeRow, !settings && { opacity: 0.4 }]}>
-            {(['alarm', 'silent'] as const).map(type => (
-              <TouchableOpacity key={type} activeOpacity={1} disabled={!settings} style={[styles.alertTypeBtn, ((hist as any)?.alert_type ?? 'silent') === type && styles.alertTypeBtnActive]} onPress={() => patchHistorical({ alert_type: type })}>
-                <Ionicons name={type === 'alarm' ? 'notifications-outline' : 'notifications-off-outline'} size={14} color={C.textMuted} />
-                <Text style={[styles.alertTypeText, ((hist as any)?.alert_type ?? 'silent') === type && styles.alertTypeTextActive]}>{type === 'alarm' ? t('settings.alarm') : t('settings.silent')}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          {hist?.enabled && (
-            ([
-              { key: 'scoring_40_half'    as const, label: t('settings.scoring40'),  sub: t('settings.scoring40Sub') },
-              { key: 'threes_11'          as const, label: t('settings.threes11'),    sub: t('settings.threes11Sub') },
-              { key: 'quad_double_threat' as const, label: t('settings.quadDouble'),  sub: t('settings.quadDoubleSub') },
-            ] as const).map(({ key, label, sub }) => (
-              <View key={key} style={styles.categoryRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.rowLabel}>{label}</Text>
-                  <Text style={styles.rowSub}>{sub}</Text>
+            {hist?.enabled && (
+              ([
+                { key: 'scoring_40_half'    as const, label: t('settings.scoring40'),  sub: t('settings.scoring40Sub') },
+                { key: 'threes_11'          as const, label: t('settings.threes11'),    sub: t('settings.threes11Sub') },
+                { key: 'quad_double_threat' as const, label: t('settings.quadDouble'),  sub: t('settings.quadDoubleSub') },
+              ] as const).map(({ key, label, sub }) => (
+                <View key={key} style={styles.categoryRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.rowLabel}>{label}</Text>
+                    <Text style={styles.rowSub}>{sub}</Text>
+                  </View>
+                  <BasketballToggle value={histCats?.[key] ?? false} onValueChange={v => patchHistorical({ categories: { [key]: v } })} />
                 </View>
-                <BasketballToggle value={histCats?.[key] ?? false} onValueChange={v => patchHistorical({ categories: { [key]: v } })} />
-              </View>
-            ))
-          )}
-        </View>
+              ))
+            )}
+          </View>
+
+          {/* ── Football Historical ───────────────────────────────────── */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>⚽ FOOTBALL</Text>
+            <View style={styles.emptyState}>
+              <Ionicons name="time-outline" size={28} color={C.border} />
+              <Text style={styles.emptyHint}>Coming soon</Text>
+            </View>
+          </View>
         </>)}
 
       </ScrollView>
