@@ -379,7 +379,8 @@ def _score_chances(ctx: dict) -> float:
         v = d.get(k)
         return v if isinstance(v, (int, float)) else 0
 
-    keys = ("big_chances", "big_chances_missed", "hit_woodwork", "big_saves")
+    keys = ("big_chances", "big_chances_missed", "hit_woodwork", "big_saves",
+            "shots_on_target", "errors_lead_to_a_goal")
     if all(home.get(k) is None and away.get(k) is None for k in keys):
         return 0.0
 
@@ -389,10 +390,15 @@ def _score_chances(ctx: dict) -> float:
     near_miss  = (g(home, "big_chances_missed") + g(away, "big_chances_missed")
                   + g(home, "hit_woodwork") + g(away, "hit_woodwork"))
     heroics    = g(home, "big_saves") + g(away, "big_saves")
+    end_to_end_shots = min(g(home, "shots_on_target"), g(away, "shots_on_target"))
+    # A defensive howler that directly led to a goal is pure, gasp-out-loud drama.
+    calamity   = g(home, "errors_lead_to_a_goal") + g(away, "errors_lead_to_a_goal")
     # Base (created + end-to-end) is unchanged from the original calibration; the
-    # near-miss / heroics terms ride on top, capped a touch higher (1.5) so a
-    # genuine chance-fest reads hotter without ever escaping the core's 7-cap.
-    raw = created * 0.12 + end_to_end * 0.15 + near_miss * 0.10 + heroics * 0.08
+    # near-miss / heroics / shots / calamity terms ride on top, capped a touch
+    # higher (1.5) so a genuine chance-fest reads hotter without ever escaping
+    # the core's 7-cap.
+    raw = (created * 0.12 + end_to_end * 0.15 + near_miss * 0.10 + heroics * 0.08
+           + end_to_end_shots * 0.04 + calamity * 0.30)
     return min(1.5, raw)
 
 
@@ -582,7 +588,7 @@ def live_signals_from_ws_event(snap: dict | None) -> dict:
         return v if isinstance(v, (int, float)) else None
 
     _fields = ("big_chances", "big_chances_missed", "hit_woodwork",
-               "big_saves", "shots_on_target")
+               "big_saves", "shots_on_target", "errors_lead_to_a_goal")
     out: dict = {
         "home": {k: num(hs, k) for k in _fields},
         "away": {k: num(as_, k) for k in _fields},

@@ -389,3 +389,22 @@ def test_chances_zero_without_any_chance_data():
 def test_chances_backward_compatible_for_big_chances_only():
     # Original formula: created*0.12 + min*0.15. 2+2 → 4*0.12 + 2*0.15 = 0.78.
     assert abs(_score_chances({"home": {"big_chances": 2}, "away": {"big_chances": 2}}) - 0.78) < 1e-9
+
+
+def test_chances_rewards_shots_and_calamity():
+    # End-to-end shots on target and a goal-causing defensive error add thrill.
+    quiet = _score_chances({"home": {"big_chances": 1}, "away": {"big_chances": 1}})
+    loud = _score_chances({
+        "home": {"big_chances": 1, "shots_on_target": 6, "errors_lead_to_a_goal": 1},
+        "away": {"big_chances": 1, "shots_on_target": 5},
+    })
+    assert loud > quiet, (loud, quiet)
+    assert loud <= 1.5
+
+
+def test_live_signals_extracts_errors_lead_to_a_goal():
+    snap = {"stats": {"home": {"errors_lead_to_a_goal": 1, "shots_on_target": 4},
+                      "away": {"errors_lead_to_a_goal": 0, "shots_on_target": 2}}}
+    sig = live_signals_from_ws_event(snap)
+    assert sig["home"]["errors_lead_to_a_goal"] == 1
+    assert sig["home"]["shots_on_target"] == 4
