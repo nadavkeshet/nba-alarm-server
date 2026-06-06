@@ -925,8 +925,15 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
         if want("halftime") and (status == "ht" or period == "ht"):
             _fire(alarm, "soccer_halftime", t_soccer_body_halftime,
                   home_name, away_name, competition, signal="mm_ht", one_shot=False)
-        # Second-half kickoff (HT end).
-        if want("second_half") and (period == "2h" or (status == "live" and minute >= 46)):
+        # Second-half kickoff (HT end). NB: a bare `minute >= 46` also matches
+        # FIRST-HALF stoppage time — 45+1 reads minute 46 while period is still
+        # "1h" — which wrongly fired "second half underway" before halftime even
+        # arrived. So the minute fallback must exclude the first-half and
+        # halftime periods; the reliable signal is period == "2h".
+        if want("second_half") and (
+            period == "2h"
+            or (status == "live" and minute >= 46 and period not in ("1h", "ht"))
+        ):
             _fire(alarm, "soccer_second_half", t_soccer_body_second_half,
                   home_name, away_name, competition, signal="mm_2h", one_shot=False)
         # Red card — dedup by the incident minute (mirrors card_penalty).

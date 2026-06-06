@@ -225,3 +225,41 @@ def test_fifa_rankings_alias_bridging():
     assert fr.rank("Iran") == fr.rank("IR Iran")
     assert fr.rank("Germany") and fr.rank("Curaçao")
     assert fr.rank("Nowhereland") is None
+
+
+# ── match_moments: second-half must not fire during FIRST-HALF stoppage ───────
+def _mm_second_half_only(aid=1):
+    # Only the second-half moment enabled, so the test isolates it (kickoff would
+    # otherwise also fire on a live tick).
+    return _alarm("match_moments", {
+        "enabled": True, "kickoff": False, "goals": False, "halftime": False,
+        "second_half": True, "red_cards": False, "penalties": False,
+        "match_end": False, "lineups": False, "reminder_minutes": 0,
+    }, aid=aid)
+
+
+def _match_p(period, status="live", minute=46, hs=1, as_=1):
+    m = _match(status=status, minute=minute, hs=hs, as_=as_)
+    m["period"] = period
+    return m
+
+
+def test_second_half_not_fired_in_first_half_stoppage(monkeypatch):
+    # 45+1: current_minute reads 46 while period is still "1h". The old
+    # `minute >= 46` fallback wrongly fired "second half underway" here.
+    sent = _wire_capture(monkeypatch)
+    sm._evaluate_alarm(_mm_second_half_only(), _match_p("1h", minute=46))
+    sm._evaluate_alarm(_mm_second_half_only(), _match_p("1h", minute=48))  # deep 1h stoppage
+    assert sent == [], f"second_half must not fire in first-half stoppage; got {sent}"
+
+
+def test_second_half_not_fired_at_halftime(monkeypatch):
+    sent = _wire_capture(monkeypatch)
+    sm._evaluate_alarm(_mm_second_half_only(), _match_p("ht", status="ht", minute=45))
+    assert sent == [], f"second_half must not fire at halftime; got {sent}"
+
+
+def test_second_half_fires_in_real_second_half(monkeypatch):
+    sent = _wire_capture(monkeypatch)
+    sm._evaluate_alarm(_mm_second_half_only(), _match_p("2h", minute=46))
+    assert len(sent) == 1, f"second_half should fire once in the 2nd half; got {sent}"
