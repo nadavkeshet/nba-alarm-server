@@ -3282,7 +3282,6 @@ def soccer_drama(canonical_id: str):
     }
 
 
-@app.get("/soccer/drama/{canonical_id}/timeline")
 def _drama_snapshot_series(match_id: str) -> dict[int, dict]:
     """The REAL per-minute drama meter the live radar logged for this match — the
     LATEST snapshot in each minute (these carry the WebSocket enrichment: win-prob
@@ -3309,6 +3308,7 @@ def _drama_snapshot_series(match_id: str) -> dict[int, dict]:
         return {}
 
 
+@app.get("/soccer/drama/{canonical_id}/timeline")
 def soccer_drama_timeline(canonical_id: str, step: int = 2):
     """Per-minute Drama Engine timeline.
 
