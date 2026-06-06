@@ -137,13 +137,13 @@ def period_label(quarter: int, lang: str) -> str:
 # Notification text templates
 _TITLES = {
     "en": {
-        "smart_alarm":      "Smart Alarm! It's Getting Dramatic!",
+        "smart_alarm":      "It's Getting Dramatic!",
         "period_starting":  "Period Starting!",
         "scoring_alert":    "Scoring Alert!",
         "early_points":     "Early Points Alert!",
         "triple_double":    "Triple-Double Watch!",
         "fav_team":         "Favorite Team Alert!",
-        "radar":            "NBA Radar – Close Game!",
+        "radar":            "Radar – Close Game!",
         "historic_scoring": "Historic Scoring Pace!",
         "historic_threes":  "Historic 3-Point Game!",
         "quad_double":      "Quad-Double Threat!",
@@ -163,9 +163,9 @@ _TITLES = {
         "soccer_drama_radar":  "⚡ Drama Brewing",
         # Soccer match-moments (v3)
         "soccer_goal":         "⚽ GOAL",
-        "soccer_second_half":  "Second half underway",
+        "soccer_second_half":  "Second half statrted",
         "soccer_match_end":    "Full-time",
-        "soccer_lineups":      "Lineups confirmed",
+        "soccer_lineups":      "Lineups available",
         "soccer_reminder":     "Match starting soon",
         # Soccer player alerts
         "soccer_player_goal":     "⚽ Goal!",
@@ -176,13 +176,13 @@ _TITLES = {
         "soccer_player_red":      "🟥 Sent Off!",
     },
     "he": {
-        "smart_alarm":      "!Smart Alarm! הולך להיות דרמטי",
+        "smart_alarm":      "!הולך להיות דרמטי",
         "period_starting":  "!הרבע מתחיל",
         "scoring_alert":    "!התראת ניקוד",
         "early_points":     "!התראת נקודות מוקדמות",
         "triple_double":    "!מעקב טריפל דאבל",
         "fav_team":         "!התראת קבוצה מועדפת",
-        "radar":            "!NBA רדאר – משחק צמוד",
+        "radar":            "!רדאר – משחק צמוד",
         "historic_scoring":  "!קצב ניקוד היסטורי",
         "historic_threes":  "!משחק שלשות היסטורי",
         "quad_double":      "!איום קוואדרופל דאבל",
@@ -195,24 +195,24 @@ _TITLES = {
         "soccer_sensation":    "😱 הפתעה בדרך",
         "soccer_knockout_et":  "⏱ הארכה במשחק!",
         "soccer_penalty":      "🎯 פנדל!",
-        "soccer_red_card":     "🟥 דרמת כרטיס אדום",
-        "soccer_comeback":     "🔥 קאמבק בתהליך",
-        "soccer_hat_trick":    "⚽ מעקב האט-טריק",
+        "soccer_red_card":     "🟥 כרטיס אדום",
+        "soccer_comeback":     "🔥 תחילתו של קאמבק",
+        "soccer_hat_trick":    "⚽ שלושער בדרך",
         "soccer_big_chance":   "💥 הזדמנויות בכמויות",
         "soccer_drama_radar":  "⚡ דרמה בדרך",
         # Soccer match-moments (v3)
         "soccer_goal":         "⚽ גול",
         "soccer_second_half":  "המחצית השנייה יצאה לדרך",
         "soccer_match_end":    "סיום משחק",
-        "soccer_lineups":      "ההרכבים אושרו",
+        "soccer_lineups":      "פורסמו ההרכבים",
         "soccer_reminder":     "המשחק עומד להתחיל",
         # Soccer player alerts
         "soccer_player_goal":     "⚽ שער!",
         "soccer_player_clutch_goal": "⚽ שער קריטי!",
-        "soccer_player_brace":    "🔥 זוגית!",
-        "soccer_player_hattrick": "🎩 האט-טריק!",
+        "soccer_player_brace":    "🔥 צמד!",
+        "soccer_player_hattrick": "🎩 שלושער!",
         "soccer_player_yellow":   "⚠️ כרטיס צהוב",
-        "soccer_player_red":      "🟥 גירוש!",
+        "soccer_player_red":      "🟥 אדום!",
     },
 }
 
@@ -227,12 +227,10 @@ _LEAGUE_DISPLAY = {
 
 
 def t_title(key: str, lang: str, league: str = "nba") -> str:
-    title = _TITLES.get(lang, _TITLES["en"]).get(key, _TITLES["en"].get(key, key))
-    if key in ("radar", "fav_team") and league and league != "nba":
-        league_name = _LEAGUE_DISPLAY.get(league, {}).get(lang, league.upper())
-        # Replace the hardcoded "NBA" in the title with the actual league name
-        title = title.replace("NBA", league_name)
-    return title
+    # Competition/league is intentionally NOT shown in alert text. The `league`
+    # arg is kept for call-site compatibility but no longer substituted into the
+    # title (radar / favorite-team titles stay league-free).
+    return _TITLES.get(lang, _TITLES["en"]).get(key, _TITLES["en"].get(key, key))
 
 
 def t_body_game(game_name: str, quarter: int, diff: int, lang: str) -> str:
@@ -348,24 +346,24 @@ def t_soccer_body_late_drama(home: str, away: str, competition: str, minute: int
     m = soccer_match_label(home, away, lang)
     comp = soccer_competition_name(competition, lang)
     if lang == "he":
-        return f"{m}\n{comp} · דקה {minute} · משחק צמוד בסיום"
-    return f"{m}\n{comp} · {minute}' · close game late on"
+        return f"{m}\nדקה {minute} · משחק צמוד בסיום"
+    return f"{m}\n{minute}' · close game late on"
 
 
 def t_soccer_body_kickoff(home: str, away: str, competition: str, lang: str) -> str:
     m = soccer_match_label(home, away, lang)
     comp = soccer_competition_name(competition, lang)
     if lang == "he":
-        return f"{m}\n{comp} · המשחק התחיל"
-    return f"{m}\n{comp} · kicking off now"
+        return f"{m}\nהמשחק התחיל"
+    return f"{m}\nkicking off now"
 
 
 def t_soccer_body_halftime(home: str, away: str, competition: str, lang: str) -> str:
     m = soccer_match_label(home, away, lang)
     comp = soccer_competition_name(competition, lang)
     if lang == "he":
-        return f"{m}\n{comp} · מחצית"
-    return f"{m}\n{comp} · half-time"
+        return f"{m}\nמחצית"
+    return f"{m}\nhalf-time"
 
 
 def t_soccer_body_sensation(underdog_name: str, competition: str, minute: int, lang: str) -> str:
@@ -373,55 +371,55 @@ def t_soccer_body_sensation(underdog_name: str, competition: str, minute: int, l
     the 1-bit 'underdog leading' spoiler is the whole point of the alert."""
     comp = soccer_competition_name(competition, lang)
     if lang == "he":
-        return f"{underdog_name} מובילים 😱\n{comp} · דקה {minute} · המאאוטסיידר בהובלה"
-    return f"{underdog_name} are ahead 😱\n{comp} · {minute}' · the underdog is leading"
+        return f"{underdog_name} מובילים 😱\nדקה {minute} · האנדרדוג מוביל"
+    return f"{underdog_name} are ahead 😱\n{minute}' · the underdog is leading"
 
 
 def t_soccer_body_knockout_et(home: str, away: str, competition: str, lang: str) -> str:
     m = soccer_match_label(home, away, lang)
     comp = soccer_competition_name(competition, lang)
     if lang == "he":
-        return f"{m}\n{comp} · הולכים להארכות!"
-    return f"{m}\n{comp} · heading to extra time!"
+        return f"{m}\nהולכים להארכה!"
+    return f"{m}\nheading to extra time!"
 
 
 def t_soccer_body_penalty(home: str, away: str, competition: str, lang: str) -> str:
     m = soccer_match_label(home, away, lang)
     comp = soccer_competition_name(competition, lang)
     if lang == "he":
-        return f"{m}\n{comp} · פנדל!"
-    return f"{m}\n{comp} · penalty!"
+        return f"{m}\nפנדל!"
+    return f"{m}\npenalty!"
 
 
 def t_soccer_body_red_card(home: str, away: str, competition: str, minute: int, lang: str) -> str:
     m = soccer_match_label(home, away, lang)
     comp = soccer_competition_name(competition, lang)
     if lang == "he":
-        return f"{m}\n{comp} · דקה {minute} · כרטיס אדום במשחק צמוד"
-    return f"{m}\n{comp} · {minute}' · red card in a close game"
+        return f"{m}\nדקה {minute} · כרטיס אדום במשחק צמוד"
+    return f"{m}\n{minute}' · red card in a close game"
 
 
 def t_soccer_body_comeback(home: str, away: str, competition: str, lang: str) -> str:
     m = soccer_match_label(home, away, lang)
     comp = soccer_competition_name(competition, lang)
     if lang == "he":
-        return f"{m}\n{comp} · קאמבק בעיצומו"
-    return f"{m}\n{comp} · comeback in progress"
+        return f"{m}\nתחילתו של קאמבק"
+    return f"{m}\ncomeback in progress"
 
 
 def t_soccer_body_hat_trick(player_name: str, competition: str, lang: str) -> str:
     comp = soccer_competition_name(competition, lang)
     if lang == "he":
-        return f"{player_name} עם 2 שערים\n{comp} · האט-טריק במרחק נגיעה"
-    return f"{player_name} on 2 goals\n{comp} · hat-trick in reach"
+        return f"{player_name} עם 2 שערים\nשלשוער בדרך"
+    return f"{player_name} on 2 goals\nhat-trick in reach"
 
 
 def t_soccer_body_big_chance(home: str, away: str, competition: str, lang: str) -> str:
     m = soccer_match_label(home, away, lang)
     comp = soccer_competition_name(competition, lang)
     if lang == "he":
-        return f"{m}\n{comp} · גל של הזדמנויות"
-    return f"{m}\n{comp} · big chances pouring in"
+        return f"{m}\nמלא הזדמנויות"
+    return f"{m}\nbig chances pouring in"
 
 
 def t_soccer_body_player_goal(player_name: str, home_score: int, away_score: int,
@@ -429,25 +427,25 @@ def t_soccer_body_player_goal(player_name: str, home_score: int, away_score: int
     comp = soccer_competition_name(competition, lang)
     score = f"{home_score}-{away_score}"
     if lang == "he":
-        ctx_map = {"equalizer": "השוואה", "go-ahead": "עלייה להובלה", "comeback": "קאמבק"}
+        ctx_map = {"equalizer": "משווה", "go-ahead": "הובלה", "comeback": "קאמבק"}
         ctx_str = f" ({ctx_map.get(context, context)})" if context else ""
-        return f"{player_name} עם שער ⚽ · דקה {minute} · {score}{ctx_str}\n{comp}"
+        return f"{player_name} עם שער ⚽ · דקה {minute} · {score}{ctx_str}"
     ctx_str = f" ({context})" if context else ""
-    return f"{player_name} scores ⚽ · {minute}' · {score}{ctx_str}\n{comp}"
+    return f"{player_name} scores ⚽ · {minute}' · {score}{ctx_str}"
 
 
 def t_soccer_body_player_brace(player_name: str, competition: str, lang: str) -> str:
     comp = soccer_competition_name(competition, lang)
     if lang == "he":
-        return f"{player_name} עם שני שערים! 🔥\n{comp} · האט-טריק במרחק נגיעה"
-    return f"{player_name} bags a brace! 🔥\n{comp} · hat-trick in reach"
+        return f"{player_name} עם שני שערים! 🔥\nשלשוער בדרך"
+    return f"{player_name} bags a brace! 🔥\nhat-trick in reach"
 
 
 def t_soccer_body_player_hattrick(player_name: str, competition: str, lang: str) -> str:
     comp = soccer_competition_name(competition, lang)
     if lang == "he":
-        return f"{player_name} משלים האט-טריק! 🎩\n{comp}"
-    return f"{player_name} completes the hat-trick! 🎩\n{comp}"
+        return f"{player_name} משלים שלושער! 🎩"
+    return f"{player_name} completes the hat-trick! 🎩"
 
 
 def t_soccer_body_player_yellow(player_name: str, home: str, away: str, minute: int, lang: str) -> str:
@@ -460,7 +458,7 @@ def t_soccer_body_player_yellow(player_name: str, home: str, away: str, minute: 
 def t_soccer_body_player_red(player_name: str, home: str, away: str, minute: int, lang: str) -> str:
     m = soccer_match_label(home, away, lang)
     if lang == "he":
-        return f"{player_name} גורש מהמגרש 🟥 · דקה {minute}\n{m}"
+        return f"{player_name} הורחק 🟥 · דקה {minute}\n{m}"
     return f"{player_name} sent off 🟥 · {minute}'\n{m}"
 
 
@@ -472,47 +470,50 @@ def t_soccer_body_drama_radar(home: str, away: str, competition: str, drama: flo
         lang, drama = drama, None
 
     m    = soccer_match_label(home, away, lang)
-    comp = soccer_competition_name(competition, lang)
-    drama_tag = f" · {drama:.1f}/10" if drama is not None else ""
+    drama_tag = f"{drama:.1f}/10 · " if drama is not None else ""
     if lang == "he":
-        return f"{m}\n{comp}{drama_tag} · שווה לפתוח את האפליקציה"
-    return f"{m}\n{comp}{drama_tag} · worth opening the app"
+        return f"{m}\n{drama_tag}שווה לפתוח את האפליקציה"
+    return f"{m}\n{drama_tag}worth opening the app"
 
 
 # ── Soccer match-moments (v3) ──────────────────────────────────────────────────
 # Unlike the spoiler-safe drama alerts above, match-moment alerts (goal, full-time)
 # DO reveal the scoreline — the user opted in to follow the match's flow.
 
-def t_soccer_body_goal(home: str, away: str, competition: str,
-                       home_score: int, away_score: int, lang: str) -> str:
-    comp = soccer_competition_name(competition, lang)
-    if lang == "he":
-        return f"גול! {home} {home_score}-{away_score} {away} · {comp}"
-    return f"GOAL! {home} {home_score}-{away_score} {away} · {comp}"
+def t_soccer_body_goal(home: str, away: str, home_score: int, away_score: int,
+                       scored_side: str | None, lang: str) -> str:
+    """Goal body: the real score with the SCORING side's tally parenthesized,
+    then only the team that scored (the title already says "GOAL"). Plain
+    scoreline when the scorer can't be attributed (rare — first sighting)."""
+    if scored_side == "home":
+        return f"({home_score}) - {away_score}  {home}"
+    if scored_side == "away":
+        return f"{home_score} - ({away_score})  {away}"
+    return f"{home_score} - {away_score}"
 
 
 def t_soccer_body_second_half(home: str, away: str, competition: str, lang: str) -> str:
     m = soccer_match_label(home, away, lang)
     comp = soccer_competition_name(competition, lang)
     if lang == "he":
-        return f"{m}\n{comp} · המחצית השנייה יצאה לדרך"
-    return f"{m}\n{comp} · second half underway"
+        return f"{m}\nהמחצית השנייה יצאה לדרך"
+    return f"{m}\nsecond half started"
 
 
 def t_soccer_body_match_end(home: str, away: str, competition: str,
                             home_score: int, away_score: int, lang: str) -> str:
     comp = soccer_competition_name(competition, lang)
     if lang == "he":
-        return f"סיום משחק: {home} {home_score}-{away_score} {away} · {comp}"
-    return f"Full-time: {home} {home_score}-{away_score} {away} · {comp}"
+        return f"סיום משחק: {home} {home_score}-{away_score} {away}"
+    return f"Full-time: {home} {home_score}-{away_score} {away}"
 
 
 def t_soccer_body_lineups(home: str, away: str, competition: str, lang: str) -> str:
     m = soccer_match_label(home, away, lang)
     comp = soccer_competition_name(competition, lang)
     if lang == "he":
-        return f"ההרכבים אושרו — {m}\n{comp}"
-    return f"Confirmed lineups are out — {m}\n{comp}"
+        return f"ההרכבים פורסמו — {m}"
+    return f"Confirmed lineups are out — {m}"
 
 
 def t_soccer_body_reminder(home: str, away: str, competition: str,
@@ -520,8 +521,8 @@ def t_soccer_body_reminder(home: str, away: str, competition: str,
     m = soccer_match_label(home, away, lang)
     comp = soccer_competition_name(competition, lang)
     if lang == "he":
-        return f"{m} מתחיל בעוד {minutes} דקות · {comp}"
-    return f"{m} starts in {minutes} min · {comp}"
+        return f"{m} מתחיל בעוד {minutes} דקות"
+    return f"{m} starts in {minutes} min"
 
 
 # ---------------------------------------------------------------------------

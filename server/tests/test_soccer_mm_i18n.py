@@ -4,11 +4,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import i18n
 
-def test_goal_body_has_score_both_langs():
-    en = i18n.t_soccer_body_goal("Russia", "Burkina Faso", "world_cup", 3, 0, "en")
-    he = i18n.t_soccer_body_goal("Russia", "Burkina Faso", "world_cup", 3, 0, "he")
-    assert "3" in en and "0" in en and "Russia" in en
-    assert "3" in he and "0" in he and en != he
+def test_goal_body_names_scorer_with_parenthesized_score():
+    # Home scored to make it 3-0: real score, scorer's tally in parens, only the
+    # scoring team named, no competition.
+    home = i18n.t_soccer_body_goal("Russia", "Burkina Faso", 3, 0, "home", "en")
+    assert home == "(3) - 0  Russia"
+    away = i18n.t_soccer_body_goal("Russia", "Burkina Faso", 3, 1, "away", "en")
+    assert away == "3 - (1)  Burkina Faso"
+    # Unattributed scorer → plain real score.
+    assert i18n.t_soccer_body_goal("Russia", "Burkina Faso", 2, 1, None, "en") == "2 - 1"
+    # No competition leaks into the body.
+    assert "world_cup" not in home and "World Cup" not in home
 
 def test_reminder_body_has_minutes():
     en = i18n.t_soccer_body_reminder("A", "B", "premier_league", 30, "en")

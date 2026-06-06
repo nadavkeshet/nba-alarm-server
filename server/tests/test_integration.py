@@ -421,15 +421,14 @@ def test_search_returns_players_both_sports():
 
 
 def test_basketball_player_detail_and_games():
-    # 521 = Bronny James (BSD id)
-    detail = ok(get("/basketball/player/521"))
+    # Basketball is 365scores-sourced now (BSD removed); 53358 = LeBron James
+    # (365 athlete id). 365 provides bio but no per-player season averages or
+    # game logs — that's the documented tradeoff of the switch.
+    detail = ok(get("/basketball/player/53358"))
     assert detail["sport"] == "basketball"
-    assert detail["season"]["ppg"] is not None
-    assert detail["photo"]
-    games = ok(get("/basketball/player/521/games", limit=5))["games"]
-    assert isinstance(games, list)
-    if games:
-        assert "opponent" in games[0] and "date" in games[0]
+    assert detail["name"]                 # bio resolves
+    games = ok(get("/basketball/player/53358/games", limit=5))["games"]
+    assert isinstance(games, list)        # empty under 365 (no game-log endpoint)
 
 
 def test_soccer_player_detail_and_stats():

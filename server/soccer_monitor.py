@@ -835,6 +835,31 @@ _COMEBACK_TARGET = 1
 _BIG_CHANCE_XG = {"low": 1.3, "medium": 1.0, "high": 0.7}
 
 
+# match_id -> ((home_score, away_score), scoring_side) — used to attribute a goal
+# to the side whose tally just increased. Idempotent within a tick: repeated
+# calls for the same scoreline return the cached attribution (so multiple alarms
+# on one match agree and don't consume the transition).
+_goal_state: dict[str, tuple[tuple[int, int], str | None]] = {}
+
+
+def _scoring_side(match_id: str, home_score: int, away_score: int) -> str | None:
+    """Which side scored to reach this scoreline ("home"/"away"), or None when it
+    can't be attributed (first time we see the match mid-scoreline)."""
+    cur = (home_score, away_score)
+    prev = _goal_state.get(match_id)
+    if prev is not None and prev[0] == cur:
+        return prev[1]                       # same scoreline → cached attribution
+    side: str | None = None
+    if prev is not None:
+        ph, pa = prev[0]
+        if home_score > ph:
+            side = "home"
+        elif away_score > pa:
+            side = "away"
+    _goal_state[match_id] = (cur, side)
+    return side
+
+
 def _evaluate_alarm(alarm: dict, match: dict) -> None:
     alarm_type = alarm["alarm_type"]
     status = match.get("status")
@@ -910,6 +935,9 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
         period = match.get("period")
         home_score = (match.get("home") or {}).get("score") or 0
         away_score = (match.get("away") or {}).get("score") or 0
+        # Record the scoreline every tick (even 0-0) so the NEXT change is
+        # attributable — otherwise the first goal would have no 0-0 baseline.
+        scored = _scoring_side(match.get("id") or "", home_score, away_score)
 
         # Kickoff — first live tick (status live with period 1h, or period 1h).
         if want("kickoff") and (status in ("live", "1h") or period == "1h"):
@@ -918,7 +946,7 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
         # Goals — dedup per scoreline so each distinct goal fires exactly once.
         if want("goals") and (home_score + away_score) > 0 and status not in ("scheduled", None):
             _fire(alarm, "soccer_goal",
-                  lambda h, a, c, lang: t_soccer_body_goal(h, a, c, home_score, away_score, lang),
+                  lambda h, a, c, lang: t_soccer_body_goal(h, a, home_score, away_score, scored, lang),
                   home_name, away_name, competition,
                   signal=f"mm_goal_{home_score}-{away_score}", one_shot=False)
         # Half-time start.

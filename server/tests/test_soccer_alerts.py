@@ -263,3 +263,32 @@ def test_second_half_fires_in_real_second_half(monkeypatch):
     sent = _wire_capture(monkeypatch)
     sm._evaluate_alarm(_mm_second_half_only(), _match_p("2h", minute=46))
     assert len(sent) == 1, f"second_half should fire once in the 2nd half; got {sent}"
+
+
+# ── goal scorer attribution + new body format ────────────────────────────────
+def test_scoring_side_attribution_and_idempotent():
+    sm._goal_state.clear()
+    assert sm._scoring_side("m1", 0, 0) is None      # baseline — nothing to attribute
+    assert sm._scoring_side("m1", 1, 0) == "home"     # home tally rose
+    assert sm._scoring_side("m1", 1, 0) == "home"     # idempotent: same scoreline → cached
+    assert sm._scoring_side("m1", 1, 1) == "away"     # away tally rose
+    assert sm._scoring_side("m2", 2, 1) is None       # first sighting mid-score → unknown
+
+
+def _goals_only_alarm(aid=1):
+    return _alarm("match_moments", {
+        "enabled": True, "kickoff": False, "goals": True, "halftime": False,
+        "second_half": False, "red_cards": False, "penalties": False,
+        "match_end": False, "lineups": False, "reminder_minutes": 0}, aid=aid)
+
+
+def test_goal_body_names_only_scorer_with_real_score(monkeypatch):
+    sm._goal_state.clear()
+    sent = _wire_capture(monkeypatch)
+    a = _goals_only_alarm()
+    m0 = _match(status="live", minute=10, hs=0, as_=0); m0["id"] = "g1"; m0["period"] = "1h"
+    sm._evaluate_alarm(a, m0)                          # 0-0 baseline → no goal
+    m1 = _match(status="live", minute=20, hs=1, as_=0); m1["id"] = "g1"; m1["period"] = "1h"
+    sm._evaluate_alarm(a, m1)                          # home scores → 1-0
+    bodies = [s["body"] for s in sent]
+    assert bodies == ["(1) - 0  Home"], bodies          # scorer parenthesized, only scorer named, no competition
