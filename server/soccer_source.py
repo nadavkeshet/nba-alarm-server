@@ -653,7 +653,16 @@ def _seed_search_index(matches: list[dict]) -> None:
 
 def _fetch_bsd(slug: str, date_iso: str) -> list[dict]:
     league_id = BSD_COMPETITION_IDS[slug]
-    events = bsd.league_events(league_id=league_id, date_from=date_iso, date_to=date_iso, limit=200)
+    # Widen by ±1 day. BSD filters by UTC date, but a kickoff near midnight UTC
+    # falls on a different LOCAL date (e.g. 22:00 UTC = next-day 01:00 in Israel),
+    # and _enforce_date_and_dedupe narrows by local date. Without the window a
+    # boundary fixture vanishes entirely — fetched on the UTC day but dropped by
+    # the local-date filter, and never fetched on the local day (e.g. Brazil–Egypt
+    # 22:00 UTC was missing from the friendlies feed).
+    d0 = datetime.fromisoformat(date_iso).date()
+    lo = (d0 - timedelta(days=1)).isoformat()
+    hi = (d0 + timedelta(days=1)).isoformat()
+    events = bsd.league_events(league_id=league_id, date_from=lo, date_to=hi, limit=200)
     return [_from_bsd_event(e, slug=slug) for e in events]
 
 
