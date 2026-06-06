@@ -3283,15 +3283,43 @@ def soccer_drama(canonical_id: str):
 
 
 @app.get("/soccer/drama/{canonical_id}/timeline")
+def _drama_snapshot_series(match_id: str) -> dict[int, dict]:
+    """The REAL per-minute drama meter the live radar logged for this match — the
+    LATEST snapshot in each minute (these carry the WebSocket enrichment: win-prob
+    swing, attack surge, near-miss/saves). Empty when the match was never monitored
+    (no alarm/follow on its competition) or the DB is unavailable."""
+    if engine is None or not match_id:
+        return {}
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text(
+                "SELECT DISTINCT ON (minute) minute, state_score, momentum_score, "
+                "       events_score, stakes_mult, drama_total "
+                "FROM drama_snapshots "
+                "WHERE match_id = :mid AND minute IS NOT NULL "
+                "ORDER BY minute, id DESC"
+            ), {"mid": match_id}).fetchall()
+        return {
+            int(r[0]): {"drama": float(r[5]), "state": float(r[1]),
+                        "momentum": float(r[2]), "events": float(r[3]), "stakes": float(r[4])}
+            for r in rows
+        }
+    except Exception as exc:
+        log.debug("drama snapshot series failed for %s: %s", match_id, exc)
+        return {}
+
+
 def soccer_drama_timeline(canonical_id: str, step: int = 2):
-    """Retroactive per-minute Drama Engine timeline.
+    """Per-minute Drama Engine timeline.
 
-    Reconstructs the match state at each minute (score, xG window,
-    momentum window, recent events) by replaying the immutable arrays
-    BSD returns (xg_per_minute, momentum, incidents) and runs the engine
-    over each rebuilt context. No DB persistence — recomputed on demand.
+    Prefers the REAL meter the live radar recorded each minute (drama_snapshots —
+    WebSocket-enriched), so the graph is 1:1 with what fired the alerts. Minutes
+    the radar never saw (pre-monitoring, or an unmonitored match) fall back to the
+    retroactive reconstruction (replaying BSD's xg_per_minute/momentum/incidents)
+    so the curve stays complete.
 
-    `step` controls minute granularity (default 2, max 5).
+    `step` controls granularity ONLY for the pure-reconstruction fallback; when
+    real snapshots exist the timeline is per-minute.
 
     Response: { match_id, timeline: [{m, drama, state, momentum, events, stakes}] }
     """
@@ -3301,7 +3329,18 @@ def soccer_drama_timeline(canonical_id: str, step: int = 2):
     if detail is None:
         raise HTTPException(status_code=404, detail="match not found")
     step = max(1, min(5, step))
-    timeline = _de.compute_drama_timeline(detail, step=step)
+    snaps = _drama_snapshot_series(detail.get("id") or canonical_id)
+    if snaps:
+        recon = {p["m"]: p for p in _de.compute_drama_timeline(detail, step=1)}
+        last = max(max(snaps), max(recon, default=0))
+        timeline = []
+        for m in range(1, last + 1):
+            if m in snaps:
+                timeline.append({"m": m, **snaps[m]})   # the real logged meter
+            elif m in recon:
+                timeline.append(recon[m])                # gap fill
+    else:
+        timeline = _de.compute_drama_timeline(detail, step=step)
     # Cache the peak so a finished match's feed badge reflects how dramatic it
     # actually got (not the FT-damped live state).
     try:
