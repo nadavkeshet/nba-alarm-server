@@ -606,6 +606,67 @@ def _league_for_alarm(home_team_id: str | None,
     return "nba"
 
 
+def _resolve_monitor_game_id(game_id: str, game_name: str, league: str, game_date: str | None = None) -> str:
+    """
+    Translate a canonical basketball game_id to the bare 365scores numeric ID
+    that the alarm poller and boxscore fetcher need.
+
+    The /games endpoint now routes through basketball_source, which returns
+    bsd-* or s365-* prefixed IDs.  The _alarm_poller and score365_adapter
+    boxscore fetcher both work with bare 365scores numeric IDs, so we resolve
+    at alarm-creation time — one cheap cache hit keeps the rest of the system
+    unchanged.
+
+      bsd-*   → look up today's 365scores scoreboard by game name
+      s365-*  → strip the prefix (already a 365scores ID)
+      bare ID → return as-is (legacy path, already correct)
+
+    Falls back to the original game_id on any failure so the alarm is still
+    stored (and will self-expire via today_gone within 60 s).
+    """
+    if not game_id:
+        return game_id
+
+    if game_id.startswith("s365-"):
+        return game_id.split("-", 1)[1]
+
+    if not game_id.startswith("bsd-"):
+        return game_id  # bare 365scores ID or unknown — leave alone
+
+    # bsd-* → cross-reference via the 365scores scoreboard (cached)
+    try:
+        target_date = game_date or _eastern_today()
+        events = get_games_for_date(target_date, league) or []
+
+        gn = (game_name or "").strip().lower()
+        for e in events:
+            ev_name = (e.get("name") or "").strip().lower()
+            if ev_name == gn:
+                eid = str(e.get("id", ""))
+                if eid:
+                    log.info("resolve game_id: %s → %s  (%s)", game_id, eid, game_name)
+                    return eid
+
+        # Looser fallback: match on the short abbreviation-style name (e.g. "BKN @ LAL")
+        gn_short = gn.replace(" at ", " @ ")
+        for e in events:
+            ev_short = (e.get("shortName") or "").strip().lower()
+            if ev_short and ev_short == gn_short:
+                eid = str(e.get("id", ""))
+                if eid:
+                    log.info("resolve game_id (short): %s → %s  (%s)", game_id, eid, game_name)
+                    return eid
+
+        log.warning(
+            "resolve game_id: %s (%s) — no 365scores match in %d %s game(s)",
+            game_id, game_name, len(events), league,
+        )
+    except Exception as exc:
+        log.warning("resolve game_id failed for %s: %s", game_id, exc)
+
+    return game_id  # fallback: store the BSD id; today_gone will expire it
+
+
 def _invalidate_push_token(push_token: str) -> None:
     """
     Called when Firebase returns UnregisteredError for a token.
@@ -1102,6 +1163,8 @@ def _check_and_fire(alarm: Alarm, events: list[dict], summary: dict | None = Non
 
     elif alarm.condition_type == "points":
         quarter_limit = alarm.start_quarter or 0
+        log.info("POLLER DEBUG: checking pts alarm | player=%s id=%s thr=%s game_id=%s summary=%s",
+                 player_name, alarm.target_id, alarm.threshold, alarm.game_id, "YES" if summary else "NO")
         for event in events:
             if alarm.game_id and str(event.get("id")) != str(alarm.game_id):
                 continue  # only check the specific game this alarm was set for
@@ -1114,6 +1177,8 @@ def _check_and_fire(alarm: Alarm, events: list[dict], summary: dict | None = Non
                    if summary else None)
             if pts is None:
                 pts = _extract_player_pts(event, alarm.target_id)
+            log.info("POLLER DEBUG: player=%s pts=%s state=%s period=%s thr=%s",
+                     player_name, pts, state, period, alarm.threshold)
             if state == "post" and (pts is None or pts < alarm.threshold):
                 return None
             if pts is not None and pts >= alarm.threshold:
@@ -1739,24 +1804,37 @@ async def start_alarm(req: AlarmRequest):
     # never expire stale alarms whose game has already finished on a prior day.
     game_date = req.game_date or _eastern_today()
 
+    # Translate bsd-* / s365-* canonical IDs to the bare 365scores numeric ID
+    # that the alarm poller and boxscore fetcher expect.  The /games endpoint
+    # now routes through basketball_source (returns prefixed IDs), while the
+    # poller still fetches from score365_adapter (bare IDs).  Resolving here
+    # keeps the poller, dedup logic, and boxscore path unchanged.
+    monitor_game_id = _resolve_monitor_game_id(req.game_id, req.game_name, league, game_date)
+
     if engine is not None:
         try:
             with Session(engine) as session:
-                # Dedup: replace any existing active alarm for same user+game
+                # Dedup: replace any existing active alarm for same user+game.
+                # Match on both the original (possibly prefixed) and the resolved
+                # ID so re-setting an alarm always cancels the previous one even
+                # if it was stored under a different ID format.
                 session.query(Alarm).filter(
                     Alarm.user_token     == req.push_token,
-                    Alarm.target_id      == req.game_id,
                     Alarm.condition_type == "score_diff",
                     Alarm.is_active.is_(True),
+                    or_(
+                        Alarm.target_id == req.game_id,
+                        Alarm.target_id == monitor_game_id,
+                    ),
                 ).update({"is_active": False}, synchronize_session=False)
                 session.add(Alarm(
                     user_token       = req.push_token,
-                    target_id        = req.game_id,
+                    target_id        = monitor_game_id,
                     target_name      = req.game_name,
                     condition_type   = "score_diff",
                     threshold        = req.max_diff,
                     start_quarter    = req.start_quarter,
-                    game_id          = req.game_id,
+                    game_id          = monitor_game_id,
                     game_name        = req.game_name,
                     home_team_id     = req.home_team_id or None,
                     away_team_id     = req.away_team_id or None,
@@ -1768,8 +1846,8 @@ async def start_alarm(req: AlarmRequest):
                 session.commit()
         except Exception as exc:
             log.error("start_alarm DB write failed: %s", exc)
-    log.info("ALARM REGISTERED | game=%s | diff<=%d Q%d+ | ...%s",
-             req.game_name, req.max_diff, req.start_quarter, req.push_token[-8:])
+    log.info("ALARM REGISTERED | game=%s | diff<=%d Q%d+ | monitor_id=%s | ...%s",
+             req.game_name, req.max_diff, req.start_quarter, monitor_game_id, req.push_token[-8:])
     threading.Thread(target=start_radar_job, daemon=True).start()
     return {
         "status":        "monitoring_started",
@@ -1808,6 +1886,11 @@ async def start_player_alarm(req: PlayerAlarmRequest):
     league = _league_for_alarm(req.home_team_id or None, req.away_team_id or None, req.league)
     game_date = req.game_date or _eastern_today()
 
+    # Resolve the game_id to a bare 365scores ID so the poller can find the
+    # game in the 365scores scoreboard and fetch the correct boxscore for
+    # player-stat lookups.  target_id stays as the player ID (365scores).
+    monitor_game_id = _resolve_monitor_game_id(req.game_id, req.game_name, league, game_date)
+
     if engine is not None:
         try:
             if req.condition == "triple_double":
@@ -1840,7 +1923,7 @@ async def start_player_alarm(req: PlayerAlarmRequest):
                     condition_type = condition_type,
                     threshold      = req.pts_threshold,
                     start_quarter  = start_q,
-                    game_id        = req.game_id,
+                    game_id        = monitor_game_id,
                     game_name      = req.game_name,
                     league         = league,
                     alert_type     = req.alert_type,
