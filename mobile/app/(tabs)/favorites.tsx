@@ -974,7 +974,7 @@ export default function FavoritesScreen() {
 
   const FAV_TABS: { id: FavTab; label: string; icon: IoniconName }[] = [
     { id: 'basketball', label: 'Basketball', icon: 'basketball-outline' },
-    { id: 'football',   label: 'Football',   icon: 'football-outline'  },
+    { id: 'football',   label: 'World Cup',  icon: 'earth-outline'     },
     { id: 'radar',      label: 'Radar',      icon: 'radio-outline'     },
     { id: 'historical', label: 'Historical', icon: 'time-outline'      },
   ];
@@ -1421,7 +1421,7 @@ export default function FavoritesScreen() {
 
           {/* ── Football Radar ────────────────────────────────────────── */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>⚽ FOOTBALL</Text>
+            <Text style={styles.sectionTitle}>🌍 WORLD CUP</Text>
             <Text style={styles.sectionDesc}>
               Receive alerts when any match in these leagues reaches your drama threshold.{'\n'}
               To follow a league for display only, tap ★ in the Sports tab.
@@ -1500,7 +1500,7 @@ export default function FavoritesScreen() {
 
           {/* ── Football Historical ───────────────────────────────────── */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>⚽ FOOTBALL</Text>
+            <Text style={styles.sectionTitle}>🌍 WORLD CUP</Text>
             <View style={styles.emptyState}>
               <Ionicons name="time-outline" size={28} color={C.border} />
               <Text style={styles.emptyHint}>Coming soon</Text>

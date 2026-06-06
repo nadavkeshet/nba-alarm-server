@@ -4,6 +4,26 @@ export const he = {
   'tab.active':    'פעילים',
   'tab.favorites': 'מועדפים',
   'tab.settings':  'הגדרות',
+  'tab.feed':      'מועדפים',
+  'tab.sports':    'ספורט',
+
+  // ── Sport filter ─────────────────────────────────────────────────
+  'sport.all':        'כל הספורט',
+  'sport.football':   'מונדיאל',
+  'sport.basketball': 'כדורסל',
+
+  // ── Sports screen ────────────────────────────────────────────────
+  'sports.title':       'ספורט',
+  'sports.searchHint':  'חפש קבוצות וליגות',
+  'sports.noGames':     'לא נמצאו משחקים',
+  'sports.loadingMore': 'טוען משחקים נוספים…',
+  'sports.loadMore':    'טען משחקים נוספים',
+
+  // ── Favorites feed screen ────────────────────────────────────────
+  'favorites.feed.title':          'מועדפים',
+  'favorites.feed.noGames':        'אין משחקים היום עבור המועדפים שלך',
+  'favorites.feed.empty.title':    'אין מועדפים עדיין',
+  'favorites.feed.empty.subtitle': 'עקוב אחר קבוצה או ליגה בטאב ספורט כדי לראות את המשחקים שלהם כאן.',
 
   // ── Home ────────────────────────────────────────────────────────
   'home.title':            'Clutch Alarm',

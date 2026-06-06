@@ -4,6 +4,26 @@ export const en = {
   'tab.active':    'Active',
   'tab.favorites': 'Favorites',
   'tab.settings':  'Settings',
+  'tab.feed':      'Favorites',
+  'tab.sports':    'Sports',
+
+  // ── Sport filter ─────────────────────────────────────────────────
+  'sport.all':        'All sports',
+  'sport.football':   'World Cup',
+  'sport.basketball': 'Basketball',
+
+  // ── Sports screen ────────────────────────────────────────────────
+  'sports.title':       'Sports',
+  'sports.searchHint':  'Search teams & leagues',
+  'sports.noGames':     'No games found',
+  'sports.loadingMore': 'Loading earlier matches…',
+  'sports.loadMore':    'Load earlier matches',
+
+  // ── Favorites feed screen ────────────────────────────────────────
+  'favorites.feed.title':          'Favorites',
+  'favorites.feed.noGames':        'No games today for your favorites',
+  'favorites.feed.empty.title':    'No favorites yet',
+  'favorites.feed.empty.subtitle': 'Follow a team or league in the Sports tab to see their games here.',
 
   // ── Home ────────────────────────────────────────────────────────
   'home.title':            'Clutch Alarm',
