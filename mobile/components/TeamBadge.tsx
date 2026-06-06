@@ -74,12 +74,7 @@ export function TeamBadge({ abbreviation, size = 36, uri }: Props) {
     return (
       <Image
         source={{ uri }}
-        style={{
-          width: size,
-          height: size,
-          borderRadius: size / 6,
-          backgroundColor: '#111827',  // neutral dark while loading
-        }}
+        style={{ width: size, height: size }}
         contentFit="contain"
       />
     );
