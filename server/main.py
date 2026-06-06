@@ -4204,6 +4204,12 @@ def soccer_player(player_id: str):
     import player_source as ps
     detail = bz.player_detail(player_id)
     if not detail:
+        # Not a BSD id — a 365-sourced match's scorer (e.g. friendlies). Resolve
+        # the 365 athlete so the incident tap still opens a player page.
+        import soccer_source as ss
+        s365 = ss.s365_soccer_player(player_id)
+        if s365:
+            return s365
         raise HTTPException(status_code=404, detail="player not found")
     career = bz.player_career(player_id)
     club_id = detail.get("current_team_id")

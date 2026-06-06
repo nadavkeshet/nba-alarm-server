@@ -1051,6 +1051,100 @@ def build_live_snapshot(canonical: str) -> dict:
 
 # ---------------------------------------------------------------------------
 
+# ── Incident scorer enrichment: full names + clickable ids ───────────────────
+# BSD incidents (and lineups) carry only the SHORT name ("W. Semedo"); only the
+# per-player detail has the full "Willy Semedo". Resolve + cache it so the goal /
+# card timeline shows full names. 365 incidents already get the full name + the
+# 365 athlete id (see _365_member_name / _365_athlete_id).
+
+_bsd_pname_cache: dict[str, str] = {}
+
+
+def _bsd_player_full_name(player_id) -> str | None:
+    if player_id is None:
+        return None
+    key = str(player_id)
+    if key in _bsd_pname_cache:
+        return _bsd_pname_cache[key]
+    try:
+        d = bsd.player_detail(player_id) or {}
+        name = d.get("name")
+        if name:
+            _bsd_pname_cache[key] = name
+        return name
+    except Exception:
+        return None
+
+
+def _enrich_bsd_incident_names(incidents: list[dict]) -> list[dict]:
+    """Replace short incident names with full ones (cached + parallel fetch).
+    Best-effort: a player that can't be resolved keeps the short name."""
+    if not incidents:
+        return incidents
+    pending = {
+        inc.get(k)
+        for inc in incidents if isinstance(inc, dict)
+        for k in ("player_id", "player_in_id", "player_out_id")
+        if inc.get(k) is not None and str(inc.get(k)) not in _bsd_pname_cache
+    }
+    if pending:
+        try:
+            with _nullcontext(_DETAIL_POOL) as pool:
+                list(pool.map(_bsd_player_full_name, pending))   # warms the cache
+        except Exception:
+            for pid in pending:
+                _bsd_player_full_name(pid)
+    for inc in incidents:
+        if not isinstance(inc, dict):
+            continue
+        for id_key, name_key in (("player_id", "player"),
+                                 ("player_in_id", "player_in"),
+                                 ("player_out_id", "player_out")):
+            pid = inc.get(id_key)
+            if pid is not None:
+                full = _bsd_pname_cache.get(str(pid))
+                if full:
+                    inc[name_key] = full
+    return incidents
+
+
+_365_ATHLETE_IMG = "https://imagecache.365scores.com/image/upload/Athletes/"
+
+
+def s365_soccer_player(athlete_id) -> dict | None:
+    """365scores soccer athlete bio for /soccer/player when the id isn't a BSD
+    one (a 365-sourced match's scorer, e.g. friendlies). Bio + current club; 365
+    exposes no season stats here, so those are null."""
+    try:
+        from score365.client import Client365
+        with Client365() as c:
+            data = c.get("/athletes/", params={"athletes": str(athlete_id)})
+    except Exception as exc:
+        logger.warning("s365 soccer player failed for %s: %s", athlete_id, exc)
+        return None
+    aths = (data or {}).get("athletes") or []
+    if not aths:
+        return None
+    a = aths[0]
+    comps = {str(c.get("id")): c.get("name") for c in (data.get("competitors") or [])}
+    pos = a.get("position") or {}
+    cid = str(a.get("clubId") or "")
+    aid = a.get("id")
+    return {
+        "id": str(aid),
+        "name": a.get("name") or "",
+        "sport": "football",
+        "team_name": comps.get(cid),
+        "current_team_id": None, "club_crest": None,
+        "national_team_id": None, "national_team_name": None, "national_team_crest": None,
+        "position": pos.get("name") if isinstance(pos, dict) else None,
+        "jersey": None,
+        "country": a.get("nationalityName"),
+        "photo": f"{_365_ATHLETE_IMG}{aid}",
+        "season": {"apps": None, "goals": None, "assists": None, "avg_rating": None},
+    }
+
+
 def get_soccer_match_detail(canonical: str) -> dict | None:
     """Full match payload including xG, momentum, shotmap, incidents.
 
@@ -1085,7 +1179,7 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
             except Exception as exc:
                 logger.warning("bsd stats failed for %s: %s", canonical, exc)
             try:
-                out["incidents"] = f_incidents.result()
+                out["incidents"] = _enrich_bsd_incident_names(f_incidents.result())
             except Exception as exc:
                 logger.warning("bsd incidents failed for %s: %s", canonical, exc)
             # If BSD didn't provide penalty scores, derive them from shootout kicks in the shotmap.
@@ -1195,7 +1289,20 @@ def _365_member_name(members: dict[int, dict], pid: int | None) -> str | None:
     m = members.get(pid) if pid is not None else None
     if not m:
         return None
-    return m.get("shortName") or m.get("name")
+    # Prefer the FULL name ("Alejandro Romero") over the short form ("Romero")
+    # for incident display.
+    return m.get("name") or m.get("shortName")
+
+
+def _365_athlete_id(members: dict[int, dict], pid: int | None):
+    """The 365 ATHLETE id for a lineup member — the id /soccer/player and the
+    box score / search use. The incident's `playerId` is a per-match MEMBER id,
+    which won't resolve a player page; map it to the athleteId so the scorer is
+    tappable. Falls back to the member id when no athleteId is present."""
+    m = members.get(pid) if pid is not None else None
+    if not m:
+        return pid
+    return m.get("athleteId") or pid
 
 
 # 365 goal eventType.subTypeName → canonical goal type. Own goals must credit
@@ -1257,7 +1364,7 @@ def _normalize_365_incidents(game: dict) -> list[dict]:
                 "added_time": added,
                 "is_home":    is_home,
                 "player":     _365_member_name(members, pid),
-                "player_id":  pid,
+                "player_id":  _365_athlete_id(members, pid),
                 "assist":     None,
                 "home_score": hs,
                 "away_score": aw,
@@ -1278,7 +1385,7 @@ def _normalize_365_incidents(game: dict) -> list[dict]:
                 "is_home":    is_home,
                 "card_type":  card_type,
                 "player":     _365_member_name(members, pid),
-                "player_id":  pid,
+                "player_id":  _365_athlete_id(members, pid),
             })
 
         elif et.get("id") == 1000 or name == "substitution":
@@ -1293,8 +1400,8 @@ def _normalize_365_incidents(game: dict) -> list[dict]:
                 "is_home":       is_home,
                 "player_in":     _365_member_name(members, pid),
                 "player_out":    _365_member_name(members, out_id),
-                "player_in_id":  pid,
-                "player_out_id": out_id,
+                "player_in_id":  _365_athlete_id(members, pid),
+                "player_out_id": _365_athlete_id(members, out_id),
             })
         # Woodwork and other minor event types are intentionally dropped — iOS
         # only renders goals, cards and subs in the timeline.

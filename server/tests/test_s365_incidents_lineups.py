@@ -26,7 +26,8 @@ def _game(events, members, home_lineup=None, away_lineup=None):
 
 def test_incidents_goal_and_card_with_running_score():
     members = [
-        {"competitorId": HOME_ID, "id": 1, "name": "Alice Scorer", "shortName": "Scorer"},
+        # member id 1 has a distinct athleteId → incident player_id maps to it.
+        {"competitorId": HOME_ID, "id": 1, "name": "Alice Scorer", "shortName": "Scorer", "athleteId": 99},
         {"competitorId": HOME_ID, "id": 2, "name": "Bob Assist", "shortName": "Assist"},
         {"competitorId": AWAY_ID, "id": 3, "name": "Carl Booked", "shortName": "Booked"},
         {"competitorId": AWAY_ID, "id": 4, "name": "Dan Equalizer", "shortName": "Equalizer"},
@@ -52,22 +53,22 @@ def test_incidents_goal_and_card_with_running_score():
     assert goal1["type"] == "goal"
     assert goal1["minute"] == 24
     assert goal1["is_home"] is True
-    assert goal1["player"] == "Scorer"
-    assert goal1["player_id"] == 1
-    assert goal1["assist"] == "Assist"
+    assert goal1["player"] == "Alice Scorer"          # FULL name (not short "Scorer")
+    assert goal1["player_id"] == 99                    # athleteId, not the member id
+    assert goal1["assist"] == "Bob Assist"
     assert goal1["home_score"] == 1 and goal1["away_score"] == 0
 
     # Card — away yellow, no running-score change.
     assert card["type"] == "card"
     assert card["card_type"] == "yellow"
     assert card["is_home"] is False
-    assert card["player"] == "Booked"
-    assert card["player_id"] == 3
+    assert card["player"] == "Carl Booked"
+    assert card["player_id"] == 3                       # no athleteId → falls back to member id
 
     # Goal 2 — away, running score 1-1.
     assert goal2["type"] == "goal"
     assert goal2["is_home"] is False
-    assert goal2["player"] == "Equalizer"
+    assert goal2["player"] == "Dan Equalizer"
     assert goal2["home_score"] == 1 and goal2["away_score"] == 1
 
 
@@ -103,8 +104,8 @@ def test_incidents_substitution_in_out_direction():
     assert len(out) == 1
     sub = out[0]
     assert sub["type"] == "substitution"
-    assert sub["player_in"] == "Coming" and sub["player_in_id"] == 20
-    assert sub["player_out"] == "Going" and sub["player_out_id"] == 21
+    assert sub["player_in"] == "In Coming" and sub["player_in_id"] == 20
+    assert sub["player_out"] == "Out Going" and sub["player_out_id"] == 21
 
 
 def test_incidents_chronological_replay_unordered_input():
@@ -235,3 +236,19 @@ def test_365_xg_timeline_and_team_totals():
 def test_365_shotmap_empty_when_no_chart():
     assert _ss._normalize_365_shotmap({"chartEvents": {}}) == []
     assert _ss._build_365_xg_timeline([]) == ([], [], (0.0, 0.0))
+
+
+# ── incident full-name + clickable-id helpers ────────────────────────────────
+def test_365_member_name_and_athlete_id():
+    members = {612715: {"id": 612715, "name": "Alejandro Romero",
+                        "shortName": "Romero", "athleteId": 13557}}
+    assert ss._365_member_name(members, 612715) == "Alejandro Romero"   # full
+    assert ss._365_athlete_id(members, 612715) == 13557                  # clickable id
+    assert ss._365_athlete_id(members, 999) == 999                       # fallback
+
+
+def test_enrich_bsd_incident_names_from_cache():
+    ss._bsd_pname_cache["22075"] = "Willy Semedo"   # pre-seed; no network
+    out = ss._enrich_bsd_incident_names(
+        [{"type": "goal", "player": "W. Semedo", "player_id": 22075}])
+    assert out[0]["player"] == "Willy Semedo"
