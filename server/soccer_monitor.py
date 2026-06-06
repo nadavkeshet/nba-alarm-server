@@ -1226,6 +1226,22 @@ def _match_drama(match: dict):
     if status not in {"live", "ht", "et", "pens", "1h", "2h"}:
         return None
     ctx = drama_engine.context_from_match_detail(match)
+    # context_from_match_detail leaves win_prob_swing as None BY DESIGN — the
+    # caller (which has the WS client in scope) injects it. Pull the live swing
+    # from the BSD WebSocket so a sharp favorite-flip (a goal / red card that
+    # turns the match) spikes the score via _score_odds (up to +0.8). Without
+    # this, drama_radar ALARMS never saw the swing that watch scores already get
+    # through soccer_source._live_drama_ctx. Best-effort; only bsd-* ids have a
+    # WS feed, and a missing snapshot just leaves the (None) default.
+    mid = match.get("id") or ""
+    if mid.startswith("bsd-") and mid[4:].isdigit():
+        try:
+            import bsd_websocket as _ws
+            swing = _ws.get_winprob_swing(int(mid[4:]))
+            if swing is not None:
+                ctx["win_prob_swing"] = swing
+        except Exception:
+            pass
     score = drama_engine.compute_drama(ctx)
     # Persist snapshot (best-effort — never block firing on log failure)
     _log_drama_snapshot(match.get("id"), match.get("minute") or 0, score)

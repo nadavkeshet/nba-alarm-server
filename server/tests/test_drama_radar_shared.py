@@ -67,3 +67,36 @@ def test_evaluate_without_precomputed_still_computes(monkeypatch):
     match = _live_match()
     sm._evaluate_drama_radar({"id": 9, "user_token": "u", "threshold": 7.0, "alert_type": "alarm"}, match)
     assert len(sent) == 1
+
+
+# ── win-probability swing injection (live WS → drama ctx) ─────────────────────
+def test_match_drama_injects_winprob_swing_for_bsd(monkeypatch):
+    """_match_drama must pull the live WS win-prob swing into the ctx (the REST
+    detail leaves it None by design). Without this, drama_radar alarms never see
+    a favorite-flip spike."""
+    import bsd_websocket
+    captured = {}
+    monkeypatch.setattr(sm.drama_engine, "context_from_match_detail",
+                        lambda d: {"win_prob_swing": None})
+    monkeypatch.setattr(sm.drama_engine, "compute_drama",
+                        lambda ctx: captured.update(ctx) or _Score(8.0))
+    monkeypatch.setattr(sm, "_log_drama_snapshot", lambda *a: None)
+    monkeypatch.setattr(bsd_websocket, "get_winprob_swing", lambda eid, **k: 0.42)
+    sm._match_drama({"id": "bsd-9096", "status": "live", "minute": 80})
+    assert captured.get("win_prob_swing") == 0.42
+
+
+def test_match_drama_no_swing_injection_for_s365(monkeypatch):
+    """s365-* matches have no BSD WS feed — swing stays None, never crashes."""
+    import bsd_websocket
+    captured = {}
+    monkeypatch.setattr(sm.drama_engine, "context_from_match_detail",
+                        lambda d: {"win_prob_swing": None})
+    monkeypatch.setattr(sm.drama_engine, "compute_drama",
+                        lambda ctx: captured.update(ctx) or _Score(8.0))
+    monkeypatch.setattr(sm, "_log_drama_snapshot", lambda *a: None)
+    def _boom(eid, **k):  # would fail on a 365 id; must not be called
+        raise AssertionError("get_winprob_swing called for s365 id")
+    monkeypatch.setattr(bsd_websocket, "get_winprob_swing", _boom)
+    sm._match_drama({"id": "s365-4671395", "status": "live", "minute": 80})
+    assert captured.get("win_prob_swing") is None
