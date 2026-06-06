@@ -78,5 +78,13 @@
     "primary_source": "score365",
     "bsd_id": null,
     "score365_id": 42
+  },
+  "friendlies": {
+    "name_en": "International Friendlies",
+    "name_he": "משחקי ידידות",
+    "country": "World",
+    "primary_source": "score365",
+    "bsd_id": null,
+    "score365_id": 570
   }
 }

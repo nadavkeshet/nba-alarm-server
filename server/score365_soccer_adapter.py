@@ -86,6 +86,7 @@ DEFAULT_LEAGUE_ORDER: list[str] = [
     "world_cup",
     "euros",
     "ligat_haal",
+    "friendlies",
 ]
 
 

@@ -279,6 +279,7 @@ _LEAGUES: list[dict] = [
     {"id": "world_cup",      "name": "FIFA World Cup",            "sport": "football"},
     {"id": "euros",          "name": "UEFA Euros",                "sport": "football"},
     {"id": "ligat_haal",     "name": "Israeli Ligat Ha'Al",       "sport": "football"},
+    {"id": "friendlies",     "name": "International Friendlies",   "sport": "football"},
 ]
 
 # Marquee competitions pinned to the front of league search results. Keep in
