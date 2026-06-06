@@ -9,6 +9,7 @@ import {
   Animated,
   InteractionManager,
   Modal,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -20,6 +21,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { SkeletonAlarmCard } from '../../components/skeleton-card';
 import { TeamBadge } from '../../components/TeamBadge';
 import { HamburgerButton } from '../../components/drawer-menu';
+import { RefreshBar } from '../../components/refresh-bar';
 
 import { SERVER_URL } from '../../config';
 import { translateGameName, teamFullToHe } from '../../utils/teamNames';
@@ -229,6 +231,7 @@ export default function ActiveScreen() {
   const { t, isHebrew } = useLanguage();
   const [data, setData]           = useState<ActiveMonitors | null>(null);
   const [loading, setLoading]     = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError]         = useState<string | null>(null);
   const [trophies, setTrophies]   = useState<TrophyHit[]>([]);
   const [soccerAlarms, setSoccerAlarms] = useState<SoccerAlarm[]>([]);
@@ -382,6 +385,12 @@ export default function ActiveScreen() {
       setLoading(false);
     }
   }, [resolveToken]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  }, [load]);
 
   const cancelSoccerAlarm = useCallback(async (alarm: SoccerAlarm) => {
     const token = await resolveToken();
@@ -538,7 +547,19 @@ export default function ActiveScreen() {
         <View style={{ width: 40 }} />
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+      <RefreshBar visible={refreshing} />
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: 40 }}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={C.orange}
+            colors={[C.orange]}
+          />
+        }
+      >
 
         {/* ── Game Alarms ─────────────────────────────────────────────────── */}
         <View style={styles.section}>
@@ -914,12 +935,6 @@ export default function ActiveScreen() {
             ))
           )}
         </View>
-
-        {/* ── Refresh ──────────────────────────────────────────────────────── */}
-        <TouchableOpacity style={styles.refreshBtn} onPress={() => load()} disabled={loading}>
-          <Ionicons name="refresh-outline" size={16} color={C.orange} style={{ marginRight: 6 }} />
-          <Text style={styles.refreshBtnText}>{t('active.refresh')}</Text>
-        </TouchableOpacity>
 
       </ScrollView>
 

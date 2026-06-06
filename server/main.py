@@ -894,6 +894,44 @@ def _purge_old_alarms() -> None:
         log.error("DB: _purge_old_alarms failed – %s", exc)
 
 
+def _cleanup_prefixed_alarms() -> None:
+    """
+    One-time migration: expire any active alarms whose game_id or target_id
+    still has a canonical source prefix (bsd-* or s365-*).
+
+    These were stored before the _resolve_monitor_game_id fix was deployed.
+    The alarm poller works with bare 365scores numeric IDs and can never match
+    a prefixed ID, so these alarms would never fire or self-expire (they rely
+    on today_gone, which requires a non-empty 365scores events list for that
+    day — when there are no games the list is empty and cleanup is skipped).
+    """
+    if engine is None:
+        return
+    try:
+        with Session(engine) as session:
+            stale = (
+                session.query(Alarm)
+                .filter(
+                    Alarm.is_active.is_(True),
+                    or_(
+                        Alarm.game_id.like("bsd-%"),
+                        Alarm.game_id.like("s365-%"),
+                        Alarm.target_id.like("bsd-%"),
+                        Alarm.target_id.like("s365-%"),
+                    ),
+                )
+                .all()
+            )
+            count = len(stale)
+            for row in stale:
+                row.is_active = False
+            if count:
+                session.commit()
+                log.info("STARTUP: expired %d pre-fix alarm(s) with canonical game_ids.", count)
+    except Exception as exc:
+        log.error("DB: _cleanup_prefixed_alarms failed – %s", exc)
+
+
 # ── Multi-user radar feed ─────────────────────────────────────────────────────
 
 def _get_all_users_for_radar() -> list[dict]:
@@ -1605,6 +1643,7 @@ async def lifespan(_app: FastAPI):
     _migrate_team_ids_to_365()  # legacy ESPN/API-Basketball → 365scores
     _load_fired_alerts_from_db()   # hydrate dedup set before radar starts
     _purge_old_alarms()            # delete inactive alarms older than 7 days
+    _cleanup_prefixed_alarms()     # expire pre-fix bsd-*/s365-* alarms
     clear_stale_state()
     _restart_alarm_threads_from_db()
     threading.Thread(target=update_all_rosters, daemon=True).start()
