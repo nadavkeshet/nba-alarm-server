@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
+import { Image } from 'expo-image';
 
 const TEAM_COLORS: Record<string, [string, string]> = {
   // Eastern Conference
@@ -62,11 +63,28 @@ const DEFAULT_COLORS: [string, string] = ['#1a3451', '#0B1623'];
 interface Props {
   abbreviation: string;
   size?: number;
+  uri?: string;
 }
 
 // Pure JS gradient simulation: primary color circle with secondary color
 // overlay in the bottom-right quadrant, clipped to the circle shape.
-export function TeamBadge({ abbreviation, size = 36 }: Props) {
+export function TeamBadge({ abbreviation, size = 36, uri }: Props) {
+  // Real logo image takes priority over the colored-circle fallback.
+  if (uri) {
+    return (
+      <Image
+        source={{ uri }}
+        style={{
+          width: size,
+          height: size,
+          borderRadius: size / 6,
+          backgroundColor: '#111827',  // neutral dark while loading
+        }}
+        contentFit="contain"
+      />
+    );
+  }
+
   const abbr = (abbreviation || '?').toUpperCase();
   const [primary, secondary] = TEAM_COLORS[abbr] ?? DEFAULT_COLORS;
   const fontSize = Math.round(size * 0.26);

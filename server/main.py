@@ -606,6 +606,26 @@ def _league_for_alarm(home_team_id: str | None,
     return "nba"
 
 
+_365_CDN = "https://imagecache.365scores.com/image/upload/d_Competitors:default1.png/Competitors/"
+
+def _team_logo_for_abbr(abbr: str) -> str:
+    """Return the 365scores CDN logo URL for a team abbreviation, or '' if unknown.
+    Covers NBA, Euroleague, EuroCup, BCL, and Winner League."""
+    if not abbr:
+        return ""
+    try:
+        from score365_adapter import _365_TEAM_IDS, _INTL_TEAM_ID_TO_ABBR
+        team_id = _365_TEAM_IDS.get(abbr)
+        if team_id:
+            return f"{_365_CDN}{team_id}"
+        for tid, a in _INTL_TEAM_ID_TO_ABBR.items():
+            if a == abbr:
+                return f"{_365_CDN}{tid}"
+    except Exception:
+        pass
+    return ""
+
+
 def _resolve_monitor_game_id(game_id: str, game_name: str, league: str, game_date: str | None = None) -> str:
     """
     Translate a canonical basketball game_id to the bare 365scores numeric ID
@@ -4604,6 +4624,8 @@ def active_monitors(user_token: str = ""):
                             "start_quarter":   r.start_quarter if r.start_quarter is not None else 4,
                             "home_team_id":    r.home_team_id or "",
                             "away_team_id":    r.away_team_id or "",
+                            "home_logo":       _team_logo_for_abbr(r.home_team_id or ""),
+                            "away_logo":       _team_logo_for_abbr(r.away_team_id or ""),
                             "league":          (getattr(r, 'league', None) or "nba"),
                             "notify_at_start": getattr(r, 'notify_at_start', False),
                             "game_date":       getattr(r, 'game_date', None) or "",

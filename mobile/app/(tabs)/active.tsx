@@ -93,6 +93,8 @@ interface DbAlarm {
   start_quarter?:   number;
   home_team_id?:    string;
   away_team_id?:    string;
+  home_logo?:       string;
+  away_logo?:       string;
   notify_at_start?: boolean;
   game_date?:       string;  // "YYYYMMDD" — present for future-day alarms
 }
@@ -580,10 +582,10 @@ export default function ActiveScreen() {
                   {(alarm.home_team_id || alarm.away_team_id) && (
                     <View style={styles.alarmTeamLogos}>
                       {alarm.away_team_id ? (
-                        <TeamBadge abbreviation={alarm.away_team_id} size={28} />
+                        <TeamBadge abbreviation={alarm.away_team_id} size={28} uri={alarm.away_logo || undefined} />
                       ) : null}
                       {alarm.home_team_id ? (
-                        <TeamBadge abbreviation={alarm.home_team_id} size={28} />
+                        <TeamBadge abbreviation={alarm.home_team_id} size={28} uri={alarm.home_logo || undefined} />
                       ) : null}
                     </View>
                   )}
