@@ -352,8 +352,9 @@ def _live_drama_ctx(eid, status, minute, hs, aw, slug, round_name, is_derby) -> 
         snap  = client.get_event_snapshot(eid)
         odds  = client.get_odds_snapshot(eid)
         swing = client.get_winprob_swing(eid)
+        surge = client.get_attack_surge(eid)
     except Exception:
-        snap, odds, swing = None, None, None
+        snap, odds, swing, surge = None, None, None, None
     if not snap and odds is None and swing is None:
         return None
 
@@ -374,7 +375,10 @@ def _live_drama_ctx(eid, status, minute, hs, aw, slug, round_name, is_derby) -> 
         "minute": minute or 0, "status": status, "competition": slug,
         "round_name": round_name, "is_derby": is_derby,
         "home": home, "away": away,
-        "momentum_pressure": sig.get("momentum_pressure"), "recent_events": [],
+        # Blend the cumulative dangerous-attack asymmetry with the live
+        # situation-stream surge (more responsive) into one pressure value.
+        "momentum_pressure": drama_engine.blend_pressure(sig.get("momentum_pressure"), surge),
+        "recent_events": [],
         "win_prob": win_probability.win_prob_from_snapshot(odds),
         "win_prob_swing": swing,
     }

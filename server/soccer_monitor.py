@@ -1251,10 +1251,13 @@ def _match_drama(match: dict):
                 for k, v in side_sig.items():
                     if v is not None:
                         dst[k] = v
-            # Live dangerous-attack pressure is more responsive than the REST
-            # momentum array — prefer it when present.
-            if sig.get("momentum_pressure") is not None:
-                ctx["momentum_pressure"] = sig["momentum_pressure"]
+            # Momentum: blend the cumulative dangerous-attack asymmetry with the
+            # live situation-stream surge (a late flurry of shots/dangerous
+            # attacks). Both beat the REST momentum array for responsiveness.
+            blended = drama_engine.blend_pressure(
+                sig.get("momentum_pressure"), _ws.get_attack_surge(eid))
+            if blended is not None:
+                ctx["momentum_pressure"] = blended
         except Exception:
             pass
     score = drama_engine.compute_drama(ctx)

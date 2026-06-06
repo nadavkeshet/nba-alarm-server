@@ -125,3 +125,22 @@ def test_match_drama_overlays_live_ws_stats(monkeypatch):
     assert captured["win_prob_swing"] == 0.3
     # dangerous-attack pressure (70-30)/100 = 0.4 overrides the None REST value
     assert abs(captured["momentum_pressure"] - 0.4) < 1e-9
+
+
+def test_match_drama_blends_attack_surge_into_momentum(monkeypatch):
+    """The live situation-stream surge blends with dangerous-attack pressure."""
+    import bsd_websocket
+    captured = {}
+    monkeypatch.setattr(sm.drama_engine, "context_from_match_detail",
+                        lambda d: {"home": {"score": 0}, "away": {"score": 1},
+                                   "momentum_pressure": None, "win_prob_swing": None})
+    monkeypatch.setattr(sm.drama_engine, "compute_drama",
+                        lambda ctx: captured.update(ctx) or _Score(8.0))
+    monkeypatch.setattr(sm, "_log_drama_snapshot", lambda *a: None)
+    monkeypatch.setattr(bsd_websocket, "get_winprob_swing", lambda eid, **k: None)
+    monkeypatch.setattr(bsd_websocket, "get_attack_surge", lambda eid, **k: 0.9)
+    monkeypatch.setattr(bsd_websocket, "get_live_event_state", lambda eid: {
+        "stats": {"home": {"dangerous_attack_pct": 70}, "away": {"dangerous_attack_pct": 30}}})
+    sm._match_drama({"id": "bsd-1", "status": "live", "minute": 85})
+    # blend(dangerous=0.4, surge=0.9) = 0.4*0.4 + 0.6*0.9 = 0.70
+    assert abs(captured["momentum_pressure"] - 0.70) < 1e-9

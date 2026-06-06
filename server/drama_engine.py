@@ -602,6 +602,21 @@ def live_signals_from_ws_event(snap: dict | None) -> dict:
     return out
 
 
+def blend_pressure(dangerous_attack: float | None,
+                   surge: float | None) -> float | None:
+    """Combine the cumulative dangerous-attack asymmetry with the live
+    situation-stream surge into a single momentum_pressure ∈ [-1, +1]
+    (+ = home pressing). The surge reacts faster (a late flurry of shots/dangerous
+    attacks shows up before the cumulative % moves), so it carries more weight.
+    Either input may be None; returns None only when both are."""
+    parts = [(v, w) for v, w in ((surge, 0.6), (dangerous_attack, 0.4))
+             if v is not None]
+    if not parts:
+        return None
+    tw = sum(w for _, w in parts)
+    return max(-1.0, min(1.0, sum(v * w for v, w in parts) / tw))
+
+
 def context_from_match_detail(detail: dict) -> dict:
     """Build a Drama Engine ctx from the rich BSD/365scores match detail.
 

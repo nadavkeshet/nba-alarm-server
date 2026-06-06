@@ -40,6 +40,20 @@ import win_probability
 logger = logging.getLogger(__name__)
 
 WS_URL = "wss://sports.bzzoiro.com/ws/live/"
+
+# Per-situation attacking-threat weight for the live-surge signal. Benign
+# situations (possession / safe / throw-in / goal-kick / offside / card /
+# substitution) are absent → weight 0. Values are the live `livedata.situation`
+# vocabulary observed off the wire.
+_SITUATION_THREAT: dict[str, float] = {
+    "goal": 1.0, "penalty": 1.0,
+    "bigchance": 0.9, "big_chance": 0.9,
+    "shotontarget": 0.7,
+    "goalkeeper_saved": 0.6, "shotsaved": 0.6,
+    "shotofftarget": 0.45, "shotblocked": 0.45, "shot": 0.5,
+    "dangerous": 0.4,
+    "corner": 0.3, "freekick": 0.15, "attack": 0.12,
+}
 MAX_SUBS_PER_SOCKET = 10  # BSD limit
 PING_INTERVAL_S = 30.0
 RECONNECT_BACKOFF_INITIAL = 1.0
@@ -87,6 +101,9 @@ class BSDLiveClient:
         # event_id → bounded history of (monotonic_ts, p_home, p_draw, p_away)
         # derived from odds frames, for win-probability swing detection.
         self._winprob_history: dict[int, deque] = {}
+        # event_id → bounded history of (monotonic_ts, side, situation) derived
+        # from livedata frames, for the live attacking-surge signal.
+        self._livedata_history: dict[int, deque] = {}
 
         self._callbacks: list[EventCallback] = []
 
@@ -208,6 +225,48 @@ class BSDLiveClient:
         if len(leads) < 2:
             return None
         return max(leads) - min(leads)
+
+    def get_attack_surge(self, event_id: int, window_s: float = 180.0) -> float | None:
+        """Live attacking-surge asymmetry over the last `window_s` seconds, in
+        [-1, +1] (+1 = home throwing everything forward, -1 = away). Built from
+        the `livedata` situation stream (dangerous attacks, shots, big chances…)
+        weighted by threat — a faster, finer momentum pulse than the cumulative
+        dangerous-attack %. None when there's too little attacking activity to be
+        meaningful (so it never manufactures pressure out of a quiet spell)."""
+        cutoff = time.monotonic() - window_s
+        with self._lock:
+            hist = self._livedata_history.get(event_id)
+            if not hist:
+                return None
+            recent = [(side, sit) for (ts, side, sit) in hist if ts >= cutoff]
+        home_w = away_w = 0.0
+        for side, sit in recent:
+            w = _SITUATION_THREAT.get((sit or "").lower(), 0.0)
+            if w <= 0:
+                continue
+            if side == "home":
+                home_w += w
+            elif side == "away":
+                away_w += w
+        if home_w + away_w < 0.6:        # noise floor — not enough threat to score
+            return None
+        return (home_w - away_w) / (home_w + away_w)
+
+    def _record_livedata(self, event_id: int, payload: dict) -> None:
+        """Append a (ts, side, situation) sample for the attacking-surge signal.
+        Best-effort — never raise on the WS thread. Caller holds self._lock."""
+        try:
+            side = payload.get("side")
+            situation = payload.get("situation")
+            if not situation:
+                return
+            hist = self._livedata_history.get(event_id)
+            if hist is None:
+                hist = deque(maxlen=80)
+                self._livedata_history[event_id] = hist
+            hist.append((time.monotonic(), side, situation))
+        except Exception:
+            pass
 
     def _record_winprob(self, event_id: int, odds_payload: dict) -> None:
         """Append the implied win-prob derived from an odds frame. Best-effort —
@@ -394,6 +453,7 @@ class BSDLiveClient:
                 self._state_event[event_id] = payload
             elif kind == "livedata":
                 self._state_livedata[event_id] = payload
+                self._record_livedata(event_id, payload)
             elif kind == "odds":
                 self._state_odds[event_id] = payload
                 self._record_winprob(event_id, payload)
@@ -472,6 +532,15 @@ def get_winprob_swing(event_id: int, window_s: float = 300.0) -> float | None:
         if _singleton is None:
             return None
     return _singleton.get_winprob_swing(event_id, window_s)
+
+
+def get_attack_surge(event_id: int, window_s: float = 180.0) -> float | None:
+    """Module-level convenience: live attacking-surge asymmetry, or None."""
+    global _singleton
+    with _singleton_lock:
+        if _singleton is None:
+            return None
+    return _singleton.get_attack_surge(event_id, window_s)
 
 
 def is_subscription_active() -> bool:
