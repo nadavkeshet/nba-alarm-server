@@ -897,14 +897,16 @@ def _ws_overlay(out: dict, event_id: int) -> None:
         if isinstance(time_obj.get("minute"), (int, float)):
             out["minute"] = int(time_obj["minute"])
 
+        # Per-team stats live under event_snap['stats'][side] (event_snap[side]
+        # is only team identity), so read the stats block — not the team dict.
+        ws_stats = event_snap.get("stats") or {}
         curr_stats: dict = out.get("stats") or {}
         for side in ("home", "away"):
-            ws_side = event_snap.get(side) or {}
-            if not isinstance(ws_side, dict):
+            ws_side = ws_stats.get(side) or {}
+            if not isinstance(ws_side, dict) or not ws_side:
                 continue
             merged = {**curr_stats.get(side, {}), **_ws_side_to_stats(ws_side)}
             curr_stats[side] = merged
-            # xg also lives on the team side object used by the score header
             if isinstance(ws_side.get("xg"), (int, float)):
                 out.setdefault(side, {})["xg"] = float(ws_side["xg"])
         out["stats"] = curr_stats
@@ -966,30 +968,63 @@ def build_live_snapshot(canonical: str) -> dict:
     out: dict = {"ws_active": True, "event_id": event_id}
 
     if event_snap:
+        time_obj = event_snap.get("time") or {}
         out["score"]  = event_snap.get("score")
-        out["minute"] = (event_snap.get("time") or {}).get("minute")
-        out["status"] = (event_snap.get("time") or {}).get("status")
+        out["minute"] = time_obj.get("minute")
+        out["status"] = time_obj.get("status")
+        # Clock anchor: the app ticks a second-accurate clock LOCALLY from the
+        # timestamp the current period kicked off — no per-second polling.
+        out["period"]                = time_obj.get("period")
+        out["period_started_at_uts"] = time_obj.get("period_started_at_uts")
+        out["injury_time"]           = time_obj.get("injury_time")
+        out["second"]                = time_obj.get("second")
+        # Per-team stats live under event_snap['stats'][side] (event_snap[side]
+        # is only team identity), so read the stats block — not the team dict.
+        ws_stats = event_snap.get("stats") or {}
         stats: dict = {}
         for side in ("home", "away"):
-            ws_side = event_snap.get(side) or {}
-            if isinstance(ws_side, dict):
+            ws_side = ws_stats.get(side) or {}
+            if isinstance(ws_side, dict) and ws_side:
                 stats[side] = _ws_side_to_stats(ws_side)
         if stats:
             out["stats"] = stats
+
+    # Live momentum pressure ∈ [-1, +1] (+ = home pressing) — the same blended
+    # dangerous-attack + situation-surge signal the Drama Engine scores on,
+    # surfaced here for the live momentum bar.
+    try:
+        sig = drama_engine.live_signals_from_ws_event(event_snap)
+        mp = drama_engine.blend_pressure(sig.get("momentum_pressure"),
+                                         ws.get_attack_surge(event_id))
+        if mp is not None:
+            out["momentum_pressure"] = round(mp, 4)
+    except Exception:
+        pass
 
     if ld:
         coords = ld.get("coordinates") or []
         first  = coords[0] if coords else {}
         out["livedata"] = {
-            "side":      ld.get("side"),
-            "situation": ld.get("situation"),
-            "x":         first.get("x"),
-            "y":         first.get("y"),
-            "uts":       ld.get("uts"),
+            "side":       ld.get("side"),
+            "situation":  ld.get("situation"),
+            "x":          first.get("x"),
+            "y":          first.get("y"),
+            "uts":        ld.get("uts"),
+            "commentary": ld.get("commentary"),
         }
 
     if odds:
         out["odds"] = odds.get("odds") or odds
+        # Live 1X2 win probability + favorite-flip swing, for the win-prob bar.
+        try:
+            wp = win_probability.win_prob_from_snapshot(odds)
+            if wp:
+                out["win_prob"] = [round(wp[0], 4), round(wp[1], 4), round(wp[2], 4)]
+            sw = ws.get_winprob_swing(event_id)
+            if sw is not None:
+                out["win_prob_swing"] = round(sw, 4)
+        except Exception:
+            pass
 
     return out
 
