@@ -81,7 +81,13 @@ def _score(query_lower: str, target: str) -> float:
     """Lightweight similarity score in [0, 1].
 
     Higher is better. Returns 0 when there is no match at all.
-    Heuristic: prefix match > word-start match > substring match.
+    Scoring priority (highest first):
+      1.0  exact match
+      0.9  full-string prefix  ("macca" → "Maccabi Tel Aviv")
+      0.85 all query-words match as word-prefixes in target
+           ("maccabi tel" → each query word is a prefix of some target word)
+      0.7  any single target-word starts with the full query
+      0.5  full query is a substring of target
     """
     if not target:
         return 0.0
@@ -90,10 +96,23 @@ def _score(query_lower: str, target: str) -> float:
         return 1.0
     if t.startswith(query_lower):
         return 0.9
-    # Word-start match (any word in target starts with query)
-    for word in t.split():
-        if word.startswith(query_lower):
+
+    t_words = t.split()
+    q_words = query_lower.split()
+
+    # Multi-word query: every query token must prefix some target word.
+    # "maccabi tel" → "maccabi" prefixes "maccabi" ✓  AND  "tel" prefixes "tel" ✓
+    # "real mad"    → "real" ✓  AND  "mad" prefixes "madrid" ✓
+    if len(q_words) > 1:
+        if all(any(tw.startswith(qw) for tw in t_words) for qw in q_words):
+            return 0.85
+
+    # Single-word query: any target word starts with it
+    for tw in t_words:
+        if tw.startswith(query_lower):
             return 0.7
+
+    # Full substring
     if query_lower in t:
         return 0.5
     return 0.0
