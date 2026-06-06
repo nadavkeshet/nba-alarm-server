@@ -403,7 +403,7 @@ export default function FeedScreen() {
 
     // Silent refreshes only cover the "active" window (yesterday → next 7 days)
     // Full loads cover a wider range for schedule browsing
-    const dates = silent ? dateRange(1, 14) : dateRange(3, 21);
+    const dates = silent ? dateRange(1, 25) : dateRange(3, 30);
 
     // Always run a flush interval — in silent mode the seed data is already visible
     // so intermediate flushes just update individual rows as requests complete.
@@ -859,7 +859,7 @@ function SearchFollowsModal({
             {teamMatchesLoading ? (
               <ActivityIndicator style={{ marginTop: 48 }} color={colors.textMuted} />
             ) : (
-              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
+              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: insets.bottom + 130 }}>
                 {upcomingMatches.length > 0 && (
                   <>
                     <Text style={[searchStyles.sectionHeader, { color: colors.textMuted }]}>UPCOMING</Text>
@@ -920,7 +920,7 @@ function SearchFollowsModal({
             )}
 
             {/* Add / Remove button */}
-            <View style={[searchStyles.previewFooter, { borderTopColor: colors.border, backgroundColor: colors.bg }]}>
+            <View style={[searchStyles.previewFooter, { borderTopColor: colors.border, backgroundColor: colors.bg, paddingBottom: insets.bottom + 12 }]}>
               {(() => {
                 const followed = isTeamFollowed(localStore, previewTeam.id);
                 if (addedConfirm) {
