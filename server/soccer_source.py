@@ -930,6 +930,24 @@ def _ws_overlay(out: dict, event_id: int) -> None:
         out["odds"] = odds.get("odds") or odds
 
 
+_WS_PERIOD_INT: dict[str, int] = {
+    "1": 1, "1t": 1, "1st": 1, "1st_half": 1,
+    "2": 2, "2t": 2, "2nd": 2, "2nd_half": 2,
+    "3": 3, "et1": 3, "et_1": 3, "et 1": 3,
+    "4": 4, "et2": 4, "et_2": 4, "et 2": 4,
+}
+
+
+def _ws_period_int(raw) -> int | None:
+    """Normalize the WS `time.period` (int `1` or code like `"2T"`) to a plain
+    1–4 the app can use for the clock's period offset. None when unknown."""
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw if 1 <= raw <= 4 else None
+    return _WS_PERIOD_INT.get(str(raw or "").strip().lower())
+
+
 def build_live_snapshot(canonical: str) -> dict:
     """Build the lightweight WS-only live-state response for /soccer/live/*.
 
@@ -973,8 +991,10 @@ def build_live_snapshot(canonical: str) -> dict:
         out["minute"] = time_obj.get("minute")
         out["status"] = time_obj.get("status")
         # Clock anchor: the app ticks a second-accurate clock LOCALLY from the
-        # timestamp the current period kicked off — no per-second polling.
-        out["period"]                = time_obj.get("period")
+        # timestamp the current period kicked off — no per-second polling. The WS
+        # `period` is sometimes an int (1) and sometimes a code ("2T"); normalize
+        # to a plain 1–4 so the client's Int? decode never breaks.
+        out["period"]                = _ws_period_int(time_obj.get("period"))
         out["period_started_at_uts"] = time_obj.get("period_started_at_uts")
         out["injury_time"]           = time_obj.get("injury_time")
         out["second"]                = time_obj.get("second")

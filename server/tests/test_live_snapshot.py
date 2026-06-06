@@ -65,3 +65,13 @@ def test_commentary_and_stats(monkeypatch):
 
 def test_non_bsd_is_inactive(monkeypatch):
     assert ss.build_live_snapshot("s365-123") == {"ws_active": False}
+
+
+def test_ws_period_int_normalizes_codes():
+    assert ss._ws_period_int(1) == 1
+    assert ss._ws_period_int("2T") == 2          # the string code that broke decode
+    assert ss._ws_period_int("1st_half") == 1
+    assert ss._ws_period_int("ET1") == 3
+    assert ss._ws_period_int(None) is None
+    assert ss._ws_period_int("halftime") is None
+    assert ss._ws_period_int(True) is None        # not a period
