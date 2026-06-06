@@ -3525,6 +3525,29 @@ def _i(d: dict, *keys: str) -> int:
     return 0
 
 
+@app.get("/basketball/team/{team_id}/games")
+def basketball_team_games(team_id: str, league: str = "nba"):
+    """Recent + upcoming games for a basketball team in the 365scores rolling window.
+    Returns games in ESPN event format, sorted by date."""
+    from score365_adapter import _fetch_competition_window, _transform_game, COMPETITION_IDS
+    comp_id = COMPETITION_IDS.get(league)
+    if not comp_id:
+        return []
+    try:
+        raw = _fetch_competition_window(comp_id)
+    except Exception as exc:
+        log.warning("basketball_team_games fetch failed for team=%s league=%s: %s", team_id, league, exc)
+        return []
+    results = []
+    for g in raw:
+        hid = str((g.get("homeCompetitor") or {}).get("id", ""))
+        aid = str((g.get("awayCompetitor") or {}).get("id", ""))
+        if team_id in (hid, aid):
+            results.append(_transform_game(g, league=league))
+    results.sort(key=lambda x: x.get("date", ""))
+    return results
+
+
 @app.get("/basketball/league/{slug}/standings")
 def basketball_league_standings(slug: str):
     """Current standings for a basketball league slug (e.g. nba, euroleague)."""

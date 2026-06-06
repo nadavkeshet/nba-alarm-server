@@ -25,7 +25,7 @@ import { CompactMatchRow } from '../../components/compact-match-row';
 import { tabHeaderTitle } from '../../constants/tokens';
 import { LeagueLogo } from '../../components/league-logo';
 import { LeagueCatalog } from '../../services/league-catalog';
-import { getMatchesCached, invalidateMatchCache, searchAll, getTeamMatches } from '../../services/soccer-service';
+import { getMatchesCached, invalidateMatchCache, searchAll, getTeamMatches, getBasketballTeamGames } from '../../services/soccer-service';
 import type { SearchTeam, SearchLeague } from '../../services/soccer-service';
 import type { SoccerMatch } from '../../types/soccer';
 import { isLiveLike, displayMinute, soccerMatchRoute } from '../../types/soccer';
@@ -728,6 +728,7 @@ function SearchFollowsModal({
   // Team preview panel
   const [previewTeam, setPreviewTeam]           = useState<SearchTeam | null>(null);
   const [teamMatches, setTeamMatches]           = useState<SoccerMatch[]>([]);
+  const [bbTeamGames, setBbTeamGames]           = useState<any[]>([]);
   const [teamMatchesLoading, setTeamMatchesLoading] = useState(false);
   const [addedConfirm, setAddedConfirm]         = useState(false);
 
@@ -744,15 +745,24 @@ function SearchFollowsModal({
     }
   }, [visible]);
 
-  // Fetch matches when a football team is previewed
+  // Fetch matches/games when a team is previewed
   useEffect(() => {
-    if (!previewTeam || previewTeam.sport !== 'football') return;
+    if (!previewTeam) return;
     setTeamMatches([]);
+    setBbTeamGames([]);
     setTeamMatchesLoading(true);
-    getTeamMatches(previewTeam.id)
-      .then(m => setTeamMatches(m))
-      .catch(() => {})
-      .finally(() => setTeamMatchesLoading(false));
+    if (previewTeam.sport === 'football') {
+      getTeamMatches(previewTeam.id)
+        .then(m => setTeamMatches(m))
+        .catch(() => {})
+        .finally(() => setTeamMatchesLoading(false));
+    } else {
+      const league = previewTeam.league ?? previewTeam.leagues?.[0] ?? 'nba';
+      getBasketballTeamGames(previewTeam.id, league)
+        .then(g => setBbTeamGames(g))
+        .catch(() => {})
+        .finally(() => setTeamMatchesLoading(false));
+    }
   }, [previewTeam]);
 
   useEffect(() => {
@@ -807,14 +817,8 @@ function SearchFollowsModal({
   };
 
   const handleTeamRowPress = (team: SearchTeam) => {
-    if (team.sport === 'football') {
-      // Open preview panel for football teams
-      setPreviewTeam(team);
-      setAddedConfirm(false);
-    } else {
-      // Basketball: instant toggle (no preview needed)
-      doToggleTeam(team);
-    }
+    setPreviewTeam(team);
+    setAddedConfirm(false);
   };
 
   const handleAddRemove = async () => {
@@ -830,8 +834,47 @@ function SearchFollowsModal({
   };
 
   const hasResults = results.teams.length > 0 || results.leagues.length > 0;
+  // Soccer
   const upcomingMatches = teamMatches.filter(m => m.status === 'scheduled').slice(0, 6);
   const recentMatches   = teamMatches.filter(m => m.status === 'ft' || m.status === 'aet').slice(-4);
+  // Basketball — extract from ESPN format
+  const bbUpcoming = bbTeamGames.filter(g => g?.status?.type?.state === 'pre').slice(0, 6);
+  const bbRecent   = bbTeamGames.filter(g => g?.status?.type?.state === 'post').slice(-4);
+  const hasGames   = upcomingMatches.length + recentMatches.length + bbUpcoming.length + bbRecent.length > 0;
+
+  function _bbGameRow(g: any, teamName: string, key: string) {
+    const comps = g?.competitions?.[0]?.competitors ?? [];
+    const home  = comps.find((c: any) => c.homeAway === 'home');
+    const away  = comps.find((c: any) => c.homeAway === 'away');
+    const myAbbr  = (teamName || '').toUpperCase().slice(0, 3);
+    const isHome  = home?.team?.abbreviation === myAbbr ||
+                    home?.team?.displayName?.toLowerCase().includes((teamName || '').toLowerCase());
+    const opp     = isHome ? (away?.team?.displayName ?? away?.team?.abbreviation ?? '?')
+                           : (home?.team?.displayName ?? home?.team?.abbreviation ?? '?');
+    const myScore  = isHome ? Number(home?.score) : Number(away?.score);
+    const oppScore = isHome ? Number(away?.score) : Number(home?.score);
+    const isFinal  = g?.status?.type?.state === 'post';
+    const won  = isFinal && myScore > oppScore;
+    const drew = isFinal && myScore === oppScore;
+    return (
+      <View key={key} style={[searchStyles.matchRow, { borderBottomColor: colors.border }]}>
+        <Text style={[searchStyles.matchDate, { color: colors.textMuted }]}>{_formatKickoff(g.date)}</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={[searchStyles.matchName, { color: colors.textPrimary }]} numberOfLines={1}>
+            {isHome ? 'vs' : '@'} <Text style={{ fontWeight: '700' }}>{opp}</Text>
+          </Text>
+          <Text style={[searchStyles.matchLeague, { color: colors.textMuted }]}>{_compLabel(g.league)}</Text>
+        </View>
+        {isFinal && (
+          <View style={[searchStyles.scoreBadge, { backgroundColor: won ? '#14532d' : drew ? colors.card : '#450a0a' }]}>
+            <Text style={[searchStyles.scoreTxt, { color: won ? '#4ade80' : drew ? colors.textMuted : '#f87171' }]}>
+              {myScore}–{oppScore}
+            </Text>
+          </View>
+        )}
+      </View>
+    );
+  }
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
@@ -860,12 +903,13 @@ function SearchFollowsModal({
               <ActivityIndicator style={{ marginTop: 48 }} color={colors.textMuted} />
             ) : (
               <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: insets.bottom + 130 }}>
+                {/* ── Soccer upcoming ── */}
                 {upcomingMatches.length > 0 && (
                   <>
                     <Text style={[searchStyles.sectionHeader, { color: colors.textMuted }]}>UPCOMING</Text>
                     {upcomingMatches.map(m => {
                       const isHome = m.home?.name === previewTeam.name;
-                      const opp   = isHome ? m.away?.name : m.home?.name;
+                      const opp = isHome ? m.away?.name : m.home?.name;
                       return (
                         <View key={m.id} style={[searchStyles.matchRow, { borderBottomColor: colors.border }]}>
                           <Text style={[searchStyles.matchDate, { color: colors.textMuted }]}>{_formatKickoff(m.kickoff)}</Text>
@@ -880,6 +924,14 @@ function SearchFollowsModal({
                     })}
                   </>
                 )}
+                {/* ── Basketball upcoming ── */}
+                {bbUpcoming.length > 0 && (
+                  <>
+                    <Text style={[searchStyles.sectionHeader, { color: colors.textMuted }]}>UPCOMING</Text>
+                    {bbUpcoming.map((g, i) => _bbGameRow(g, previewTeam.name, `bbu-${i}`))}
+                  </>
+                )}
+                {/* ── Soccer recent ── */}
                 {recentMatches.length > 0 && (
                   <>
                     <Text style={[searchStyles.sectionHeader, { color: colors.textMuted, marginTop: 8 }]}>RECENT</Text>
@@ -888,7 +940,7 @@ function SearchFollowsModal({
                       const myScore  = isHome ? m.home?.score : m.away?.score;
                       const oppScore = isHome ? m.away?.score : m.home?.score;
                       const opp = isHome ? m.away?.name : m.home?.name;
-                      const won = myScore != null && oppScore != null && myScore > oppScore;
+                      const won  = myScore != null && oppScore != null && myScore > oppScore;
                       const drew = myScore != null && oppScore != null && myScore === oppScore;
                       return (
                         <View key={m.id} style={[searchStyles.matchRow, { borderBottomColor: colors.border }]}>
@@ -899,9 +951,7 @@ function SearchFollowsModal({
                             </Text>
                             <Text style={[searchStyles.matchLeague, { color: colors.textMuted }]}>{_compLabel(m.competition)}</Text>
                           </View>
-                          <View style={[searchStyles.scoreBadge, {
-                            backgroundColor: won ? '#14532d' : drew ? colors.card : '#450a0a',
-                          }]}>
+                          <View style={[searchStyles.scoreBadge, { backgroundColor: won ? '#14532d' : drew ? colors.card : '#450a0a' }]}>
                             <Text style={[searchStyles.scoreTxt, { color: won ? '#4ade80' : drew ? colors.textMuted : '#f87171' }]}>
                               {myScore ?? '—'}–{oppScore ?? '—'}
                             </Text>
@@ -911,7 +961,14 @@ function SearchFollowsModal({
                     })}
                   </>
                 )}
-                {upcomingMatches.length === 0 && recentMatches.length === 0 && (
+                {/* ── Basketball recent ── */}
+                {bbRecent.length > 0 && (
+                  <>
+                    <Text style={[searchStyles.sectionHeader, { color: colors.textMuted, marginTop: 8 }]}>RECENT</Text>
+                    {bbRecent.map((g, i) => _bbGameRow(g, previewTeam.name, `bbr-${i}`))}
+                  </>
+                )}
+                {!hasGames && (
                   <View style={searchStyles.placeholder}>
                     <Text style={[searchStyles.placeholderTxt, { color: colors.textMuted }]}>No recent or upcoming games found</Text>
                   </View>
@@ -1026,10 +1083,7 @@ function SearchFollowsModal({
                               {team.league ? ` · ${leagueDisplayName(team.league)}` : ''}
                             </Text>
                           </View>
-                          {team.sport === 'football'
-                            ? <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
-                            : <Ionicons name={followed ? 'star' : 'star-outline'} size={22} color={followed ? '#F59E0B' : colors.textMuted} />
-                          }
+                          <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
                         </TouchableOpacity>
                       );
                     })}

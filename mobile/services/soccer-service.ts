@@ -368,3 +368,12 @@ export async function getTeamMatches(teamId: string): Promise<SoccerMatch[]> {
     return [];
   }
 }
+
+export async function getBasketballTeamGames(teamId: string, league: string): Promise<any[]> {
+  try {
+    const res = await _get<any[]>(`/basketball/team/${teamId}/games`, { league });
+    return Array.isArray(res) ? res : [];
+  } catch {
+    return [];
+  }
+}
