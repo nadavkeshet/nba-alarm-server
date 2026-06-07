@@ -3,7 +3,7 @@ Clutch Alarm – 365Scores Adapter
 ==================================
 
 Single source of truth for all basketball data. Fetches from 365scores.com
-(no API key required) and transforms responses into the ESPN-compatible
+(no API key required) and transforms responses into the normalized
 format that main.py, monitor.py, epg.py expect.
 
 Supports NBA and Euroleague via competition IDs.
@@ -308,9 +308,9 @@ _365_TEAM_IDS: dict[str, int] = {
 }
 
 # Legacy → 365scores team ID migration map.
-# Keys cover both ESPN team IDs (e.g. "1" = ATL) and API-Basketball IDs
+# Keys cover both legacy team IDs (e.g. "1" = ATL) and API-Basketball IDs
 # (e.g. "132" = ATL) that may exist in old DB rows from earlier deployments.
-_ESPN_TEAM_IDS: dict[str, str] = {
+_LEGACY_TEAM_IDS: dict[str, str] = {
     "1": "ATL", "2": "BOS", "17": "BKN", "30": "CHA", "4": "CHI",
     "5": "CLE", "6": "DAL", "7": "DEN", "8": "DET", "9": "GS",
     "10": "HOU", "11": "IND", "12": "LAC", "13": "LAL", "29": "MEM",
@@ -327,7 +327,7 @@ _APIBB_TEAM_IDS: dict[str, str] = {
     "157": "SAC", "158": "SA", "159": "TOR", "160": "UTAH", "161": "WSH",
 }
 LEGACY_TO_365_TEAM_ID: dict[str, str] = {
-    **{eid: str(_365_TEAM_IDS[abbr]) for eid, abbr in _ESPN_TEAM_IDS.items()},
+    **{eid: str(_365_TEAM_IDS[abbr]) for eid, abbr in _LEGACY_TEAM_IDS.items()},
     **{aid: str(_365_TEAM_IDS[abbr]) for aid, abbr in _APIBB_TEAM_IDS.items()},
 }
 
@@ -353,14 +353,14 @@ _QUARTER_PERIOD = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4}
 
 def _translate_status(game: dict) -> dict:
     """
-    Convert 365scores status fields to ESPN status format.
+    Convert 365scores status fields to normalized status format.
 
     365scores:
       statusGroup: 2=pre, 3=live, 4=post
       statusText:  "Scheduled" | "Q1"-"Q4" | "Halftime" | "Overtime" | "Final" | …
       gameTimeDisplay: "MM:SS" remaining in quarter (empty when not live)
 
-    ESPN format:
+    normalized format:
       {"type": {"state": "pre|in|post", "detail": "..."}, "period": int, "displayClock": ""}
     """
     status_group = game.get("statusGroup", 2)
@@ -394,7 +394,7 @@ def _translate_status(game: dict) -> dict:
 def _365_team_crest_url(team_id: int | str | None) -> str:
     """Public 365scores CDN URL for a competitor logo. Free, no auth.
     Works for every competition 365scores covers (Euroleague, EuroCup,
-    BCL, Israeli Winner League, etc.). NBA still comes from ESPN."""
+    BCL, Israeli Winner League, etc.). All basketball is 365-sourced."""
     if not team_id:
         return ""
     return (
@@ -404,7 +404,7 @@ def _365_team_crest_url(team_id: int | str | None) -> str:
 
 
 def _make_team_obj(comp: dict) -> dict:
-    """Build ESPN-format team object from a 365scores competitor dict."""
+    """Build 365-format team object from a 365scores competitor dict."""
     tid = comp.get("id", 0)
     # Non-NBA leagues: id-keyed lookup gives us a stable canonical abbr
     # regardless of which competition the game came from.
@@ -535,7 +535,7 @@ def next_game_start(leagues: list[str] | None = None) -> datetime | None:
 
 def fetch_games(date_str: str, league: str = "nba") -> list[dict]:
     """
-    Fetch games for a date and league, return in ESPN event format.
+    Fetch games for a date and league, return in normalized event format.
     date_str can be YYYYMMDD or YYYY-MM-DD.
 
     Note: 365scores only exposes a rolling ~10-day window via the
@@ -555,7 +555,7 @@ def fetch_games(date_str: str, league: str = "nba") -> list[dict]:
 
 
 def _transform_game(game: dict, league: str = "nba") -> dict:
-    """Transform one 365scores game dict into ESPN event format."""
+    """Transform one 365scores game dict into normalized event format."""
     game_id = str(game["id"])
     home_comp = game.get("homeCompetitor", {})
     away_comp = game.get("awayCompetitor", {})
@@ -598,7 +598,7 @@ _BOXSCORE_TTL = 55  # seconds — matches 60s poll interval
 
 def fetch_player_boxscore(game_id: str) -> dict | None:
     """
-    Fetch player statistics for a game in ESPN boxscore format.
+    Fetch player statistics for a game in normalized boxscore format.
     Cached for TTL seconds so multiple monitoring threads share one HTTP call.
 
     365scores provides steals, blocks, and turnovers (unlike API-Basketball).

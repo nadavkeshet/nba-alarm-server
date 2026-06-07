@@ -594,7 +594,7 @@ def fetch_game_summary_roster(game_id: str, date: str | None = None, league: str
     # ── Step 1: collect raw team stubs ─────────────────────────────────────────
     # Identify both teams (name + crest) from the SAME normalized event detail
     # the /summary header uses — it works for bsd-* AND s365-* ids and always
-    # carries a 365 logo URL. The legacy ESPN-style `competitions`/`competitors`
+    # carries a 365 logo URL. The legacy legacy `competitions`/`competitors`
     # shape only exists for some upstreams, so the flat bsd/s365 detail
     # (`home_team`/`away_team`) was silently missed and the response came back
     # with zero teams — i.e. no logos next to the alarm.
@@ -616,7 +616,7 @@ def fetch_game_summary_roster(game_id: str, date: str | None = None, league: str
     except Exception as exc:
         log.warning("Game summary: event detail fetch failed for %s: %s", game_id, exc)
 
-    # Legacy fallback: older ESPN-style scoreboard shapes, used only when the
+    # Legacy fallback: older legacy scoreboard shapes, used only when the
     # normalized detail came back empty (e.g. a numeric legacy id off-cache).
     if not team_stubs and (not source_prefix or source_prefix == "s365"):
         lookup_id = native_id  # numeric 365scores id

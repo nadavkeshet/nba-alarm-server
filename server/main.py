@@ -474,7 +474,7 @@ def _init_db() -> None:
 
 def _migrate_team_ids_to_365() -> None:
     """
-    Migrate any legacy team IDs (ESPN or API-Basketball) in favorite_teams
+    Migrate any legacy team IDs (legacy or API-Basketball) in favorite_teams
     to 365scores IDs. Safe to re-run; rows already on 365 IDs are skipped.
 
     Player IDs are not auto-migrated — users re-add players from the in-app
@@ -1343,7 +1343,7 @@ async def _alarm_poller() -> None:
                     log.warning("Poller: %s/%s scoreboard fetch failed: %s", league, date_str, exc)
                     events_by_group[key] = []
 
-            # Pre-fetch boxscore summaries for all player alarms (still ESPN-based)
+            # Pre-fetch boxscore summaries for all player alarms (still 365-based)
             _summary_cache.clear()
             player_game_ids = {
                 alarm.game_id for alarm in alarms
@@ -1659,7 +1659,7 @@ async def lifespan(_app: FastAPI):
         log.warning("could not raise sync-route thread limiter: %s", lim_exc)
 
     _init_db()
-    _migrate_team_ids_to_365()  # legacy ESPN/API-Basketball → 365scores
+    _migrate_team_ids_to_365()  # legacy legacy/API-Basketball → 365scores
     _load_fired_alerts_from_db()   # hydrate dedup set before radar starts
     _purge_old_alarms()            # delete inactive alarms older than 7 days
     _cleanup_prefixed_alarms()     # expire pre-fix bsd-*/s365-* alarms
@@ -2637,7 +2637,7 @@ def games(
 
     Routes through the basketball_source cascade (BSD primary, 365scores
     fallback) for leagues we've migrated. Falls back to the legacy
-    `get_games_for_date` path for anything not yet routed (e.g. ESPN
+    `get_games_for_date` path for anything not yet routed (e.g. legacy
     direct calls used by monitor.py).
     """
     import basketball_source as _bb
@@ -3678,7 +3678,7 @@ def _i(d: dict, *keys: str) -> int:
 @app.get("/basketball/team/{team_id}/games")
 def basketball_team_games(team_id: str, league: str = "nba"):
     """Recent + upcoming games for a basketball team in the 365scores rolling window.
-    Returns games in ESPN event format, sorted by date."""
+    Returns games in normalized event format, sorted by date."""
     from score365_adapter import _fetch_competition_window, _transform_game, COMPETITION_IDS
     comp_id = COMPETITION_IDS.get(league)
     if not comp_id:
@@ -4570,7 +4570,7 @@ def watch_scores(date: str = "", league: str = "nba", tz: Optional[str] = None):
     recent = _watch_date_is_recent(game_date)
 
     # Use the SAME game source as the schedule feed (BSD-primary cascade), not
-    # the legacy ESPN `get_games_for_date` — which no longer surfaces BSD games,
+    # the legacy `get_games_for_date` — which no longer surfaces BSD games,
     # so BSD-sourced leagues (NBA, etc.) yielded zero games here and never got a
     # watch-score badge. Going through basketball_source also guarantees the
     # team abbreviations (and tz day-bucket) match the cards' lookup key exactly.

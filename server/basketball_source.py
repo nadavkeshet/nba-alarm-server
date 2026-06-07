@@ -13,7 +13,7 @@ Source cascade per league:
       365scores only
 
 All methods return dicts in a single canonical "Game" shape compatible
-with what the existing /games endpoint already produces (ESPN-like
+with what the existing /games endpoint already produces (normalized
 event objects). That keeps `monitor.py`, the iOS app, and the alarm
 engine unchanged while we shift sources underneath.
 
@@ -36,8 +36,8 @@ import team_names_he
 logger = logging.getLogger(__name__)
 
 
-def _attach_espn_team_he(team: dict | None) -> None:
-    """Stamp Hebrew onto an ESPN-shape team dict in place. The full English
+def _attach_team_he(team: dict | None) -> None:
+    """Stamp Hebrew onto an normalized shape team dict in place. The full English
     name lives in `displayName` (the `name` field carries the short name), so
     resolve off `displayName` and emit both `displayName_he` and `name_he`
     (mirroring each English key). No-op on a lookup miss."""
@@ -754,7 +754,7 @@ def _enforce_date_and_dedupe(games: list[dict], date_iso: str, tz: ZoneInfo) -> 
 
 
 # ---------------------------------------------------------------------------
-# Normalizers — emit the ESPN-like game shape the rest of the app already speaks
+# Normalizers — emit the normalized game shape the rest of the app already speaks
 
 
 def _abbr_from_365_roster(league_slug: str, team_name: str | None) -> str | None:
@@ -791,10 +791,10 @@ def _abbr_from_365_roster(league_slug: str, team_name: str | None) -> str | None
 
 
 def _from_bsd_event(event: dict, *, slug: str) -> dict:
-    """BSD basketball event → ESPN-compatible game dict.
+    """BSD basketball event → normalized game dict.
 
     The downstream consumer is `GameParser.parse` on iOS, which expects
-    ESPN's `competitions[].competitors[].team.{id,abbreviation,displayName}`
+    the standard `competitions[].competitors[].team.{id,abbreviation,displayName}`
     shape. We translate.
     """
     eid = event.get("id")
@@ -802,7 +802,7 @@ def _from_bsd_event(event: dict, *, slug: str) -> dict:
     home_team = event.get("home_team", {}) or {}
     away_team = event.get("away_team", {}) or {}
 
-    espn_state, espn_detail, period = _bsd_status_to_espn(bsd_status)
+    state_str, detail_str, period = _bsd_status_to_state(bsd_status)
 
     # Resolve abbreviations through the 365scores roster so they always
     # match what the mobile player picker finds in /all-teams-and-players.
@@ -841,8 +841,8 @@ def _from_bsd_event(event: dict, *, slug: str) -> dict:
             "logo": _basketball_logo_url(slug, away_team.get("name"), away_team.get("id")),
         },
     }
-    _attach_espn_team_he(home_competitor["team"])
-    _attach_espn_team_he(away_competitor["team"])
+    _attach_team_he(home_competitor["team"])
+    _attach_team_he(away_competitor["team"])
 
     return {
         "id": canonical_id("bsd", eid),
@@ -853,13 +853,13 @@ def _from_bsd_event(event: dict, *, slug: str) -> dict:
         "name": f"{away_team.get('name', '')} at {home_team.get('name', '')}",
         "date": event.get("event_date"),
         "status": {
-            "type": {"state": espn_state, "detail": espn_detail},
+            "type": {"state": state_str, "detail": detail_str},
             "period": period,
             "displayClock": "",
         },
         "competitions": [{
             "status": {
-                "type": {"state": espn_state, "detail": espn_detail},
+                "type": {"state": state_str, "detail": detail_str},
                 "period": period,
                 "displayClock": "",
             },
@@ -1131,8 +1131,8 @@ def s365_player_detail(athlete_id: str | int) -> dict | None:
     }
 
 
-def _bsd_status_to_espn(status: str) -> tuple[str, str, int]:
-    """BSD basketball status → ESPN's (state, detail, period) tuple.
+def _bsd_status_to_state(status: str) -> tuple[str, str, int]:
+    """BSD basketball status → the standard (state, detail, period) tuple.
 
     The live BSD basketball API emits: 'scheduled' | 'live' | 'finished' |
     'postponed' | 'cancelled'. (The legacy 'notstarted'/'inprogress' spellings
@@ -1152,8 +1152,8 @@ def _bsd_status_to_espn(status: str) -> tuple[str, str, int]:
 
 
 def _from_365_event(event: dict, *, slug: str) -> dict:
-    """365scores basketball event → ESPN-shape. score365_adapter.fetch_games
-    already returns ESPN-shaped dicts — we just stamp the canonical id and
+    """365scores basketball event → normalized shape. score365_adapter.fetch_games
+    already returns normalized dicts — we just stamp the canonical id and
     league slug. The original `id` (numeric string) becomes our `s365-<id>`."""
     raw_id = event.get("id")
     event = dict(event)  # shallow copy so we don't mutate the adapter's cache
@@ -1163,5 +1163,5 @@ def _from_365_event(event: dict, *, slug: str) -> dict:
     event["league"] = slug
     for comp in (event.get("competitions") or []):
         for c in (comp.get("competitors") or []):
-            _attach_espn_team_he(c.get("team"))
+            _attach_team_he(c.get("team"))
     return event
