@@ -129,6 +129,14 @@ def compute_drama(ctx: dict[str, Any]) -> DramaScore:
     # WC "spike" terms ride ON TOP of the stakes-scaled core, so a giant-killing
     # or a qualification-deciding moment screams toward 10 even outside finals.
     total = min(10.0, total + upset + qualification)
+    # A LIVE competitive match is never literal ~0 (that reads as broken): even a
+    # cruising one-goal game carries baseline tension. Absolute floor, far below any
+    # alert threshold, so the anti-drama dampener (a dominant leader) still works.
+    _status = (ctx.get("status") or "").lower()
+    _diff = abs(((ctx.get("home") or {}).get("score") or 0)
+                - ((ctx.get("away") or {}).get("score") or 0))
+    if _status in {"live", "1h", "2h", "ht", "et", "pens"} and _diff <= 1:
+        total = max(total, 1.0)
     return DramaScore(
         total=round(total, 2),
         state=round(state, 2),
@@ -226,7 +234,9 @@ def _score_state(ctx: dict) -> float:
     # so the scoreline alone shouldn't drive drama past ~1/10. Ramps from
     # ~0.17 at minute 1 to 1.0 by minute 25. Without this, every match
     # opened with state=3.0 just because it was 0-0.
-    if minute < 25:
+    _later_phase = status in ("ht", "2h", "2nd_half", "et", "et_1", "et_2",
+                              "pens", "ft", "aet", "ap", "finished", "after_extra_time")
+    if minute < 25 and not _later_phase:
         base *= max(0.15, (minute + 5) / 30.0)
 
     # Lateness amplifier — kicks in from 60', peaks at 90'+

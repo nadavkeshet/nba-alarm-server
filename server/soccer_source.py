@@ -940,7 +940,13 @@ def _ws_overlay(out: dict, event_id: int) -> None:
             out.setdefault("away", {})["score"] = int(score["away"])
 
         time_obj = event_snap.get("time") or {}
-        if isinstance(time_obj.get("minute"), (int, float)):
+        # During a break (half-time, ET interval) the WS clock counts the BREAK
+        # elapsed (0,1,2…), NOT the match minute — overwriting with it would report
+        # "minute 11" at half-time and trip the drama earliness damper. Keep the
+        # REST minute (45) in that case.
+        ws_tstatus = str(time_obj.get("status") or "").lower()
+        _on_break = ws_tstatus in ("halftime", "ht", "break", "paused", "interrupted", "et_break")
+        if isinstance(time_obj.get("minute"), (int, float)) and not _on_break:
             out["minute"] = int(time_obj["minute"])
 
         # Per-team stats live under event_snap['stats'][side] (event_snap[side]
