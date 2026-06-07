@@ -2016,6 +2016,21 @@ def test_alarm(req: TestAlarmRequest):
     return {"status": "test_notification_sent"}
 
 
+@app.post("/screenshot-alert")
+def screenshot_alert(token: str, title: str = "", body: str = "",
+                     sound_channel: str = "classic_alarm", alert_type: str = "alarm"):
+    """Fire a real, dramatic Clutch Alarm push to one device for App Store capture.
+    Env-gated behind SCREENSHOT_DEMO (same flag as the staged matches)."""
+    import demo_data
+    if not demo_data.DEMO_ENABLED:
+        raise HTTPException(status_code=403, detail="screenshot demo disabled")
+    title = title or "🔥 Argentina 2-2 France"
+    body = body or "88' · Drama 9.4 — it's going to the wire. Don't miss the finish!"
+    _send_push_notification(push_token=token, title=title, body=body,
+                            sound_channel=sound_channel, alert_type=alert_type)
+    return {"sent": True, "title": title, "body": body}
+
+
 @app.get("/test-player-alarm")
 def test_player_alarm(
     push_token: str,
