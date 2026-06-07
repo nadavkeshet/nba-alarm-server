@@ -641,7 +641,9 @@ def _expand_follow_criteria(spec: dict, cid: str, detail: dict) -> list[dict]:
                 "halftime": _f("halftime"), "second_half": _f("second_half"),
                 "red_cards": _f("red_cards"), "penalties": _f("penalties"),
                 "match_end": _f("match_end"), "lineups": _f("lineups"),
-                "reminder_minutes": int(mm.get("reminder_minutes") or 0)}))
+                "reminder_minutes": int(mm.get("reminder_minutes") or 0),
+                # Per-criterion alarm/silent (independent of the follow's mode).
+                "alert_type": mm.get("alert_type")}))
         cp = cfg.get("card_penalty") or {}
         if cp.get("enabled"):
             out.append(mk("card_penalty", {"red_card": bool(cp.get("red_card")),
@@ -975,6 +977,14 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
         cfg = alarm.get("config") or {}
         if not cfg.get("enabled", True):
             return
+
+        # Match Moments carries its OWN alarm/silent setting, independent of the
+        # follow's overall mode — it's the noisiest criterion (kickoff, every goal,
+        # half-time, full-time…), so users can keep it silent while the rest stay
+        # loud. Shadow the alarm with that alert_type so every moment below inherits
+        # it; fall back to the alarm's global alert_type when unset (legacy configs).
+        if cfg.get("alert_type"):
+            alarm = {**alarm, "alert_type": cfg["alert_type"]}
 
         # Pre-kickoff reminder + confirmed-lineups alert. These were previously
         # wired ONLY into the favorite-team follow pre-match pass (_prematch_team),
