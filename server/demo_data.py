@@ -103,7 +103,7 @@ def detail(canonical_id: str) -> dict | None:
     incidents = _hero_incidents() if canonical_id == "bsd-9900001" else []
     return {
         "id": canonical_id, "source": "bsd", "source_event_id": int(canonical_id[4:]),
-        "competition": "world_cup", "competition_id_native": "27",
+        "competition": "world_cup", "competition_id_native": 27,
         "round_name": rnd, "round_name_he": _ROUND_HE.get(rnd), "round_number": None,
         "status": "live", "minute": minute, "period": "2h",
         "home": _side(home, hs, xg=2.4), "away": _side(away, as_, xg=2.1),
@@ -123,7 +123,7 @@ def games() -> list[dict]:
     for _id, home, away, hs, as_, minute, drama, rnd in _MATCHES:
         out.append({
             "id": _id, "source": "bsd", "source_event_id": int(_id[4:]),
-            "competition": "world_cup", "competition_id_native": "27",
+            "competition": "world_cup", "competition_id_native": 27,
             "round_name": rnd, "round_number": None,
             "status": "live", "minute": minute, "period": "2h",
             "home": _side(home, hs), "away": _side(away, as_),
