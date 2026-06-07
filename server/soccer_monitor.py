@@ -1084,12 +1084,15 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
                       lambda h, a, c, lang: t_soccer_body_red_card(h, a, c, red["minute"], lang),
                       home_name, away_name, competition,
                       signal=f"cp_red_{red.get('minute', 0)}", one_shot=False)
-        if cfg.get("penalty") and _recent_incident(match, types=("penalty",), window_min=2):
-            minute = match.get("minute") or 0
-            if fresh(minute):
+        if cfg.get("penalty"):
+            # Dedup by the penalty INCIDENT minute (stable), not the live clock —
+            # keying on match.minute minted a new dedup key every tick, so the
+            # alert looped for the whole 2-minute window.
+            pen_min = _recent_penalty_minute(match)
+            if pen_min is not None and fresh(pen_min):
                 _fire(alarm, "soccer_penalty",
                       t_soccer_body_penalty, home_name, away_name, competition,
-                      signal=f"cp_pen_{minute}", one_shot=False)
+                      signal=f"cp_pen_{pen_min}", one_shot=False)
         return
 
     if alarm_type == "sensation":
@@ -1133,11 +1136,14 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
         return
 
     if alarm_type == "penalty":
-        # Look for a penalty incident in last 2 minutes
-        if _recent_incident(match, types=("penalty",), window_min=2):
+        # Dedup by the incident minute (stable), not the live clock — otherwise
+        # the alert re-fires every tick. Distinct penalties (different minutes)
+        # each notify exactly once.
+        pen_min = _recent_penalty_minute(match)
+        if pen_min is not None and fresh(pen_min):
             _fire(alarm, "soccer_penalty",
                   t_soccer_body_penalty, home_name, away_name, competition,
-                  signal="penalty", one_shot=False)  # can fire on multiple pens in same match
+                  signal=f"penalty_{pen_min}", one_shot=False)
         return
 
     if alarm_type == "drama_radar":
