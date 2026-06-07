@@ -78,25 +78,41 @@ def _fold(line: str) -> str:
     return b"\r\n".join(chunks).decode("utf-8")
 
 
-def _normalize(m: dict) -> dict | None:
+def _team_label(name_en: str, name_he: str | None, lang: str) -> str:
+    """English name, or its Hebrew form in he mode (explicit name_he → dict → en)."""
+    if lang != "he":
+        return name_en
+    if name_he:
+        return name_he
+    try:
+        import team_names_he
+        return team_names_he.hebrew_name(name_en) or name_en
+    except Exception:
+        return name_en
+
+
+def _normalize(m: dict, lang: str = "en") -> dict | None:
     """Unify a soccer/basketball match dict → a flat event dict, or None if it
-    lacks a usable start time."""
+    lacks a usable start time. Team names follow `lang` (Hebrew when available)."""
     sport = m.get("_sport")
     if sport == "soccer":
         start = _parse_utc(m.get("kickoff"))
         if not start:
             return None
-        home = (m.get("home") or {}).get("name") or "?"
-        away = (m.get("away") or {}).get("name") or "?"
+        home_en = (m.get("home") or {}).get("name") or "?"
+        away_en = (m.get("away") or {}).get("name") or "?"
+        home = _team_label(home_en, (m.get("home") or {}).get("name_he"), lang)
+        away = _team_label(away_en, (m.get("away") or {}).get("name_he"), lang)
+        sep = "נגד" if lang == "he" else "vs"
         comp = m.get("competition") or ""
         venue = m.get("venue") or {}
         location = venue.get("name") if isinstance(venue, dict) else None
         status = (m.get("status") or "").replace("notstarted", "Scheduled").title()
         if comp == "world_cup":
-            fh, fa = country_flags.country_flag(home), country_flags.country_flag(away)
-            summary = " ".join(x for x in [fh, home, "vs", away, fa] if x).strip()
+            fh, fa = country_flags.country_flag(home_en), country_flags.country_flag(away_en)
+            summary = " ".join(x for x in [fh, home, sep, away, fa] if x).strip()
         else:
-            summary = f"{home} vs {away}"
+            summary = f"{home} {sep} {away}"
         dur = DUR_SOCCER_MIN
     elif sport == "basketball":
         start = _parse_utc(m.get("date"))
@@ -105,7 +121,7 @@ def _normalize(m: dict) -> dict | None:
         comps = (m.get("competitions") or [{}])[0].get("competitors") or []
         home = away = "?"
         for c in comps:
-            nm = (c.get("team") or {}).get("displayName") or "?"
+            nm = _team_label((c.get("team") or {}).get("displayName") or "?", None, lang)
             if c.get("homeAway") == "home":
                 home = nm
             elif c.get("homeAway") == "away":
@@ -113,7 +129,7 @@ def _normalize(m: dict) -> dict | None:
         comp = m.get("league") or ""
         location = None
         status = ((m.get("status") or {}).get("type") or {}).get("detail") or ""
-        summary = f"{away} @ {home}"
+        summary = f"{away} נגד {home}" if lang == "he" else f"{away} @ {home}"
         dur = DUR_BBALL_MIN
     else:
         return None
@@ -128,7 +144,7 @@ def _normalize(m: dict) -> dict | None:
     }
 
 
-def build_calendar(matches: list[dict], *, cal_name: str = "Clutch Alarm") -> str:
+def build_calendar(matches: list[dict], *, cal_name: str = "Clutch Alarm", lang: str = "en") -> str:
     """Render a VCALENDAR string from normalized (soccer/basketball) match dicts."""
     now = datetime.now(timezone.utc)
     lines: list[str] = [
@@ -143,7 +159,7 @@ def build_calendar(matches: list[dict], *, cal_name: str = "Clutch Alarm") -> st
         "REFRESH-INTERVAL;VALUE=DURATION:PT1H",
     ]
     for m in matches:
-        ev = _normalize(m)
+        ev = _normalize(m, lang)
         if not ev:
             continue
         lines.append("BEGIN:VEVENT")

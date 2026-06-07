@@ -4253,7 +4253,8 @@ def calendar_ics_feed(token: str):
             raise HTTPException(status_code=404, detail="calendar not found")
         scope, params, user_token = row.scope, (row.params or {}), row.user_token
         matches = calendar_scope.collect_matches(session, scope, params, user_token)
-    ics = calendar_ics.build_calendar(matches, cal_name=_CAL_NAMES.get(scope, "Clutch Alarm"))
+    lang = _get_user_language_from_db(user_token) or "en"
+    ics = calendar_ics.build_calendar(matches, cal_name=_CAL_NAMES.get(scope, "Clutch Alarm"), lang=lang)
     _ICS_CACHE[token] = (_time.monotonic() + _ICS_TTL, ics)
     return Response(content=ics, media_type="text/calendar; charset=utf-8",
                     headers={"Cache-Control": "public, max-age=300"})
