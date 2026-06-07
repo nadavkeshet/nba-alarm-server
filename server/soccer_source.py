@@ -660,8 +660,9 @@ def _enforce_date_and_dedupe(
     `tz`. Also dedupe by canonical id so the same match never appears twice
     in one response.
 
-    Matches without a parseable kickoff are kept (we'd rather show a
-    possibly-misdated match than drop it — the source filtered by date too).
+    Matches without a parseable kickoff are dropped — keeping them caused
+    every stale/misdated match (e.g. old WC editions with null kickoffs) to
+    appear on every requested date.
     """
     out: list[dict] = []
     seen: set[str] = set()
@@ -670,7 +671,7 @@ def _enforce_date_and_dedupe(
         if not cid or cid in seen:
             continue
         local_date = _kickoff_local_date(m.get("kickoff"), tz)
-        if local_date is not None and local_date != date_iso:
+        if local_date != date_iso:   # None != date_iso → also drops null-kickoff matches
             continue
         seen.add(cid)
         out.append(m)
