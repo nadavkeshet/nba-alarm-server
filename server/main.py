@@ -13,7 +13,6 @@ from typing import Optional
 log = logging.getLogger("nba_monitor")
 
 import team_names_he
-from epg import get_broadcasts_for_game, get_all_broadcasts
 from i18n import (t_title, t_body_game, t_body_period_start, t_body_scoring,
                   t_body_early_pts, t_body_triple_double, translate_game_name)
 
@@ -4443,68 +4442,6 @@ def soccer_player_stats(player_id: str, limit: int = 10):
             if he:
                 g["opponent_he"] = he
     return {"games": games}
-
-
-# ── EPG (TV Broadcast Guide) ─────────────────────────────────────────────────
-
-# Countries whose EPG files are small enough to safely load in memory.
-# Large countries (us, gb, de, fr, ...) have massive XML files that OOM the server.
-_ALLOWED_EPG_COUNTRIES = {"il"}
-
-@app.get("/epg")
-def epg_for_game(game_id: str = "", country: str = "il"):
-    """
-    Get TV broadcast channels for a specific game.
-    Query params: game_id, country (ISO 2-letter code, default: il)
-    """
-    if country.lower() not in _ALLOWED_EPG_COUNTRIES:
-        return {"game_id": game_id, "broadcasts": []}
-    event = None
-    for g in get_today_games():
-        if str(g.get("id")) == game_id:
-            event = g
-            break
-    if event is None:
-        return {"broadcasts": [], "error": "game not found"}
-
-    # Extract team abbreviations from game event
-    comp = (event.get("competitions") or [{}])[0]
-    competitors = comp.get("competitors", [])
-    home_abbr = ""
-    away_abbr = ""
-    game_name = event.get("shortName", event.get("name", ""))
-    game_date = event.get("date", "")
-    for c in competitors:
-        team = c.get("team", {})
-        abbr = team.get("abbreviation", "")
-        if c.get("homeAway") == "home":
-            home_abbr = abbr
-        else:
-            away_abbr = abbr
-
-    broadcasts = get_broadcasts_for_game(
-        game_id=game_id,
-        game_name=game_name,
-        home_abbr=home_abbr,
-        away_abbr=away_abbr,
-        game_date_utc=game_date,
-        country=country,
-    )
-    return {"game_id": game_id, "broadcasts": broadcasts}
-
-
-@app.get("/epg/all")
-def epg_all_games(country: str = "il"):
-    """
-    Get all basketball TV broadcasts for today's games (all leagues), keyed by game_id.
-    Returns: { "broadcasts": { "401810906": [...], "401810907": [...] } }
-    """
-    if country.lower() not in _ALLOWED_EPG_COUNTRIES:
-        return {"broadcasts": {}}
-    all_games = []
-    for lid in ("nba", "euroleague", "eurocup", "bcl", "winner_league"):
-        all_games.extend(get_games_for_date(None, league=lid))
-    return {"broadcasts": get_all_broadcasts(country=country, games=all_games)}
 
 
 # ── Watch Score (in-memory cache, keyed by "DATE_HOME_AWAY") ─────────────────
