@@ -209,6 +209,46 @@ def resolve_underdog(canonical: str, *, detail: dict | None = None,
     return None
 
 
+def get_soccer_broadcasts(canonical: str, *, country_code: str | None = None) -> list[dict]:
+    """Where-to-watch for a match: TV channels carrying it, filtered to a
+    territory (ISO-2) when given. BSD-only — s365 ids and missing data return [].
+    De-duplicated by (channel, country); each row is
+    {channel_name, channel_link, country_code, scheduled_start_time}.
+    """
+    try:
+        source, native = parse_canonical_id(canonical)
+    except ValueError:
+        return []
+    if source != "bsd":
+        return []
+    try:
+        eid = int(native)
+    except (TypeError, ValueError):
+        return []
+    try:
+        rows = bsd.event_broadcasts(eid, country_code=country_code) or []
+    except Exception as exc:
+        logger.warning("broadcasts fetch failed for %s: %s", canonical, exc)
+        return []
+    out: list[dict] = []
+    seen: set = set()
+    for r in rows:
+        name = (r.get("channel_name") or "").strip()
+        if not name:
+            continue
+        key = (name, r.get("country_code"))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "channel_name": name,
+            "channel_link": (r.get("channel_link") or "").strip() or None,
+            "country_code": r.get("country_code"),
+            "scheduled_start_time": r.get("scheduled_start_time"),
+        })
+    return out
+
+
 def wc_group_standings(slug: str = "world_cup") -> list[list[dict]] | None:
     """All groups' live standings for a grouped competition (the World Cup) as a
     list of groups, each a list of normalized rows {team_id, position, points,

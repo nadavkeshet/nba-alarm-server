@@ -334,6 +334,23 @@ def event_incidents(event_id: int) -> list[dict]:
     return data or []
 
 
+def event_broadcasts(event_id: int, *, country_code: str | None = None) -> list[dict]:
+    """TV broadcasts (where-to-watch) for an event. BSD caches these 1h.
+
+    `country_code` is an ISO 3166-1 alpha-2 territory (e.g. 'IL', 'US'); omit
+    to get every territory. Each row is a BroadcastV2Schema: channel_name,
+    channel_link, country_code, scheduled_start_time, plus team/league context.
+    """
+    params: dict[str, Any] = {"limit": 200}
+    if country_code:
+        params["country_code"] = country_code
+    data = _cached_get("event_broadcasts", f"/events/{event_id}/broadcasts/",
+                       params, event_id, country_code or "all")
+    if isinstance(data, dict):
+        return data.get("results") or []
+    return data or []
+
+
 def event_lineups(event_id: int) -> dict | None:
     """Lineup state. Returns:
       { event_id, lineup_status: 'confirmed'|'predicted'|'unavailable',
