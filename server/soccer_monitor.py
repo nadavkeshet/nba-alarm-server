@@ -883,6 +883,13 @@ def _goal_scorer(match: dict, home_score: int, away_score: int) -> str | None:
 # (the match was in progress), so they must NOT fire retroactively.
 _armed_minute: dict[str, int] = {}
 
+# Grace (minutes): a moment up to this far BEFORE the first sighting still fires.
+# Essential because BSD reports the opening minute as "1" (football is 1-indexed),
+# so the monitor's first live tick of a just-kicked-off match has minute=1 — and
+# without grace the kickoff (minute 0) would be suppressed on EVERY match. Small
+# enough that arming mid-match still won't replay older moments.
+_ARM_GRACE = 2
+
 # (alarm_id : match_id) -> whether the drama_radar alarm is currently suppressed.
 # Key present = the alarm has seen this match. True = the match was already over
 # the threshold when first seen (don't fire retroactively); flips to False once it
@@ -921,7 +928,7 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
     armed = _arm_minute(alarm, match)
 
     def fresh(moment_minute) -> bool:
-        return moment_minute is None or int(moment_minute) >= armed
+        return moment_minute is None or int(moment_minute) >= armed - _ARM_GRACE
 
     if alarm_type == "match":
         # Kickoff notify — fire the first tick after status transitions from scheduled to live.

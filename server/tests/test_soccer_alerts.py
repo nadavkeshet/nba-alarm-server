@@ -341,10 +341,11 @@ def test_no_retroactive_fire_when_armed_mid_match(monkeypatch):
     sent = _wire_capture(monkeypatch)
     a = _alarm("match_moments", {"enabled": True, "kickoff": True, "goals": True,
                                  "halftime": True, "second_half": True, "match_end": True})
-    # Armed at minute 60, already 2-1 (the 2-1 goal was scored back at minute 58).
+    # Armed at minute 60, already 2-1 (the 2-1 goal was scored back at minute 50 —
+    # well outside the small first-sighting grace window).
     m = _match(status="live", minute=60, hs=2, as_=1)
     m["id"] = "ret1"; m["period"] = "2h"
-    m["incidents"] = [{"type": "goal", "home_score": 2, "away_score": 1, "minute": 58, "player": "Past"}]
+    m["incidents"] = [{"type": "goal", "home_score": 2, "away_score": 1, "minute": 50, "player": "Past"}]
     sm._evaluate_alarm(a, m)
     assert sent == [], f"pre-arm moments must not fire; got {[s['body'] for s in sent]}"
 
@@ -363,3 +364,14 @@ def test_goal_alert_title_shows_full_match(monkeypatch):
     sm._evaluate_alarm(a, m)
     goal = [s for s in sent if "⚽" in s["title"]]
     assert goal and goal[0]["title"] == "⚽ Home vs Away"   # full match in the title
+
+
+def test_kickoff_fires_when_bsd_reports_opening_minute_as_one(monkeypatch):
+    """BSD reports the opening minute as "1", so the monitor's first live tick of
+    a just-kicked-off match has minute=1. The kickoff (minute 0) must STILL fire —
+    the retroactive grace window covers it."""
+    sent = _wire_capture(monkeypatch)
+    a = _alarm("match_moments", {"enabled": True, "kickoff": True})
+    m = _match(status="live", minute=1, hs=0, as_=0); m["id"] = "ko1"; m["period"] = "1h"
+    sm._evaluate_alarm(a, m)
+    assert any("Kicking Off" in s["title"] for s in sent), [s["title"] for s in sent]
