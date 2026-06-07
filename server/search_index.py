@@ -118,6 +118,30 @@ def _score(query_lower: str, target: str) -> float:
     return 0.0
 
 
+def _score_he(query_lower: str, name: str, name_he: str | None = None) -> float:
+    """Like `_score`, but also matches the team/league's HEBREW name so Hebrew
+    queries hit the Latin-keyed index. The Hebrew form is resolved via
+    team_names_he when not supplied. `_score`'s prefix/substring logic is
+    script-agnostic, so a Hebrew prefix ('ברצ' → 'ברצלונה') scores like a Latin one."""
+    s = _score(query_lower, name or "")
+    if s == 0.0:
+        he = name_he if name_he is not None else team_names_he.hebrew_name(name)
+        if he:
+            s = _score(query_lower, he)
+    return s
+
+
+# Hebrew league names for search (the static catalog carries English only).
+_LEAGUE_HE = {
+    "nba": "NBA", "euroleague": "יורוליג", "eurocup": "יורוקאפ",
+    "bcl": "ליגת האלופות בכדורסל", "winner_league": "ליגת ווינר סל",
+    "premier_league": "פרמייר ליג", "ucl": "ליגת האלופות", "la_liga": "לה ליגה",
+    "serie_a": "סריה א", "bundesliga": "בונדסליגה", "ligue_1": "ליג 1",
+    "europa_league": "ליגה אירופית", "world_cup": "מונדיאל", "euros": "אליפות אירופה",
+    "ligat_haal": "ליגת ווינר", "friendlies": "ידידות",
+}
+
+
 # Common club-name suffix tokens that don't distinguish one club from another.
 # Prefixes like "maccabi"/"hapoel" are deliberately absent — they ARE the
 # distinguishing part of Israeli/European club names.
@@ -321,7 +345,7 @@ def search(query: str, limit: int = 10) -> dict[str, list[dict]]:
     try:
         from monitor import get_all_teams as _bb_teams
         for t in _bb_teams() or []:
-            score_t = _score(q, t.get("name") or "")
+            score_t = _score_he(q, t.get("name") or "")
             if score_t == 0:
                 score_t = _score(q, t.get("abbreviation") or "")
             if score_t > 0:
@@ -357,7 +381,7 @@ def search(query: str, limit: int = 10) -> dict[str, list[dict]]:
 
     # ── Soccer teams (from accumulator) ─────────────────────────────────────
     for t in soccer_teams_snapshot():
-        score_t = _score(q, t.get("name") or "")
+        score_t = _score_he(q, t.get("name") or "")
         if score_t > 0:
             teams.append({
                 "id":     t["id"],
@@ -374,7 +398,7 @@ def search(query: str, limit: int = 10) -> dict[str, list[dict]]:
 
     # ── Leagues (static) ────────────────────────────────────────────────────
     for lg in _LEAGUES:
-        score_t = _score(q, lg["name"])
+        score_t = _score_he(q, lg["name"], _LEAGUE_HE.get(lg["id"]))
         if score_t == 0:
             score_t = _score(q, lg["id"].replace("_", " "))
         if score_t > 0:
