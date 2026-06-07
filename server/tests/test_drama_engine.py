@@ -408,3 +408,14 @@ def test_live_signals_extracts_errors_lead_to_a_goal():
     sig = live_signals_from_ws_event(snap)
     assert sig["home"]["errors_lead_to_a_goal"] == 1
     assert sig["home"]["shots_on_target"] == 4
+
+
+def test_momentum_pressure_respects_scoreline():
+    """The live momentum signal must follow the pressure-vs-scoreline rule too:
+    a LEADING team pressing is anti-drama; a TRAILING team pressing is drama."""
+    import drama_engine as de
+    # Home leads 1-0.
+    leader_pressing  = de._score_momentum({"home": {"score": 1}, "away": {"score": 0}, "momentum_pressure":  1.0})
+    trailer_pressing = de._score_momentum({"home": {"score": 1}, "away": {"score": 0}, "momentum_pressure": -1.0})
+    assert leader_pressing < 0, f"leading team dominating should subtract drama, got {leader_pressing}"
+    assert trailer_pressing > 0, f"trailing team pressing should add drama, got {trailer_pressing}"

@@ -290,11 +290,14 @@ def _score_momentum(ctx: dict) -> float:
             n_signals += 1
 
     if pressure is not None:
-        # BSD momentum: +1 = home, -1 = away. Translate to trailing-side.
-        if home_sc < away_sc:
-            trailing_pressure += -pressure      # negative pressure means away (leading), so flip
-        elif away_sc < home_sc:
-            trailing_pressure += pressure       # positive pressure means home (trailing) winning the moment
+        # BSD momentum: +1 = home dominating, -1 = away dominating. Convert to
+        # "is the TRAILING team the one pressing?" — that's what adds drama. A
+        # leading team running up the game (pressure toward the leader) must read
+        # NEGATIVE, so it subtracts. (This mirrors the xG branch above.)
+        if home_sc < away_sc:                   # home trails → home pressing (+) is dramatic
+            trailing_pressure += pressure
+        elif away_sc < home_sc:                 # away trails → away pressing (−) is dramatic, so flip
+            trailing_pressure += -pressure
         else:
             trailing_pressure += abs(pressure)  # tied — direction doesn't matter
         n_signals += 1
