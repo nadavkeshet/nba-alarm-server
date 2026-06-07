@@ -1,6 +1,8 @@
 """
 Notification text translations for Clutch Alarm.
 """
+import re as _re
+from typing import Optional
 
 # Hebrew team name map (English full name → Hebrew full name)
 _TEAM_HE = {
@@ -333,6 +335,36 @@ _SOCCER_COMPETITION_EN = {
 def soccer_competition_name(slug: str, lang: str) -> str:
     table = _SOCCER_COMPETITION_HE if lang == "he" else _SOCCER_COMPETITION_EN
     return table.get(slug, slug.replace("_", " ").title())
+
+
+def t_round_name(round_name: Optional[str], lang: str) -> Optional[str]:
+    """Hebrew for a competition round/stage label ('Final', 'Group Stage',
+    'Round of 16', 'Matchweek 12'…). Substring-matched against the common stages;
+    returns the original for anything unmatched (so obscure labels stay English)."""
+    if not round_name or lang != "he":
+        return round_name
+    n = round_name.strip().lower()
+    # Order matters: 'semi'/'quarter' before 'final' (they contain 'final').
+    for kw, he in (
+        ("semi", "חצי גמר"),
+        ("quarter", "רבע גמר"),
+        ("round of 16", "שמינית גמר"),
+        ("last 16", "שמינית גמר"),
+        ("round of 32", "שלב ה-32"),
+        ("third place", "מקום שלישי"),
+        ("final", "גמר"),
+        ("group", "שלב הבתים"),
+        ("play-off", "פלייאוף"),
+        ("playoff", "פלייאוף"),
+        ("knockout", "שלב הנוקאאוט"),
+        ("qualif", "מוקדמות"),
+    ):
+        if kw in n:
+            return he
+    m = _re.search(r"(?:matchweek|matchday|round|week)\s*(\d+)", n)
+    if m:
+        return f"מחזור {m.group(1)}"
+    return round_name
 
 
 def soccer_match_label(home_name: str, away_name: str, lang: str) -> str:

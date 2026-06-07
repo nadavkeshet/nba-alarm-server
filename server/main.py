@@ -3153,9 +3153,13 @@ def soccer_match_detail(canonical_id: str):
     returned by /soccer/games.
     """
     import soccer_source as _ss
+    import i18n as _i18n
     detail = _ss.get_soccer_match_detail(canonical_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="match not found")
+    rh = _i18n.t_round_name(detail.get("round_name"), "he")
+    if rh and rh != detail.get("round_name"):
+        detail["round_name_he"] = rh
     return detail
 
 
@@ -3215,12 +3219,14 @@ def soccer_match_prediction(canonical_id: str):
             "is_home": dog["underdog_is_home"],
             "team_id": dog["underdog_team_id"],
             "team_name": dog["underdog_name"],
+            "team_name_he": team_names_he.hebrew_name(dog["underdog_name"]),
             "win_prob": dog["underdog_win_prob"],
         } if dog else None),
         "favorite": {
             "is_home": not underdog_is_home,
             "team_id": str(fav_side.get("id") or ""),
             "team_name": fav_side.get("name") or "",
+            "team_name_he": team_names_he.hebrew_name(fav_side.get("name")),
             "win_prob": round(max(p_home, p_away), 4),
         },
         "has_clear_underdog": dog is not None,
@@ -3373,10 +3379,30 @@ def soccer_team_squad(team_id: str):
         tid = int(team_id)
     except ValueError:
         return {"team_id": 0, "count": 0, "players": []}
-    return _ss.national_team_squad(tid)
+    squad = _ss.national_team_squad(tid)
+    for p in (squad.get("players") or []):
+        if isinstance(p, dict):
+            he = team_names_he.hebrew_name(p.get("club"))
+            if he:
+                p["club_he"] = he
+    return squad
 
 
 @app.get("/soccer/match/{canonical_id}/lineups")
+def _stamp_lineup_he(result: dict) -> dict:
+    """Stamp `team_name_he` onto each lineup side so the Lineups tab shows Hebrew
+    team names (the detail header already does; this kept the tab in English)."""
+    lu = (result or {}).get("lineups")
+    if isinstance(lu, dict):
+        for side in ("home", "away"):
+            s = lu.get(side)
+            if isinstance(s, dict):
+                he = team_names_he.hebrew_name(s.get("team_name") or s.get("name"))
+                if he:
+                    s["team_name_he"] = he
+    return result
+
+
 def soccer_match_lineups(canonical_id: str):
     """Confirmed / predicted lineups for a soccer match. Supports BSD- and
     365scores-sourced ids; unknown sources return lineup_status=unavailable."""
@@ -3401,7 +3427,7 @@ def soccer_match_lineups(canonical_id: str):
                     ratings[int(pid)] = float(rat)
         except Exception as exc:
             log.warning("player-stats merge failed for %s: %s", event_id, exc)
-        return _normalize_lineups(result, ratings)
+        return _stamp_lineup_he(_normalize_lineups(result, ratings))
 
     if canonical_id.startswith("s365-"):
         try:
@@ -3416,7 +3442,7 @@ def soccer_match_lineups(canonical_id: str):
         # position, jersey, ai_score = the 365 `ranking`, and the same value as
         # `rating` since 365's ranking IS the post-match player rating). No BSD
         # ratings-merge applies here.
-        return result
+        return _stamp_lineup_he(result)
 
     return {"lineup_status": "unavailable", "lineups": None, "event_id": None}
 
@@ -3801,6 +3827,20 @@ def soccer_alarm_delete(alarm_id: int, user_token: str = ""):
 
 
 @app.get("/soccer-alarms")
+def _match_name_he(name: str | None) -> Optional[str]:
+    """Best-effort Hebrew for a 'Home vs Away' match label (both sides must
+    resolve, else None so the client keeps the English original)."""
+    if not name:
+        return None
+    for sep in (" vs ", " - "):
+        if sep in name:
+            h, a = name.split(sep, 1)
+            hh = team_names_he.hebrew_name(h.strip())
+            ah = team_names_he.hebrew_name(a.strip())
+            return f"{hh} נגד {ah}" if hh and ah else None
+    return None
+
+
 def soccer_alarms_list(user_token: str = ""):
     """List a user's active soccer alarms."""
     if engine is None:
@@ -3817,6 +3857,7 @@ def soccer_alarms_list(user_token: str = ""):
             "alarm_type": r.alarm_type,
             "match_id": r.match_id,
             "match_name": r.match_name,
+            "match_name_he": _match_name_he(r.match_name),
             "competition_id": r.competition_id,
             "player_id": r.player_id,
             "threshold": r.threshold,
@@ -4247,6 +4288,18 @@ def calendar_subscriptions(user_token: str = ""):
     return {"subscriptions": out}
 
 
+def _stamp_player_he(p: dict | None) -> dict | None:
+    """Stamp Hebrew names for a player's club + national team (the player name
+    itself stays Latin — sources carry no Hebrew player names)."""
+    if isinstance(p, dict):
+        for src, dst in (("team_name", "team_name_he"),
+                         ("national_team_name", "national_team_name_he")):
+            he = team_names_he.hebrew_name(p.get(src))
+            if he:
+                p[dst] = he
+    return p
+
+
 @app.get("/soccer/player/{player_id}")
 def soccer_player(player_id: str, source: str = ""):
     """Normalized football player detail (bio + latest-season summary), with
@@ -4264,7 +4317,7 @@ def soccer_player(player_id: str, source: str = ""):
     if source == "s365":
         s365 = ss.s365_soccer_player(player_id)
         if s365:
-            return s365
+            return _stamp_player_he(s365)
         raise HTTPException(status_code=404, detail="player not found")
     detail = bz.player_detail(player_id)
     if not detail:
@@ -4272,17 +4325,17 @@ def soccer_player(player_id: str, source: str = ""):
         # the 365 athlete so the incident tap still opens a player page.
         s365 = ss.s365_soccer_player(player_id)
         if s365:
-            return s365
+            return _stamp_player_he(s365)
         raise HTTPException(status_code=404, detail="player not found")
     career = bz.player_career(player_id)
     club_id = detail.get("current_team_id")
     team_name = (bz.team(club_id) or {}).get("name") if club_id else None
     nat_id = detail.get("national_team_id")
     nat_name = (bz.team(nat_id) or {}).get("name") if nat_id else None
-    return ps.normalize_soccer_detail(
+    return _stamp_player_he(ps.normalize_soccer_detail(
         detail, career, player_id=player_id, team_name=team_name,
         current_team_id=club_id,
-        national_team_id=nat_id, national_team_name=nat_name)
+        national_team_id=nat_id, national_team_name=nat_name))
 
 
 @app.get("/soccer/player/{player_id}/stats")
@@ -4298,7 +4351,13 @@ def soccer_player_stats(player_id: str, limit: int = 10):
             ev = bz.event(eid)
             if ev:
                 events[eid] = ev
-    return {"games": ps.normalize_soccer_stats({"results": rows}, events, limit=limit)}
+    games = ps.normalize_soccer_stats({"results": rows}, events, limit=limit)
+    for g in (games or []):
+        if isinstance(g, dict):
+            he = team_names_he.hebrew_name(g.get("opponent") or g.get("opponent_name"))
+            if he:
+                g["opponent_he"] = he
+    return {"games": games}
 
 
 # ── EPG (TV Broadcast Guide) ─────────────────────────────────────────────────
