@@ -10,9 +10,18 @@ Demo canonical ids are bsd-99000xx — well outside the real BSD id space.
 """
 from __future__ import annotations
 
+import datetime
 import math
 import os
 import time
+
+
+def _kickoff(minute: int) -> str:
+    """ISO kickoff for a match that's `minute` into play right now — so a live demo
+    match sits on TODAY (minute + ~15 for the half-time break)."""
+    started = time.time() - (minute + 15) * 60
+    return datetime.datetime.fromtimestamp(
+        started, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
 DEMO_ENABLED = bool(os.getenv("SCREENSHOT_DEMO"))
 
@@ -99,7 +108,7 @@ def detail(canonical_id: str) -> dict | None:
         "status": "live", "minute": minute, "period": "2h",
         "home": _side(home, hs, xg=2.4), "away": _side(away, as_, xg=2.1),
         "is_derby": False, "is_neutral_ground": True,
-        "kickoff": "2026-06-21T19:00:00+00:00", "venue": {"name": "MetLife Stadium"},
+        "kickoff": _kickoff(minute), "venue": {"name": "MetLife Stadium"},
         "momentum": _momentum(minute), "xg_per_minute": [], "shotmap": [],
         "incidents": incidents, "stats": _stats(2.4, 2.1),
         "livedata": {"side": "away", "situation": "dangerous_attack", "x": 80, "y": 46},
@@ -119,7 +128,7 @@ def games() -> list[dict]:
             "status": "live", "minute": minute, "period": "2h",
             "home": _side(home, hs), "away": _side(away, as_),
             "is_derby": False, "is_neutral_ground": True,
-            "kickoff": "2026-06-21T19:00:00+00:00", "venue": {"name": "MetLife Stadium"},
+            "kickoff": _kickoff(minute), "venue": {"name": "MetLife Stadium"},
             "watch_score": drama,
         })
     return out
