@@ -2765,6 +2765,9 @@ def _feed_basketball(league: str, iso_date: str, tz: Optional[str]) -> list[dict
 
 
 def _feed_soccer(league: str, iso_date: str, tz: Optional[str]) -> list[dict]:
+    import demo_data
+    if demo_data.DEMO_ENABLED and league == "world_cup":
+        return demo_data.games()    # screenshot session: always show the staged WC matches
     key = f"sc|{league}|{iso_date}"
     exp = _empty_feed_cache.get(key)
     if exp is not None and time.monotonic() < exp:
@@ -3143,6 +3146,9 @@ def soccer_games(
     import soccer_source as _ss  # late import to avoid heavy startup if soccer deps missing
     iso_date = _yyyymmdd_to_iso(date)
     matches = _ss.get_soccer_matches(league, date_iso=iso_date, tz=tz)
+    import demo_data
+    if demo_data.DEMO_ENABLED and league == "world_cup":
+        matches = demo_data.games() + matches
     return {"matches": matches, "league": league, "date": iso_date, "tz": tz}
 
 
@@ -3154,6 +3160,9 @@ def soccer_match_detail(canonical_id: str):
     """
     import soccer_source as _ss
     import i18n as _i18n
+    import demo_data
+    if demo_data.is_demo_id(canonical_id):
+        return demo_data.detail(canonical_id)
     detail = _ss.get_soccer_match_detail(canonical_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="match not found")
@@ -3245,6 +3254,9 @@ def soccer_live_snapshot(canonical_id: str):
     or WS not connected); iOS should fall back to the full /soccer/match
     endpoint in that case.  Only meaningful for bsd-* canonical ids.
     """
+    import demo_data
+    if demo_data.is_demo_id(canonical_id):
+        return demo_data.live(canonical_id)
     import soccer_source as _ss
     return _ss.build_live_snapshot(canonical_id)
 
@@ -3263,6 +3275,9 @@ def soccer_drama(canonical_id: str):
     """
     import soccer_source as _ss
     import drama_engine as _de
+    import demo_data
+    if demo_data.is_demo_id(canonical_id):
+        return demo_data.drama(canonical_id)
     detail = _ss.get_soccer_match_detail(canonical_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="match not found")
@@ -3330,6 +3345,9 @@ def soccer_drama_timeline(canonical_id: str, step: int = 2):
 
     Response: { match_id, timeline: [{m, drama, state, momentum, events, stakes}] }
     """
+    import demo_data
+    if demo_data.is_demo_id(canonical_id):
+        return {"match_id": canonical_id, "timeline": demo_data.drama_timeline(canonical_id)}
     import soccer_source as _ss
     import drama_engine as _de
     detail = _ss.get_soccer_match_detail(canonical_id)
