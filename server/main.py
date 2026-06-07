@@ -1530,23 +1530,49 @@ def _bsd_ws_sub_manager_loop() -> None:
                 time.sleep(60)
                 continue
 
-            desired: set[int] = set()
+            # Live football events (the default fill).
             # Soccer only — BSD basketball was disconnected (all basketball is
             # 365-sourced now), so the WS only tracks live football events.
+            live_eids: set[int] = set()
             try:
                 for e in _bsd_soccer.live_events() or []:
                     eid = e.get("id")
                     if isinstance(eid, int):
-                        desired.add(eid)
+                        live_eids.add(eid)
             except Exception as exc:
                 log.debug("BSD soccer live_events failed in sub-manager: %s", exc)
 
-            # Cap to BSD's per-socket limit. We could shard later, but
-            # 10 simultaneous live events across our sports is usually
-            # enough — pick a stable order (smallest id first) so the cap
-            # is deterministic.
-            if len(desired) > bsd_websocket.MAX_SUBS_PER_SOCKET:
-                desired = set(sorted(desired)[:bsd_websocket.MAX_SUBS_PER_SOCKET])
+            # PRIORITY: matches referenced by an active soccer alarm MUST stay
+            # subscribed. Otherwise sync_subscriptions evicts them, the monitor
+            # then polls stale REST and never sees the state change while no
+            # client is viewing — so the alarm only fired once the user opened
+            # the card and /soccer/live re-subscribed it. This is the
+            # alarm-priority the docstring always promised but never did.
+            alarm_eids: set[int] = set()
+            try:
+                with Session(engine) as session:
+                    rows = session.query(SoccerAlarmDB.match_id).filter(
+                        SoccerAlarmDB.is_active.is_(True),
+                        SoccerAlarmDB.match_id.isnot(None),
+                    ).all()
+                for (mid,) in rows:
+                    if mid and mid.startswith("bsd-") and mid[4:].isdigit():
+                        alarm_eids.add(int(mid[4:]))
+            except Exception as exc:
+                log.debug("sub-manager: active-alarm scan failed: %s", exc)
+
+            # Fill under BSD's per-socket cap, by tier: live alarm matches first
+            # (must-watch), then other live events, then armed matches not yet
+            # live (catch kickoff). Stable (smallest id first) within each tier.
+            cap = bsd_websocket.MAX_SUBS_PER_SOCKET
+            desired: set[int] = set()
+            for tier in (sorted(alarm_eids & live_eids),
+                         sorted(live_eids - alarm_eids),
+                         sorted(alarm_eids - live_eids)):
+                for eid in tier:
+                    if len(desired) >= cap:
+                        break
+                    desired.add(eid)
 
             ws.sync_subscriptions(desired)
         except Exception as exc:
