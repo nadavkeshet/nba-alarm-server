@@ -1385,6 +1385,9 @@ def _prune_fired_alerts() -> None:
         _FIRED_ALERTS.difference_update(stale)
 
 
+_BASKETBALL_LEAGUES = {"nba", "euroleague", "eurocup", "bcl", "winner_league"}
+
+
 def _leagues_for_user(prefs: dict) -> set[str]:
     """
     Compute the set of leagues this user actually cares about right now:
@@ -1400,8 +1403,16 @@ def _leagues_for_user(prefs: dict) -> set[str]:
         leagues.update(radar.get("leagues") or ["nba"])
     for t in prefs.get("FavoriteTeams", []) or []:
         leagues.add(t.get("league") or "nba")
-    for p in (prefs.get("FavoritePlayers") or {}).values():
+    fav_players = prefs.get("FavoritePlayers") or {}
+    for p in fav_players.values():
         leagues.add(p.get("league") or "nba")
+    # A basketball club plays several comps at once (e.g. Winner League +
+    # EuroCup), and older favorites were saved with a default "nba" league —
+    # so a single recorded league misses the player's actual live game (this
+    # is why a Winner-League player alarm fired nothing). Scan every basketball
+    # league whenever the user has any player alarm so we never miss it.
+    if fav_players:
+        leagues.update(_BASKETBALL_LEAGUES)
     # Followed leagues — scan every game in them.
     for lg in prefs.get("FavoriteLeagues", []) or []:
         if lg.get("league"):
