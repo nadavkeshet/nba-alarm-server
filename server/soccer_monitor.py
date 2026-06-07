@@ -169,11 +169,16 @@ def _register_ws_callback() -> None:
         client = bw.client()
 
         def _on_push(event_id: int, kind: str, payload: dict) -> None:
-            # Only react to score/time updates — livedata frames stream
-            # every ~5s while a match is live and would otherwise wake the
-            # radar constantly with no actionable change.
+            # React to score/time updates immediately. Most livedata frames are
+            # noise (possession, throw-ins) and would wake the radar constantly,
+            # but a penalty / red card / goal situation IS actionable — wake on
+            # those so the alert fires off the live stream, not the next poll.
             if kind == "event":
                 _wake.set()
+            elif kind == "livedata":
+                sit = (payload.get("situation") or "").lower()
+                if any(k in sit for k in ("penalty", "red_card", "goal", "var")):
+                    _wake.set()
 
         client.add_callback(_on_push)
         logger.info("soccer radar ↔ BSD WS callback wired")

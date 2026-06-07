@@ -252,6 +252,17 @@ class BSDLiveClient:
             return None
         return (home_w - away_w) / (home_w + away_w)
 
+    def recent_situations(self, event_id: int, window_s: float = 150.0) -> list[tuple[str, str]]:
+        """Recent (side, situation) frames seen in the last `window_s` seconds.
+        Used to surface WS-only events — penalty awarded, red card — that the REST
+        incidents lag or omit entirely, so alerts can fire on the live stream."""
+        cutoff = time.monotonic() - window_s
+        with self._lock:
+            hist = self._livedata_history.get(event_id)
+            if not hist:
+                return []
+            return [(side, (sit or "").lower()) for (ts, side, sit) in hist if ts >= cutoff]
+
     def _record_livedata(self, event_id: int, payload: dict) -> None:
         """Append a (ts, side, situation) sample for the attacking-surge signal.
         Best-effort — never raise on the WS thread. Caller holds self._lock."""
@@ -541,6 +552,15 @@ def get_attack_surge(event_id: int, window_s: float = 180.0) -> float | None:
         if _singleton is None:
             return None
     return _singleton.get_attack_surge(event_id, window_s)
+
+
+def recent_situations(event_id: int, window_s: float = 150.0) -> list[tuple[str, str]]:
+    """Module-level convenience: recent (side, situation) frames, or []."""
+    global _singleton
+    with _singleton_lock:
+        if _singleton is None:
+            return []
+    return _singleton.recent_situations(event_id, window_s)
 
 
 def is_subscription_active() -> bool:

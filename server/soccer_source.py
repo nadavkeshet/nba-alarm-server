@@ -938,6 +938,37 @@ def _ws_overlay(out: dict, event_id: int) -> None:
     if odds:
         out["odds"] = odds.get("odds") or odds
 
+    # ── WS situations → incidents ────────────────────────────────────────
+    # A penalty AWARDED and a red card live in the WS situation stream
+    # (`penalty_rewarded`, `red_card`) but are NOT in the REST incidents — so the
+    # alert evaluators (which read `incidents`) would miss them entirely. Surface
+    # them here, stamped at the current minute, so those alerts fire on the live
+    # stream. Deduped against any REST incident already at that minute.
+    minute = out.get("minute")
+    if isinstance(minute, (int, float)):
+        try:
+            recents = ws.recent_situations(event_id, window_s=150.0)
+        except Exception:
+            recents = []
+        if recents:
+            incidents = out.setdefault("incidents", [])
+
+            def _has(kind: str) -> bool:
+                return any(isinstance(i, dict) and i.get("type") == kind
+                           and abs(int(i.get("minute") or 0) - int(minute)) <= 1
+                           for i in incidents)
+
+            pen = next(((sd, s) for sd, s in recents
+                        if "penalty" in s and ("reward" in s or "award" in s)), None)
+            if pen and not _has("penalty"):
+                incidents.append({"type": "penalty", "minute": int(minute),
+                                  "is_home": pen[0] == "home", "_source": "ws"})
+            red = next(((sd, s) for sd, s in recents
+                        if "red_card" in s or ("red" in s and "card" in s)), None)
+            if red and not _has("card"):
+                incidents.append({"type": "card", "card_type": "red", "minute": int(minute),
+                                  "is_home": red[0] == "home", "player": None, "_source": "ws"})
+
 
 _WS_PERIOD_INT: dict[str, int] = {
     "1": 1, "1t": 1, "1st": 1, "1st_half": 1,
