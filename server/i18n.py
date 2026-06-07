@@ -457,7 +457,7 @@ def t_soccer_body_comeback(home: str, away: str, competition: str, lang: str) ->
 def t_soccer_body_hat_trick(player_name: str, competition: str, lang: str) -> str:
     comp = soccer_competition_name(competition, lang)
     if lang == "he":
-        return f"{player_name} עם 2 שערים\nשלשוער בדרך"
+        return f"{player_name} עם 2 שערים\nשלושער בדרך"
     return f"{player_name} on 2 goals\nhat-trick in reach"
 
 
@@ -484,7 +484,7 @@ def t_soccer_body_player_goal(player_name: str, home_score: int, away_score: int
 def t_soccer_body_player_brace(player_name: str, competition: str, lang: str) -> str:
     comp = soccer_competition_name(competition, lang)
     if lang == "he":
-        return f"{player_name} עם שני שערים! 🔥\nשלשוער בדרך"
+        return f"{player_name} עם שני שערים! 🔥\nשלושער בדרך"
     return f"{player_name} bags a brace! 🔥\nhat-trick in reach"
 
 
