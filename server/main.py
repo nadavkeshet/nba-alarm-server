@@ -2687,13 +2687,32 @@ def _feed_empty_ttl(iso_date: str) -> float:
     return 900.0                            # 15 min
 
 
-def _feed_ttl(iso_date: str) -> float:
-    """TTL for a NON-empty feed day. Past = long (final scores don't change),
-    today = short (live scores), future = medium (fixtures stable)."""
+def _feed_today_iso(tz: Optional[str]) -> str:
+    """Today's date in the REQUEST tz (falls back to US-Eastern, then UTC)."""
+    if tz:
+        try:
+            from zoneinfo import ZoneInfo
+            return datetime.now(ZoneInfo(tz)).date().isoformat()
+        except Exception:
+            pass
     try:
         from monitor import _eastern_today
-        today_iso = _yyyymmdd_to_iso(_eastern_today()) or ""
-        if iso_date and iso_date < today_iso:
+        return _yyyymmdd_to_iso(_eastern_today()) or ""
+    except Exception:
+        return datetime.now(timezone.utc).date().isoformat()
+
+
+def _feed_ttl(iso_date: str, tz: Optional[str] = None) -> float:
+    """TTL for a NON-empty feed day. Past = long (final scores don't change),
+    today = short (live scores), future = medium (fixtures stable).
+
+    "Today" is resolved in the REQUEST tz, not US-Eastern. Otherwise a match near
+    the UTC boundary (e.g. a 00:00 UTC kickoff = today in Israel but yesterday in
+    Eastern) reads as a FUTURE fixture, gets a multi-hour cache, and a feed cached
+    before kickoff keeps showing it as scheduled (no score) for hours."""
+    try:
+        today_iso = _feed_today_iso(tz)
+        if iso_date and today_iso and iso_date < today_iso:
             return 12 * 3600.0
         if iso_date == today_iso:
             return 75.0
@@ -2741,7 +2760,7 @@ def _feed_basketball(league: str, iso_date: str, tz: Optional[str]) -> list[dict
         # Live day → short TTL regardless of date classification (see _feed_soccer):
         # an in-progress game read as a future fixture would otherwise freeze for hours.
         has_live = any((g.get("status") or {}).get("type", {}).get("state") == "in" for g in games)
-        _feed_cache_put(key, games, 25.0 if has_live else _feed_ttl(iso_date))
+        _feed_cache_put(key, games, 25.0 if has_live else _feed_ttl(iso_date, tz))
     return games
 
 
@@ -2776,7 +2795,7 @@ def _feed_soccer(league: str, iso_date: str, tz: Optional[str]) -> list[dict]:
         # live minute/score.
         live = {"live", "ht", "et", "pens"}
         has_live = any((m.get("status") or "") in live for m in matches)
-        _feed_cache_put(key, matches, 25.0 if has_live else _feed_ttl(iso_date))
+        _feed_cache_put(key, matches, 25.0 if has_live else _feed_ttl(iso_date, tz))
     return matches
 
 
