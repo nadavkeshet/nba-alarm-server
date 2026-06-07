@@ -147,7 +147,7 @@ def games() -> list[dict]:
         out.append(m)
     for id_, home, away, hours, grp in _SCHED:
         m = _base(id_, home, away, grp, "scheduled")
-        m.update(minute=None, period=None, kickoff=_kickoff_future(hours), watch_score=None)
+        m.update(minute=None, period="pre", kickoff=_kickoff_future(hours), watch_score=None)
         out.append(m)
     return out
 
@@ -170,7 +170,7 @@ def detail(canonical_id: str) -> dict | None:
     if sched:
         id_, home, away, hours, grp = sched
         d = _base(id_, home, away, grp, "scheduled")
-        d.update(minute=None, period=None, kickoff=_kickoff_future(hours), watch_score=None,
+        d.update(minute=None, period="pre", kickoff=_kickoff_future(hours), watch_score=None,
                  round_name_he=_round_he(grp), momentum=[], xg_per_minute=[], shotmap=[],
                  incidents=[], stats=None, livedata=None, odds={"home": 2.1, "draw": 3.3, "away": 3.4})
         return d
