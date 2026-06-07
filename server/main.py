@@ -1733,6 +1733,26 @@ app.add_middleware(
 )
 
 
+# ── EPG (legacy broadcast guide) — backward-compat stubs ─────────────────────
+# The EPG data source was removed in v3, but the basketball "where to watch"
+# guide still calls these — in BOTH the live v2.1 App Store build AND the v3
+# build (NBAService.getEPGAll → /epg/all, used by FirstRunPrefetcher). Returning
+# the empty-but-valid shapes the apps already handle (an empty broadcasts map)
+# keeps those clients on a clean 200 — the guide simply shows nothing instead of
+# erroring on a 404. Drop these only once no shipped build references /epg.
+
+@app.get("/epg")
+def epg_for_game(game_id: str = "", country: str = "il"):
+    """Legacy single-game broadcast lookup. EPG is gone — return the empty shape."""
+    return {"game_id": game_id, "broadcasts": []}
+
+
+@app.get("/epg/all")
+def epg_all_games(country: str = "il"):
+    """Legacy all-games broadcast map. EPG is gone — return the empty shape."""
+    return {"broadcasts": {}}
+
+
 # ── Health ─────────────────────────────────────────────────────────────────────
 
 @app.get("/livez")
