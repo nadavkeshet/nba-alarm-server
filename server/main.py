@@ -3216,15 +3216,26 @@ def soccer_match_detail(canonical_id: str):
 @app.get("/soccer/match/{canonical_id}/broadcasts")
 def soccer_match_broadcasts(canonical_id: str, country: str = ""):
     """Where-to-watch: TV channels carrying this match in the caller's region.
-    The iOS client passes its device region (ISO-2) as `country`; omit for all
-    territories. BSD-only — returns an empty list for s365 ids / no data."""
+    The iOS client passes its device region (ISO-2) as `country`. BSD broadcast
+    coverage is territory-sparse, so if the region has no listing we fall back to
+    the global list (region_match=False) — the section is never blank when the
+    match is broadcast somewhere. BSD-only — empty for s365 ids / no data."""
     import soccer_source as _ss
     cc = (country or "").strip().upper() or None
-    try:
-        rows = _ss.get_soccer_broadcasts(canonical_id, country_code=cc)
-    except Exception:
-        rows = []
-    return {"match_id": canonical_id, "country": cc, "broadcasts": rows}
+    rows: list[dict] = []
+    if cc:
+        try:
+            rows = _ss.get_soccer_broadcasts(canonical_id, country_code=cc)
+        except Exception:
+            rows = []
+    region_match = bool(rows)
+    if not rows:
+        try:
+            rows = _ss.get_soccer_broadcasts(canonical_id, country_code=None)
+        except Exception:
+            rows = []
+    return {"match_id": canonical_id, "country": cc,
+            "region_match": region_match, "broadcasts": rows}
 
 
 @app.get("/soccer/match/{canonical_id}/prediction")
