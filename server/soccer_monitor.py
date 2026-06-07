@@ -61,6 +61,7 @@ from i18n import (
     t_soccer_body_player_yellow,
     t_soccer_body_player_red,
     t_shist,
+    t_soccer_body_score_gap,
 )
 import soccer_historic
 
@@ -1097,6 +1098,21 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
                       lambda h, a, c, lang: t_soccer_body_sensation(underdog_name, c, minute, lang),
                       home_name, away_name, competition,
                       signal="sensation", one_shot=True)
+        return
+
+    if alarm_type == "score_gap":
+        minute = match.get("minute") or 0
+        home_score = (match.get("home") or {}).get("score") or 0
+        away_score = (match.get("away") or {}).get("score") or 0
+        config      = alarm.get("config") or {}
+        from_minute = int(config.get("from_minute", 45))
+        threshold   = int(alarm.get("threshold") or 2)
+        diff = abs(home_score - away_score)
+        if minute >= from_minute and diff <= threshold and status in ("live", "1h", "2h", "ht"):
+            _fire(alarm, "soccer_score_gap",
+                  lambda h, a, c, lang: t_soccer_body_score_gap(h, a, c, threshold, from_minute, diff, lang),
+                  home_name, away_name, competition,
+                  signal=f"score_gap_{match_id}", one_shot=True)
         return
 
     if alarm_type == "knockout_et":

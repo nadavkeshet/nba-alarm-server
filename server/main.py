@@ -3677,6 +3677,7 @@ _SOCCER_ALARM_TYPES = {
     "match_moments",  # config flags kickoff/halftime/extra_time/penalties (multi-fire)
     "card_penalty",   # config flags red_card/penalty (fire on any such event)
     "sensation",      # underdog leading — config stores the underdog (resolved at creation)
+    "score_gap",      # threshold=max_diff, config.from_minute=start; fires once when gap<=threshold
 }
 
 
