@@ -1329,40 +1329,11 @@ def _match_drama(match: dict):
     if status not in {"live", "ht", "et", "pens", "1h", "2h"}:
         return None
     ctx = drama_engine.context_from_match_detail(match)
-    # Enrich with LIVE WebSocket signals the REST detail doesn't carry, so
-    # drama_radar ALARMS score off the same real-time data the watch badges do:
-    #   • win_prob_swing — a favorite-flip (goal / red card) spikes _score_odds
-    #     (up to +0.8). context_from_match_detail leaves it None "by design, the
-    #     caller injects it" — and the caller never did, until now.
-    #   • big_chances / big_chances_missed / hit_woodwork / big_saves — feed the
-    #     enriched _score_chances "thrill" term (near-miss agony + keeper heroics).
-    #   • dangerous-attack pressure → momentum_pressure, a faster-updating
-    #     momentum signal than the per-minute xG array.
-    # Best-effort; only bsd-* ids have a WS feed, so a miss just leaves defaults.
-    mid = match.get("id") or ""
-    if mid.startswith("bsd-") and mid[4:].isdigit():
-        try:
-            import bsd_websocket as _ws
-            eid = int(mid[4:])
-            swing = _ws.get_winprob_swing(eid)
-            if swing is not None:
-                ctx["win_prob_swing"] = swing
-            sig = drama_engine.live_signals_from_ws_event(_ws.get_live_event_state(eid))
-            for side in ("home", "away"):
-                side_sig = sig.get(side) or {}
-                dst = ctx.setdefault(side, {})
-                for k, v in side_sig.items():
-                    if v is not None:
-                        dst[k] = v
-            # Momentum: blend the cumulative dangerous-attack asymmetry with the
-            # live situation-stream surge (a late flurry of shots/dangerous
-            # attacks). Both beat the REST momentum array for responsiveness.
-            blended = drama_engine.blend_pressure(
-                sig.get("momentum_pressure"), _ws.get_attack_surge(eid))
-            if blended is not None:
-                ctx["momentum_pressure"] = blended
-        except Exception:
-            pass
+    # Overlay every live drama signal (WS win-prob swing, near-miss/saves thrill,
+    # blended live momentum, pre-match upset, WC-group jeopardy). SHARED with the
+    # /soccer/drama endpoint so the radar that fires alerts, the card's Drama
+    # Meter, and the breakdown all score off identical data — one real number.
+    ss.enrich_drama_ctx(ctx, match.get("id") or "", match)
     score = drama_engine.compute_drama(ctx)
     # Persist snapshot (best-effort — never block firing on log failure)
     _log_drama_snapshot(match.get("id"), match.get("minute") or 0, score)

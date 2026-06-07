@@ -3261,30 +3261,12 @@ def soccer_drama(canonical_id: str):
     if detail is None:
         raise HTTPException(status_code=404, detail="match not found")
     ctx = _de.context_from_match_detail(detail)
-    # Live BSD: enrich with the win-probability swing from the WS history
-    # (context_from_match_detail can't reach the WS without importing it).
-    if canonical_id.startswith("bsd-"):
-        try:
-            import bsd_websocket as _ws
-            eid = int(canonical_id[4:])
-            swing = _ws.get_winprob_swing(eid)
-            if swing is not None:
-                ctx["win_prob_swing"] = swing
-            # Pre-match prediction powers the upset signal (giant-killing).
-            pm = _ss.pre_match_win_prob(eid)
-            if pm is not None:
-                ctx["pre_match_win_prob"] = pm
-        except Exception:
-            pass
-    # World Cup group game → full 12-group standings drive qualification jeopardy.
-    if (detail.get("competition") or "").lower() == "world_cup" \
-            and "group" in (detail.get("round_name") or "").lower():
-        try:
-            groups = _ss.wc_group_standings("world_cup")
-            if groups:
-                ctx["wc_groups"] = groups
-        except Exception:
-            pass
+    # SHARED enrichment — IDENTICAL to the radar's _match_drama, so the card's
+    # Drama Meter shows the same real number that fires alerts (WS win-prob swing,
+    # blended live momentum, near-miss/saves thrill, pre-match upset, WC-group
+    # jeopardy). Previously this endpoint had only swing + pre-match + groups and
+    # missed the live momentum/thrill — a different, misleading number.
+    _ss.enrich_drama_ctx(ctx, canonical_id, detail)
     score = _de.compute_drama(ctx)
     _ss.record_peak_drama(canonical_id, score.total)
     return {

@@ -177,3 +177,26 @@ def test_drama_radar_no_retroactive_then_fresh_crossing(monkeypatch):
     sm._evaluate_drama_radar(a, match, score=_Score(5.0))   # cools below → re-arm
     sm._evaluate_drama_radar(a, match, score=_Score(8.0))   # fresh crossing → alert once
     assert len(sent) == 1
+
+
+def test_enrich_drama_ctx_applies_all_live_signals(monkeypatch):
+    """The shared enrichment (used by BOTH the radar and the /soccer/drama card
+    endpoint) must apply the live momentum + thrill + swing + pre-match, so the
+    card shows the SAME number the radar fires on."""
+    import soccer_source as ss, bsd_websocket as ws
+    monkeypatch.setattr(ws, "get_winprob_swing", lambda eid, **k: 0.4)
+    monkeypatch.setattr(ws, "get_live_event_state", lambda eid: {
+        "stats": {"home": {"dangerous_attack_pct": 70, "big_chances_missed": 2},
+                  "away": {"dangerous_attack_pct": 30}}})
+    monkeypatch.setattr(ws, "get_attack_surge", lambda eid, **k: 0.9)
+    monkeypatch.setattr(ss, "pre_match_win_prob", lambda eid: (0.6, 0.2, 0.2))
+    ctx = {"home": {"score": 1}, "away": {"score": 0}}
+    ss.enrich_drama_ctx(ctx, "bsd-123")
+    assert ctx.get("win_prob_swing") == 0.4                  # favorite-flip
+    assert ctx.get("momentum_pressure") is not None          # live blended momentum
+    assert ctx.get("pre_match_win_prob") == (0.6, 0.2, 0.2)  # upset signal
+    assert ctx["home"].get("big_chances_missed") == 2        # near-miss thrill
+    # s365 / non-bsd ids must no-op (no WS feed) without raising.
+    ctx2 = {"home": {"score": 0}, "away": {"score": 0}}
+    ss.enrich_drama_ctx(ctx2, "s365-999")
+    assert "momentum_pressure" not in ctx2

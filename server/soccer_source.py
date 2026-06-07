@@ -84,6 +84,43 @@ def record_peak_drama(canonical_id: str, value: float) -> None:
         pass
 
 
+def enrich_drama_ctx(ctx: dict, canonical_id: str, detail: dict | None = None) -> None:
+    """Overlay EVERY live drama signal onto a drama ctx, so all consumers — the
+    radar that fires alerts, the live Drama Meter on the card, and the breakdown
+    endpoint — score off IDENTICAL data and show the same number. Previously the
+    surfaces diverged: the radar had the live momentum + near-miss/saves thrill
+    but not the pre-match upset; the endpoint had the inverse. bsd-* only for the
+    WS parts; best-effort (a miss just leaves defaults)."""
+    if canonical_id.startswith("bsd-") and canonical_id[4:].isdigit():
+        try:
+            import bsd_websocket as _ws
+            eid = int(canonical_id[4:])
+            swing = _ws.get_winprob_swing(eid)
+            if swing is not None:
+                ctx["win_prob_swing"] = swing
+            sig = drama_engine.live_signals_from_ws_event(_ws.get_live_event_state(eid))
+            for side in ("home", "away"):
+                for k, v in (sig.get(side) or {}).items():
+                    if v is not None:
+                        ctx.setdefault(side, {})[k] = v
+            blended = drama_engine.blend_pressure(sig.get("momentum_pressure"), _ws.get_attack_surge(eid))
+            if blended is not None:
+                ctx["momentum_pressure"] = blended
+            pm = pre_match_win_prob(eid)
+            if pm is not None:
+                ctx["pre_match_win_prob"] = pm
+        except Exception:
+            pass
+    if detail and (detail.get("competition") or "").lower() == "world_cup" \
+            and "group" in (detail.get("round_name") or "").lower():
+        try:
+            groups = wc_group_standings("world_cup")
+            if groups:
+                ctx["wc_groups"] = groups
+        except Exception:
+            pass
+
+
 def pre_match_win_prob(eid: int) -> tuple[float, float, float] | None:
     """(p_home, p_draw, p_away) in 0–1 from the BSD pre-match prediction — the
     baseline for the Drama Engine's upset signal. None on any failure."""
