@@ -3491,7 +3491,6 @@ def soccer_team_squad(team_id: str):
     return squad
 
 
-@app.get("/soccer/match/{canonical_id}/lineups")
 def _stamp_lineup_he(result: dict) -> dict:
     """Stamp `team_name_he` onto each lineup side so the Lineups tab shows Hebrew
     team names (the detail header already does; this kept the tab in English)."""
@@ -3506,6 +3505,7 @@ def _stamp_lineup_he(result: dict) -> dict:
     return result
 
 
+@app.get("/soccer/match/{canonical_id}/lineups")
 def soccer_match_lineups(canonical_id: str):
     """Confirmed / predicted lineups for a soccer match. Supports BSD- and
     365scores-sourced ids; unknown sources return lineup_status=unavailable."""
