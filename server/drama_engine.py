@@ -20,11 +20,11 @@ Components:
 - **events** (0–4)   — Discrete drama injectors in the last few minutes:
                       red cards, penalties awarded, late goals, big chances.
 - **stakes** (0.6–2) — Multiplier from the competition and round (knockout
-                      vs group, final vs quarter, World Cup vs Ligue 1).
+                      vs group, final vs quarter, World Championship vs Ligue 1).
 
 The "state + momentum + events" sum is clamped to ≥ 0 before multiplying
 because a boring blowout shouldn't get *more* dramatic because it's the
-World Cup final — the stakes only amplify already-present drama.
+World Championship final — the stakes only amplify already-present drama.
 
 See `tests/test_drama_engine.py` for the calibration fixtures driving these
 constants. Tune by adjusting weights, then re-running the test suite.
@@ -416,7 +416,7 @@ def _score_chances(ctx: dict) -> float:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Upset — giant-killing in progress (the World Cup's signature moment)
+# Upset — giant-killing in progress (the World Championship's signature moment)
 
 
 def _score_upset(ctx: dict) -> float:

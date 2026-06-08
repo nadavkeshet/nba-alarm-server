@@ -300,8 +300,8 @@ _LEAGUES: list[dict] = [
     {"id": "bundesliga",     "name": "Bundesliga",                "sport": "football"},
     {"id": "ligue_1",        "name": "Ligue 1",                   "sport": "football"},
     {"id": "europa_league",  "name": "Europa League",             "sport": "football"},
-    {"id": "world_cup",      "name": "FIFA World Cup",            "sport": "football"},
-    {"id": "euros",          "name": "UEFA Euros",                "sport": "football"},
+    {"id": "world_cup",      "name": "World Championship",            "sport": "football"},
+    {"id": "euros",          "name": "Euros",                "sport": "football"},
     {"id": "ligat_haal",     "name": "Israeli Ligat Ha'Al",       "sport": "football"},
     {"id": "friendlies",     "name": "International Friendlies",   "sport": "football"},
 ]
@@ -409,7 +409,7 @@ def search(query: str, limit: int = 10) -> dict[str, list[dict]]:
     teams = _merge_duplicate_teams(teams)
 
     # Sort by score desc, then name asc; cap each section at `limit`.
-    # Featured leagues (World Cup) are pinned to the FRONT of league results.
+    # Featured leagues (World Championship) are pinned to the FRONT of league results.
     teams.sort(   key=lambda r: (-r["score"], r["name"].lower()))
     leagues.sort( key=lambda r: (_featured_rank(r["id"]), -r["score"], r["name"].lower()))
     players.sort( key=lambda r: (-r["score"], r["name"].lower()))

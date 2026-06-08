@@ -1,7 +1,7 @@
 """
 Resolve a soccer player's NATIONALITY (a country *name* the data provider gives,
 e.g. "France") to the national-team id that appears as a home/away team in
-international competition fixtures (World Cup, Euros, …).
+international competition fixtures (World Championship, Euros, …).
 
 Why this exists: the provider never hands us a national-team id. Player *detail*
 exposes `nationality` as a country name only; player *search* exposes just the
