@@ -297,7 +297,7 @@ def team(team_id: int | str) -> dict | None:
 def worldcup_squad(team_id: int | str, *, status: str = "official") -> list[dict]:
     """Current-World-Cup squad call-ups for one national team.
 
-    BSD covers only the current FIFA World Cup edition. `status="official"`
+    BSD covers only the current World Championship edition. `status="official"`
     is the final 26-man squad. Returns [] for an unknown team / unannounced
     squad (never raises for those — callers treat empty as "no squad yet")."""
     params = {"team": team_id, "status": status, "limit": 200}

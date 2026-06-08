@@ -375,7 +375,7 @@ _CAL_NAMES = {
     "favorites": "Clutch Alarm – Favorites",
     "custom":    "Clutch Alarm – Custom",
     "all":       "Clutch Alarm – All Matches",
-    "world_cup": "Clutch Alarm – World Cup",
+    "world_cup": "Clutch Alarm – World Championship",
 }
 
 
@@ -2845,7 +2845,7 @@ def _feed_soccer(league: str, iso_date: str, tz: Optional[str]) -> list[dict]:
         # Only memoize "no games" when a source actually CONFIRMED it. An
         # untrustworthy empty (every upstream errored — e.g. a transient 429)
         # must not be cached, or one hiccup hides real fixtures for 15 minutes
-        # (this is what made World Cup days vanish from /feed while /soccer/games
+        # (this is what made World Championship days vanish from /feed while /soccer/games
         # — which never caches — kept serving them).
         if trustworthy:
             _empty_feed_cache[key] = time.monotonic() + _feed_empty_ttl(iso_date)
@@ -3474,7 +3474,7 @@ def soccer_team_matches(team_id: str, league: str = "", name: str = ""):
 
 @app.get("/soccer/team/{team_id}/squad")
 def soccer_team_squad(team_id: str):
-    """Official World Cup squad for a national team, each player merged to the
+    """Official World Championship squad for a national team, each player merged to the
     club they currently play for. Empty for non-World-Cup ids / unannounced
     squads (BSD covers the current WC edition only)."""
     import soccer_source as _ss
@@ -3672,7 +3672,7 @@ def _normalize_soccer_standings(raw: dict, league_id: int) -> dict:
         "standings": [],
         "groups":    [],
     }
-    # Grouped competitions (World Cup, Euros, …) come back as
+    # Grouped competitions (World Championship, Euros, …) come back as
     # `{"groups": {"Group A": [rows], ...}}` — emit a groups array so the client
     # can render one mini-table per group instead of a single flat list.
     groups_raw = raw.get("groups")

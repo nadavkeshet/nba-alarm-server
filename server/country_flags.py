@@ -1,4 +1,4 @@
-"""Country name → flag emoji, for World Cup calendar/event titles."""
+"""Country name → flag emoji, for World Championship calendar/event titles."""
 from __future__ import annotations
 import json
 import os

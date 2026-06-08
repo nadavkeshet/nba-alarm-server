@@ -40,7 +40,7 @@
     "score365_id": 35
   },
   "ucl": {
-    "name_en": "UEFA Champions League",
+    "name_en": "Champions League",
     "name_he": "ליגת האלופות",
     "country": "Europe",
     "primary_source": "bsd",
@@ -48,7 +48,7 @@
     "score365_id": 572
   },
   "europa_league": {
-    "name_en": "UEFA Europa League",
+    "name_en": "Europa League",
     "name_he": "ליגה אירופית",
     "country": "Europe",
     "primary_source": "bsd",
@@ -56,7 +56,7 @@
     "score365_id": 573
   },
   "world_cup": {
-    "name_en": "FIFA World Cup",
+    "name_en": "World Championship",
     "name_he": "מונדיאל",
     "country": "World",
     "primary_source": "bsd",
@@ -64,7 +64,7 @@
     "score365_id": 5930
   },
   "euros": {
-    "name_en": "UEFA European Championship",
+    "name_en": "European Championship",
     "name_he": "אליפות אירופה",
     "country": "Europe",
     "primary_source": "score365",
