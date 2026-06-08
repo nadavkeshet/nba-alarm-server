@@ -58,16 +58,18 @@ _LIVE = [
     ("bsd-9900003", "england",   "portugal", 0, 0, 63, 6.6, "Group C"),
 ]
 # Upcoming fixtures: (id, home, away, hours_from_now, group)
+# Offsets capped so every fixture stays on TODAY (the live matches' date) — a full
+# single-day slate for screenshots, rather than spilling across several days.
 _SCHED = [
-    ("bsd-9900010", "croatia",     "morocco",     3,  "Group A"),
-    ("bsd-9900011", "germany",     "japan",       5,  "Group B"),
-    ("bsd-9900012", "netherlands", "belgium",    21,  "Group C"),
-    ("bsd-9900013", "argentina",   "croatia",    24,  "Group A"),
-    ("bsd-9900014", "france",      "morocco",    27,  "Group A"),
-    ("bsd-9900015", "brazil",      "germany",    45,  "Group B"),
-    ("bsd-9900016", "spain",       "japan",      48,  "Group B"),
-    ("bsd-9900017", "england",     "netherlands",51,  "Group C"),
-    ("bsd-9900018", "portugal",    "belgium",    69,  "Group C"),
+    ("bsd-9900010", "croatia",     "morocco",     2,  "Group A"),
+    ("bsd-9900011", "germany",     "japan",       4,  "Group B"),
+    ("bsd-9900012", "netherlands", "belgium",     6,  "Group C"),
+    ("bsd-9900013", "argentina",   "croatia",     8,  "Group A"),
+    ("bsd-9900014", "france",      "morocco",    10,  "Group A"),
+    ("bsd-9900015", "brazil",      "germany",    12,  "Group B"),
+    ("bsd-9900016", "spain",       "japan",      14,  "Group B"),
+    ("bsd-9900017", "england",     "netherlands",16,  "Group C"),
+    ("bsd-9900018", "portugal",    "belgium",    18,  "Group C"),
 ]
 
 _LIVE_BY_ID = {m[0]: m for m in _LIVE}
