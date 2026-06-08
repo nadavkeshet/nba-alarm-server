@@ -15,7 +15,7 @@ DUR_BBALL_MIN = 150
 # League slug -> human display name for DESCRIPTION (extend as needed; fall back
 # to a title-cased slug).
 _LEAGUE_NAMES = {
-    "world_cup": "World Championship",
+    "world_cup": "FIFA World Cup",
     "premier_league": "Premier League",
     "la_liga": "La Liga",
     "serie_a": "Serie A",

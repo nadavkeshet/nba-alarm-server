@@ -326,7 +326,7 @@ _SOCCER_COMPETITION_EN = {
     "serie_a":        "Serie A",
     "bundesliga":     "Bundesliga",
     "ligue_1":        "Ligue 1",
-    "world_cup":      "World Championship",
+    "world_cup":      "World Cup",
     "euros":          "Euros",
     "ligat_haal":     "Ligat Ha'al",
 }

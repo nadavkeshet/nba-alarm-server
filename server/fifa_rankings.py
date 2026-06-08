@@ -1,7 +1,7 @@
 """
 National-team world-ranking lookup — a fallback underdog signal for Sensation
 Watch. The BSD pre-match model underrates obvious favourites for some 48-team
-World Championship minnow fixtures (e.g. it gave Germany only 44% vs Curaçao), so when the
+World Cup minnow fixtures (e.g. it gave Germany only 44% vs Curaçao), so when the
 betting odds are too even to flag an underdog we fall back to the ranking gap.
 
 Rankings are a static, approximate snapshot in `config/fifa_rankings.json`

@@ -1,7 +1,7 @@
-"""Staged World Championship data for App Store screenshots.
+"""Staged World Cup data for App Store screenshots.
 
 Gated entirely behind the SCREENSHOT_DEMO env var — OFF in production. When on, a
-full group-stage slate of fabricated-but-dramatic World Championship matches (REAL teams, so
+full group-stage slate of fabricated-but-dramatic World Cup matches (REAL teams, so
 crests / names / Hebrew render authentically; only the STATE is invented) flows
 through the feed, /soccer/games, match detail, drama meter, drama timeline, and
 live snapshot — a few thrilling LIVE games plus a spread of UPCOMING fixtures, so

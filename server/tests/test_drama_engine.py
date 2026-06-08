@@ -152,7 +152,7 @@ def test_penalty_awarded_late_is_dramatic():
 # Stakes multiplier
 
 def test_world_cup_final_amplifies_drama():
-    """Same close late game, but World Championship final >> Ligue 1 mid-table."""
+    """Same close late game, but World Cup final >> Ligue 1 mid-table."""
     state_ctx = lambda comp, rnd: _ctx(
         minute=88,
         competition=comp,
@@ -168,7 +168,7 @@ def test_world_cup_final_amplifies_drama():
 
 def test_stakes_alone_dont_create_drama_from_a_blowout():
     """A 4-0 with leader pressing is not dramatic just because it's
-    World Championship. The state+momentum+events sum must clamp at 0 before
+    World Cup. The state+momentum+events sum must clamp at 0 before
     multiplying."""
     ctx = _ctx(
         minute=80,

@@ -250,7 +250,7 @@ def get_soccer_broadcasts(canonical: str, *, country_code: str | None = None) ->
 
 
 def wc_group_standings(slug: str = "world_cup") -> list[list[dict]] | None:
-    """All groups' live standings for a grouped competition (the World Championship) as a
+    """All groups' live standings for a grouped competition (the World Cup) as a
     list of groups, each a list of normalized rows {team_id, position, points,
     played, gf, ga, gd}. Powers the Drama Engine's best-thirds qualification
     jeopardy. None on any failure / tolerant of the raw BSD group shape."""
@@ -595,7 +595,7 @@ def get_soccer_matches_status(
     ever confirmed the schedule — in that case an empty `matches` means "we don't
     know", NOT "no games". The feed uses this to avoid caching a transient
     upstream failure as a sticky 15-minute "no games" (which is what made future
-    fixtures like the World Championship vanish from /feed while /soccer/games still
+    fixtures like the World Cup vanish from /feed while /soccer/games still
     served them). When at least one source replies cleanly — even with zero
     games — the empty result is real and `trustworthy` is True.
 
@@ -606,7 +606,7 @@ def get_soccer_matches_status(
     matches what they see in the UI. Falls back to UTC if invalid.
 
     Source chain (cascades on either exception OR empty result):
-        1. BSD           (primary for most competitions, incl. the World Championship)
+        1. BSD           (primary for most competitions, incl. the World Cup)
         2. 365scores     (covers all 10 competitions; primary for euros &
                          ligat_haal, which have no BSD id)
     """
@@ -1872,7 +1872,7 @@ _SQUAD_POS_ORDER = {"GK": 0, "DF": 1, "MF": 2, "FW": 3}
 
 
 def national_team_squad(team_id: int | str) -> dict:
-    """Official World Championship squad for one national team, each player merged to
+    """Official World Cup squad for one national team, each player merged to
     the club team they currently play for.
 
     Shape: {team_id, count, players: [{player_id, name, jersey_number,
