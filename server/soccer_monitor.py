@@ -74,8 +74,9 @@ _get_user_language: Callable[[str], str] | None = None
 _fire_once_fn: Callable[..., bool] | None = None
 _db_engine: Any = None
 _alarm_model: Any = None  # SoccerAlarmDB class — injected to avoid circular import
-_comp_follow_model: Any = None  # SoccerFavoriteCompetitionDB — followed leagues
-_team_follow_model: Any = None  # SoccerFavoriteTeamDB — followed teams
+_comp_follow_model: Any = None    # SoccerFavoriteCompetitionDB — followed leagues
+_team_follow_model: Any = None    # SoccerFavoriteTeamDB — followed teams
+_player_follow_model: Any = None  # SoccerFavoritePlayerDB — followed players
 _soccer_historic_model: Any = None  # SoccerHistoricPrefDB — per-user historic config
 
 POLL_INTERVAL = 25.0  # seconds
@@ -112,11 +113,12 @@ def wire(
     alarm_model: Any,
     comp_follow_model: Any = None,
     team_follow_model: Any = None,
+    player_follow_model: Any = None,
     soccer_historic_model: Any = None,
 ) -> None:
     """Called once by main.py during startup to inject runtime dependencies."""
     global _send_push, _get_user_language, _fire_once_fn, _db_engine, _alarm_model
-    global _comp_follow_model, _team_follow_model, _soccer_historic_model
+    global _comp_follow_model, _team_follow_model, _player_follow_model, _soccer_historic_model
     _send_push = send_push
     _get_user_language = get_user_language
     _fire_once_fn = fire_once
@@ -124,6 +126,7 @@ def wire(
     _alarm_model = alarm_model
     _comp_follow_model = comp_follow_model
     _team_follow_model = team_follow_model
+    _player_follow_model = player_follow_model
     _soccer_historic_model = soccer_historic_model
 
 
@@ -330,7 +333,17 @@ def _tick() -> None:
     for _u in hist_cfgs:
         hist_comps |= hist_follows.get(_u, {}).get("comps", set())
 
-    for comp_slug in set(drama_by_comp) | set(specs_by_comp) | hist_comps:
+    # Player favorites: build team_id → [player_spec] lookup.
+    player_favs = _load_player_follow_specs()
+    team_to_pfavs: dict[str, list[dict]] = defaultdict(list)
+    for _pf in player_favs:
+        for _tid in _pf["team_ids"]:
+            team_to_pfavs[_tid].append(_pf)
+    # Ensure at least world_cup is scanned when there are active player follows
+    # (WC national teams are the primary use case).
+    player_comps: set[str] = {"world_cup"} if player_favs else set()
+
+    for comp_slug in set(drama_by_comp) | set(specs_by_comp) | hist_comps | player_comps:
         try:
             live_matches = ss.get_live_matches([comp_slug])
         except Exception as exc:
@@ -382,6 +395,24 @@ def _tick() -> None:
                     _evaluate_historic(cid, detail, home_id, away_id, hist_cfgs, hist_follows)
                 except Exception as exc:
                     logger.exception("historic eval failed for %s: %s", cid, exc)
+
+            # Pass 3: player favorites — fire goal/card/hat-trick alerts for
+            # any user who follows a player whose team is in this match.
+            for _pfav in (team_to_pfavs.get(home_id, []) + team_to_pfavs.get(away_id, [])):
+                _palarm = {
+                    "id":          f"{_pfav['id']}_{cid}",
+                    "user_token":  _pfav["user_token"],
+                    "alarm_type":  "player_alert",
+                    "match_id":    cid,
+                    "player_id":   _pfav["player_id"],
+                    "alert_type":  _pfav["alert_type"],
+                    "config":      _pfav["config"],
+                }
+                try:
+                    _evaluate_player_alert(_palarm, detail)
+                except Exception as exc:
+                    logger.exception("player fav %s eval failed for %s: %s",
+                                     _pfav["id"], cid, exc)
 
     # ── Pre-match pass: reminders + confirmed lineups for favorite teams.
     # Self-throttled (~60s); best-effort so a failure never aborts the tick.
@@ -446,6 +477,44 @@ def _load_follow_specs() -> list[dict]:
                     config=getattr(f, "config", None)))
         except Exception as exc:
             logger.warning("team-follow load failed: %s", exc)
+    return specs
+
+
+def _load_player_follow_specs() -> list[dict]:
+    """All active (non-paused) soccer player favorites.
+
+    Returns a list of dicts:
+        {id, user_token, player_id, player_name, team_ids: set[str],
+         alert_type, config}
+    """
+    specs: list[dict] = []
+    if _player_follow_model is None or _db_engine is None:
+        return specs
+    from sqlalchemy.orm import Session
+    try:
+        with Session(_db_engine) as session:
+            rows = session.query(_player_follow_model).all()
+        for f in rows:
+            if getattr(f, "paused", False):
+                continue
+            # Collect all team ids: primary club + alt ids (includes national team)
+            tids: set[str] = set()
+            if f.team_id:
+                tids.add(str(f.team_id))
+            for t in (getattr(f, "alt_team_ids", None) or "").split(","):
+                if t:
+                    tids.add(t)
+            specs.append({
+                "id":          f"pfav_{f.user_token}_{f.player_id}",
+                "user_token":  f.user_token,
+                "player_id":   str(f.player_id),
+                "player_name": f.player_name or "",
+                "team_ids":    tids,
+                "alert_type":  f.alert_type or "alarm",
+                "config":      f.config or {},
+            })
+    except Exception as exc:
+        logger.warning("player-follow load failed: %s", exc)
     return specs
 
 

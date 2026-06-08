@@ -1687,6 +1687,7 @@ async def lifespan(_app: FastAPI):
             alarm_model=SoccerAlarmDB,
             comp_follow_model=SoccerFavoriteCompetitionDB,
             team_follow_model=SoccerFavoriteTeamDB,
+            player_follow_model=SoccerFavoritePlayerDB,
             soccer_historic_model=SoccerHistoricPrefDB,
         )
         soccer_monitor.start_soccer_radar()
