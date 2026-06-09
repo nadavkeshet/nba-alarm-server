@@ -4656,9 +4656,10 @@ def watch_scores(date: str = "", league: str = "nba", tz: Optional[str] = None):
         home_abbr, away_abbr, gid, state = item
         try:
             # 365scores is the sole basketball source. The 365 play-by-play path
-            # scores FINISHED games; live games are not scored here (there is no
-            # live 365 watch-score path), so live drama badges aren't computed.
-            if state == "post":
+            if gid.startswith("s365-"):
+                from watch_score import calculate_watch_score as _calc_ws
+                result = _calc_ws(int(gid[5:]), league=league)
+            elif state == "post":
                 result = calculate_watch_score_by_teams(
                     home_abbr=home_abbr, away_abbr=away_abbr,
                     date_yyyymmdd=game_date, league=league)
