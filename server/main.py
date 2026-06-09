@@ -3930,7 +3930,6 @@ def soccer_alarm_delete(alarm_id: int, user_token: str = ""):
     return {"status": "alarm_deactivated", "alarm_id": alarm_id}
 
 
-@app.get("/soccer-alarms")
 def _match_name_he(name: str | None) -> Optional[str]:
     """Best-effort Hebrew for a 'Home vs Away' match label (both sides must
     resolve, else None so the client keeps the English original)."""
@@ -3945,6 +3944,7 @@ def _match_name_he(name: str | None) -> Optional[str]:
     return None
 
 
+@app.get("/soccer-alarms")
 def soccer_alarms_list(user_token: str = ""):
     """List a user's active soccer alarms."""
     if engine is None:
