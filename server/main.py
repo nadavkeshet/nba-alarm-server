@@ -3224,6 +3224,9 @@ def soccer_match_detail(canonical_id: str):
     import demo_data
     if demo_data.is_demo_id(canonical_id):
         return demo_data.detail(canonical_id)
+    # Redirect fabricated s365-* ids (app prefix-swap on a BSD-primary match) to
+    # their real bsd-* twin so the whole summary gets real data, not an empty stub.
+    canonical_id = _ss.resolve_fabricated_id(canonical_id)
     detail = _ss.get_soccer_match_detail(canonical_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="match not found")
@@ -3241,6 +3244,7 @@ def soccer_match_broadcasts(canonical_id: str, country: str = ""):
     the global list (region_match=False) — the section is never blank when the
     match is broadcast somewhere. BSD-only — empty for s365 ids / no data."""
     import soccer_source as _ss
+    canonical_id = _ss.resolve_fabricated_id(canonical_id)
     cc = (country or "").strip().upper() or None
     rows: list[dict] = []
     if cc:
@@ -3268,6 +3272,7 @@ def soccer_match_prediction(canonical_id: str):
     import soccer_source as _ss
     import drama_engine as _de
 
+    canonical_id = _ss.resolve_fabricated_id(canonical_id)
     empty = {
         "match_id": canonical_id, "has_prediction": False,
         "win_prob": None, "underdog": None, "favorite": None,
@@ -3516,6 +3521,8 @@ def _stamp_lineup_he(result: dict) -> dict:
 def soccer_match_lineups(canonical_id: str):
     """Confirmed / predicted lineups for a soccer match. Supports BSD- and
     365scores-sourced ids; unknown sources return lineup_status=unavailable."""
+    import soccer_source as _ss
+    canonical_id = _ss.resolve_fabricated_id(canonical_id)
     if canonical_id.startswith("bsd-"):
         try:
             event_id = int(canonical_id[4:])
