@@ -1072,6 +1072,93 @@ def _ws_period_int(raw) -> int | None:
     return _WS_PERIOD_INT.get(str(raw or "").strip().lower())
 
 
+# Minutes elapsed before each period begins — MUST match the iOS
+# LiveClockText.periodBounds() offsets (1→0, 2→45, 3→90 ET1, 4→105 ET2) so the
+# re-derived clock anchor lines up with the client's local clock math.
+_PERIOD_OFFSET_MIN = {1: 0, 2: 45, 3: 90, 4: 105}
+
+# Non-running clock states — keep BSD's raw period_started_at_uts unchanged.
+_FROZEN_CLOCK_STATUSES = {
+    "halftime", "ht", "finished", "ft", "fulltime",
+    "notstarted", "scheduled", "pre", "postponed", "cancelled", "canceled",
+}
+
+
+def _period_anchor_from_clock(time_obj: dict, period: int | None) -> int | None:
+    """Re-derive period_started_at_uts from BSD's authoritative running clock.
+
+    The iOS client renders the live minute as
+        (now - period_started_at_uts) + period_offset
+    and ticks it locally every second. BSD's own period_started_at_uts drifts ~1
+    min behind its authoritative minute:second display (and the gap grows through
+    the half), so the client ran progressively slow. We instead set
+        anchor = now - (minute*60 + second - period_offset*60)
+    so the client's local clock equals BSD's minute:second, re-synced each poll.
+
+    Returns None when there's no running clock to anchor to (frozen state or
+    unknown minute); the caller then keeps BSD's raw value.
+    """
+    if period is None:
+        return None
+    status = (time_obj.get("status") or "").strip().lower()
+    if status in _FROZEN_CLOCK_STATUSES:
+        return None
+    minute = time_obj.get("minute")
+    if minute is None:
+        return None
+    try:
+        minute = int(minute)
+        second = int(time_obj.get("second") or 0)
+    except (TypeError, ValueError):
+        return None
+    offset_min = _PERIOD_OFFSET_MIN.get(period, 0)
+    within_period_sec = (minute * 60 + second) - offset_min * 60
+    if within_period_sec < 0:
+        return None
+    now_uts = int(datetime.now(timezone.utc).timestamp())
+    return now_uts - within_period_sec
+
+
+# s365-{N} → bsd-{N} resolutions are stable for the life of the process; cache
+# them so the polled live/drama endpoints don't re-run the detail lookups.
+_fab_resolve_cache: dict[str, str] = {}
+
+
+def resolve_fabricated_id(canonical: str) -> str:
+    """Map a fabricated `s365-{N}` id to its real `bsd-{N}` twin.
+
+    The iOS app can hand a BSD-primary match (e.g. World Cup) an `s365-*` id by
+    swapping the prefix onto the BSD numeric. 365 has no such event, so it returns
+    an empty stub — the Drama Meter then floors at 1.0 and the live clock dies.
+    Redirect ONLY when the 365 side is an empty stub AND `bsd-{N}` is a real match,
+    so genuine 365 matches (which carry real teams) are never mis-redirected.
+    """
+    if not canonical.startswith("s365-"):
+        return canonical
+    cached = _fab_resolve_cache.get(canonical)
+    if cached is not None:
+        return cached
+    native = canonical[5:]
+    if not native.isdigit():
+        return canonical
+    try:
+        s365_detail = get_soccer_match_detail(canonical)
+        if s365_detail and (s365_detail.get("home") or {}).get("id"):
+            _fab_resolve_cache[canonical] = canonical   # genuine 365 match
+            return canonical
+        bsd_alt = f"bsd-{native}"
+        bsd_detail = get_soccer_match_detail(bsd_alt)
+        if bsd_detail and (bsd_detail.get("home") or {}).get("id"):
+            logger.info("resolve_fabricated_id: %s -> %s", canonical, bsd_alt)
+            _fab_resolve_cache[canonical] = bsd_alt
+            return bsd_alt
+    except Exception as exc:
+        logger.debug("resolve_fabricated_id(%s) failed: %s", canonical, exc)
+    # No twin yet (e.g. looked up before the BSD event exists) — don't cache so a
+    # later poll can resolve it once the match appears.
+    return canonical
+
+
 def build_live_snapshot(canonical: str) -> dict:
     """Build the lightweight WS-only live-state response for /soccer/live/*.
 
@@ -1119,9 +1206,15 @@ def build_live_snapshot(canonical: str) -> dict:
         # `period` is sometimes an int (1) and sometimes a code ("2T"); normalize
         # to a plain 1–4 so the client's Int? decode never breaks.
         out["period"]                = _ws_period_int(time_obj.get("period"))
-        out["period_started_at_uts"] = time_obj.get("period_started_at_uts")
         out["injury_time"]           = time_obj.get("injury_time")
         out["second"]                = time_obj.get("second")
+        # Re-anchor to BSD's authoritative running clock (see
+        # _period_anchor_from_clock); fall back to BSD's raw anchor for frozen
+        # states / unknown minute.
+        out["period_started_at_uts"] = (
+            _period_anchor_from_clock(time_obj, out["period"])
+            or time_obj.get("period_started_at_uts")
+        )
         # Per-team stats live under event_snap['stats'][side] (event_snap[side]
         # is only team identity), so read the stats block — not the team dict.
         ws_stats = event_snap.get("stats") or {}

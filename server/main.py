@@ -3344,7 +3344,7 @@ def soccer_live_snapshot(canonical_id: str):
     if demo_data.is_demo_id(canonical_id):
         return demo_data.live(canonical_id)
     import soccer_source as _ss
-    return _ss.build_live_snapshot(canonical_id)
+    return _ss.build_live_snapshot(_ss.resolve_fabricated_id(canonical_id))
 
 
 @app.get("/soccer/drama/{canonical_id}")
@@ -3364,6 +3364,9 @@ def soccer_drama(canonical_id: str):
     import demo_data
     if demo_data.is_demo_id(canonical_id):
         return demo_data.drama(canonical_id)
+    # Redirect fabricated s365-* ids (app prefix-swap on a BSD-primary match) to
+    # their real bsd-* twin so live enrichment runs instead of flooring at 1.0.
+    canonical_id = _ss.resolve_fabricated_id(canonical_id)
     detail = _ss.get_soccer_match_detail(canonical_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="match not found")
@@ -3436,6 +3439,9 @@ def soccer_drama_timeline(canonical_id: str, step: int = 2):
         return {"match_id": canonical_id, "timeline": demo_data.drama_timeline(canonical_id)}
     import soccer_source as _ss
     import drama_engine as _de
+    # Redirect fabricated s365-* ids to their real bsd-* twin (see the live-meter
+    # drama route) so the timeline replays real xg/momentum instead of an empty stub.
+    canonical_id = _ss.resolve_fabricated_id(canonical_id)
     detail = _ss.get_soccer_match_detail(canonical_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="match not found")
