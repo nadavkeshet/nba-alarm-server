@@ -461,6 +461,11 @@ class BSDLiveClient:
             return
         with self._lock:
             if kind == "event":
+                # Stamp the wall-clock receive time so consumers can anchor the
+                # live game clock to WHEN this minute:second was true, not to the
+                # later moment they happen to read the snapshot (BSD pushes the
+                # clock only ~every 30 s, so reading "now" would lag by up to that).
+                payload["_recv_uts"] = int(time.time())
                 self._state_event[event_id] = payload
             elif kind == "livedata":
                 self._state_livedata[event_id] = payload

@@ -1090,7 +1090,8 @@ _FROZEN_CLOCK_STATUSES = {
 }
 
 
-def _period_anchor_from_clock(time_obj: dict, period: int | None) -> int | None:
+def _period_anchor_from_clock(time_obj: dict, period: int | None,
+                              ref_uts: int | None = None) -> int | None:
     """Re-derive period_started_at_uts from BSD's authoritative running clock.
 
     The iOS client renders the live minute as
@@ -1124,8 +1125,11 @@ def _period_anchor_from_clock(time_obj: dict, period: int | None) -> int | None:
     within_period_sec = minute * 60 + second
     if within_period_sec < 0:
         return None
-    now_uts = int(datetime.now(timezone.utc).timestamp())
-    return now_uts - within_period_sec
+    # Anchor to WHEN this clock reading was received (ref_uts), not "now" — the
+    # snapshot's minute:second can be up to BSD's ~30 s push interval stale, and
+    # anchoring to now would bake that staleness in as a constant lag.
+    ref = ref_uts if ref_uts is not None else int(datetime.now(timezone.utc).timestamp())
+    return ref - within_period_sec
 
 
 # s365-{N} → bsd-{N} resolutions are stable for the life of the process; cache
@@ -1227,10 +1231,11 @@ def build_live_snapshot(canonical: str) -> dict:
         else:
             out["minute"] = bsd_min
         # Clock anchor: the app ticks a second-accurate clock locally from this.
-        # Re-anchor to BSD's running clock (see _period_anchor_from_clock); fall
-        # back to BSD's raw anchor for frozen states / unknown minute.
+        # Re-anchor to BSD's running clock as of WHEN the frame was received
+        # (_recv_uts), not now — see _period_anchor_from_clock. Fall back to BSD's
+        # raw anchor for frozen states / unknown minute.
         out["period_started_at_uts"] = (
-            _period_anchor_from_clock(time_obj, period_int)
+            _period_anchor_from_clock(time_obj, period_int, event_snap.get("_recv_uts"))
             or time_obj.get("period_started_at_uts")
         )
         # Per-team stats live under event_snap['stats'][side] (event_snap[side]
