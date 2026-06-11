@@ -1062,13 +1062,19 @@ _WS_PERIOD_INT: dict[str, int] = {
 }
 
 
+# BSD integer period codes seen on the WS event frame: 1 = 1st half,
+# 31 = 2nd half. (ET / penalty integer codes are not yet confirmed; they fall
+# through to None, which keeps the client's static-minute fallback.)
+_WS_PERIOD_INT_CODES: dict[int, int] = {1: 1, 2: 2, 3: 3, 4: 4, 31: 2}
+
+
 def _ws_period_int(raw) -> int | None:
-    """Normalize the WS `time.period` (int `1` or code like `"2T"`) to a plain
-    1–4 the app can use for the clock's period offset. None when unknown."""
+    """Normalize the WS `time.period` (int `1`/`31` or code like `"2T"`) to a
+    plain 1–4 the app uses for the clock's period offset. None when unknown."""
     if isinstance(raw, bool):
         return None
     if isinstance(raw, int):
-        return raw if 1 <= raw <= 4 else None
+        return _WS_PERIOD_INT_CODES.get(raw)
     return _WS_PERIOD_INT.get(str(raw or "").strip().lower())
 
 
@@ -1090,10 +1096,11 @@ def _period_anchor_from_clock(time_obj: dict, period: int | None) -> int | None:
     The iOS client renders the live minute as
         (now - period_started_at_uts) + period_offset
     and ticks it locally every second. BSD's own period_started_at_uts drifts ~1
-    min behind its authoritative minute:second display (and the gap grows through
-    the half), so the client ran progressively slow. We instead set
-        anchor = now - (minute*60 + second - period_offset*60)
-    so the client's local clock equals BSD's minute:second, re-synced each poll.
+    min behind its authoritative (period-relative) minute:second display (and the
+    gap grows through the half), so the client ran progressively slow. We instead
+    set
+        anchor = now - (minute*60 + second)        # minute is period-relative
+    so the client's local clock equals BSD's display each poll.
 
     Returns None when there's no running clock to anchor to (frozen state or
     unknown minute); the caller then keeps BSD's raw value.
@@ -1111,8 +1118,10 @@ def _period_anchor_from_clock(time_obj: dict, period: int | None) -> int | None:
         second = int(time_obj.get("second") or 0)
     except (TypeError, ValueError):
         return None
-    offset_min = _PERIOD_OFFSET_MIN.get(period, 0)
-    within_period_sec = (minute * 60 + second) - offset_min * 60
+    # BSD's WS minute:second is PERIOD-RELATIVE (the 2nd half restarts at 0:00),
+    # so the within-period elapsed IS minute:second — the iOS client adds the
+    # period offset itself via periodBounds(period).
+    within_period_sec = minute * 60 + second
     if within_period_sec < 0:
         return None
     now_uts = int(datetime.now(timezone.utc).timestamp())
@@ -1199,20 +1208,29 @@ def build_live_snapshot(canonical: str) -> dict:
     if event_snap:
         time_obj = event_snap.get("time") or {}
         out["score"]  = event_snap.get("score")
-        out["minute"] = time_obj.get("minute")
         out["status"] = time_obj.get("status")
-        # Clock anchor: the app ticks a second-accurate clock LOCALLY from the
-        # timestamp the current period kicked off — no per-second polling. The WS
-        # `period` is sometimes an int (1) and sometimes a code ("2T"); normalize
-        # to a plain 1–4 so the client's Int? decode never breaks.
-        out["period"]                = _ws_period_int(time_obj.get("period"))
-        out["injury_time"]           = time_obj.get("injury_time")
-        out["second"]                = time_obj.get("second")
-        # Re-anchor to BSD's authoritative running clock (see
-        # _period_anchor_from_clock); fall back to BSD's raw anchor for frozen
-        # states / unknown minute.
+        # The WS `period` is an int code (1 = 1H, 31 = 2H) or a string ("2T");
+        # normalize to a plain 1–4 for the client's clock offset + Int? decode.
+        period_int = _ws_period_int(time_obj.get("period"))
+        out["period"]      = period_int
+        out["injury_time"] = time_obj.get("injury_time")
+        out["second"]      = time_obj.get("second")
+        # BSD's WS minute is PERIOD-RELATIVE (resets to 0 each half). Convert to
+        # the OVERALL minute the app shows by adding the period offset; keep the
+        # raw value when the period code is unknown.
+        bsd_min = time_obj.get("minute")
+        if period_int is not None and bsd_min is not None:
+            try:
+                out["minute"] = int(bsd_min) + _PERIOD_OFFSET_MIN.get(period_int, 0)
+            except (TypeError, ValueError):
+                out["minute"] = bsd_min
+        else:
+            out["minute"] = bsd_min
+        # Clock anchor: the app ticks a second-accurate clock locally from this.
+        # Re-anchor to BSD's running clock (see _period_anchor_from_clock); fall
+        # back to BSD's raw anchor for frozen states / unknown minute.
         out["period_started_at_uts"] = (
-            _period_anchor_from_clock(time_obj, out["period"])
+            _period_anchor_from_clock(time_obj, period_int)
             or time_obj.get("period_started_at_uts")
         )
         # Per-team stats live under event_snap['stats'][side] (event_snap[side]
