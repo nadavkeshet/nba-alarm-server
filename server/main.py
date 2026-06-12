@@ -3463,12 +3463,15 @@ def soccer_drama_timeline(canonical_id: str, step: int = 2):
                 timeline.append(recon[m])                # gap fill
     else:
         timeline = _de.compute_drama_timeline(detail, step=step)
-    # Cache the peak so a finished match's feed badge reflects how dramatic it
-    # actually got (not the FT-damped live state).
+    # Cache the match-quality score (top-15% average of the timeline) so a
+    # finished match's feed badge reflects how good it actually was (not the
+    # FT-damped live state). This is the authoritative value — finalize it.
     try:
-        peak = max((p.get("drama", 0.0) for p in timeline), default=0.0)
-        if peak > 0:
-            _ss.record_peak_drama(canonical_id, peak)
+        quality = round(_de.top_fraction_average(
+            [p.get("drama", 0.0) for p in timeline]
+        ), 2)
+        if quality > 0:
+            _ss.record_peak_drama(canonical_id, quality, final=True)
     except Exception:
         pass
     return {"match_id": detail.get("id"), "timeline": timeline}

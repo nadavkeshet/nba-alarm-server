@@ -66,20 +66,32 @@ from contextlib import nullcontext as _nullcontext
 
 _DETAIL_POOL = _ThreadPoolExecutor(max_workers=8, thread_name_prefix="soccerdetail")
 
-# canonical_id -> peak Drama Engine score seen for the match. Populated when the
+# canonical_id -> match-quality score seen for the match. Populated when the
 # Drama Meter / timeline is computed (main.py), so a finished match's feed badge
-# reflects how dramatic it actually got — not the FT-damped live state. Permanent
-# for finished matches (FT scores don't change).
+# reflects how good it actually was — not the FT-damped live state. The timeline
+# endpoint computes the authoritative value (top-15% average of the per-minute
+# drama timeline) and finalizes the entry; until then, live Drama Meter calls
+# keep a monotonic-max placeholder. Permanent for finished matches.
 _peak_drama_cache: dict[str, float] = {}
+_quality_finalized: set[str] = set()
 
 
-def record_peak_drama(canonical_id: str, value: float) -> None:
-    """Remember the highest Drama Engine total seen for a match (called by the
-    /soccer/drama endpoints). Best-effort, monotonic."""
+def record_peak_drama(canonical_id: str, value: float, *, final: bool = False) -> None:
+    """Remember the match-quality score for a match (called by the /soccer/drama
+    endpoints). `final=True` (from the timeline endpoint) sets the authoritative
+    top-15%-average value and locks it; otherwise best-effort monotonic-max
+    placeholder, ignored once finalized."""
     try:
+        value = float(value)
+        if final:
+            _peak_drama_cache[canonical_id] = value
+            _quality_finalized.add(canonical_id)
+            return
+        if canonical_id in _quality_finalized:
+            return
         prev = _peak_drama_cache.get(canonical_id)
         if prev is None or value > prev:
-            _peak_drama_cache[canonical_id] = float(value)
+            _peak_drama_cache[canonical_id] = value
     except Exception:
         pass
 
@@ -384,9 +396,10 @@ def _soccer_watch_score(
 
     - LIVE BSD: build a drama context from the in-memory WS snapshot (xG,
       dangerous-attack momentum proxy, odds win-probability + swing) — cheap, no
-      REST. - FINISHED BSD: reuse the cached PEAK drama (how dramatic it actually
-      got) when the match has been scored, else a lightweight finished-quality
-      formula. - Everything else: lightweight. None below the badge threshold.
+      REST. - FINISHED BSD: reuse the cached match-quality score (top-15% average
+      of the full-match drama timeline — how good it actually was) when the
+      match has been scored, else a lightweight finished-quality formula.
+      - Everything else: lightweight. None below the badge threshold.
     """
     try:
         if home_score is None and away_score is None:
