@@ -66,23 +66,6 @@ from contextlib import nullcontext as _nullcontext
 
 _DETAIL_POOL = _ThreadPoolExecutor(max_workers=8, thread_name_prefix="soccerdetail")
 
-# canonical_id -> peak Drama Engine score seen for the match. Populated when the
-# Drama Meter / timeline is computed (main.py), so a finished match's feed badge
-# reflects how dramatic it actually got — not the FT-damped live state. Permanent
-# for finished matches (FT scores don't change).
-_peak_drama_cache: dict[str, float] = {}
-
-
-def record_peak_drama(canonical_id: str, value: float) -> None:
-    """Remember the highest Drama Engine total seen for a match (called by the
-    /soccer/drama endpoints). Best-effort, monotonic."""
-    try:
-        prev = _peak_drama_cache.get(canonical_id)
-        if prev is None or value > prev:
-            _peak_drama_cache[canonical_id] = float(value)
-    except Exception:
-        pass
-
 
 def enrich_drama_ctx(ctx: dict, canonical_id: str, detail: dict | None = None) -> None:
     """Overlay EVERY live drama signal onto a drama ctx, so all consumers — the
@@ -384,9 +367,9 @@ def _soccer_watch_score(
 
     - LIVE BSD: build a drama context from the in-memory WS snapshot (xG,
       dangerous-attack momentum proxy, odds win-probability + swing) — cheap, no
-      REST. - FINISHED BSD: reuse the cached PEAK drama (how dramatic it actually
-      got) when the match has been scored, else a lightweight finished-quality
-      formula. - Everything else: lightweight. None below the badge threshold.
+      REST. - FINISHED: the FT-quality formula (goals + closeness + comeback +
+      xG, × stakes) — how good it was to watch, not the live tension state.
+      - Everything else: lightweight. None below the badge threshold.
     """
     try:
         if home_score is None and away_score is None:
@@ -404,11 +387,14 @@ def _soccer_watch_score(
             if ctx is not None:
                 return drama_engine.compute_drama(ctx).total
 
-        # Finished BSD → cached peak drama if we've ever scored this match
-        if source == "bsd" and is_ft and eid is not None:
-            peak = _peak_drama_cache.get(f"bsd-{eid}")
-            if peak is not None:
-                return peak
+        # Finished match → rate how good it was to WATCH (the FT-quality
+        # formula in _lightweight_drama: goals + closeness + comeback + xG,
+        # × stakes). We deliberately do NOT derive this from the live drama
+        # timeline (peak, or top-15% average): a competitive match's drama
+        # curve rises into a late tied/one-goal tension peak and stays there
+        # through the closing minutes, so any timeline-based summary — × the
+        # World Cup stakes + the group qualification spike — pinned even a 0-0
+        # bore draw near 9. The FT-quality formula gives a real spread instead.
 
         # Lightweight (never None — every started match gets a value).
         return _lightweight_drama(

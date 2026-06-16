@@ -3375,7 +3375,6 @@ def soccer_drama(canonical_id: str):
     # missed the live momentum/thrill — a different, misleading number.
     _ss.enrich_drama_ctx(ctx, canonical_id, detail)
     score = _de.compute_drama(ctx)
-    _ss.record_peak_drama(canonical_id, score.total)
     return {
         "match_id": detail.get("id"),
         "minute":   detail.get("minute"),
@@ -3452,14 +3451,6 @@ def soccer_drama_timeline(canonical_id: str, step: int = 2):
                 timeline.append(recon[m])                # gap fill
     else:
         timeline = _de.compute_drama_timeline(detail, step=step)
-    # Cache the peak so a finished match's feed badge reflects how dramatic it
-    # actually got (not the FT-damped live state).
-    try:
-        peak = max((p.get("drama", 0.0) for p in timeline), default=0.0)
-        if peak > 0:
-            _ss.record_peak_drama(canonical_id, peak)
-    except Exception:
-        pass
     return {"match_id": detail.get("id"), "timeline": timeline}
 
 
