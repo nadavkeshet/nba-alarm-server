@@ -54,6 +54,22 @@ def t_soccer_lightweight():
     assert comeback > tight > blowout > goalless, (comeback, tight, blowout, goalless)
 
 
+def t_soccer_finished_wc_spread():
+    # Regression: a FINISHED match's badge rates how good it was to WATCH (the
+    # FT-quality formula: goals + closeness + comeback + xG, × stakes), NOT a
+    # summary of the live drama timeline. A competitive game's drama curve rises
+    # into a late tied/one-goal tension peak and stays high through the closing
+    # minutes, so both the old peak AND the top-15% average — × the 1.55 World
+    # Cup stakes + the group qualification spike — rated even a 0-0 bore draw
+    # ~8.8-9.3. A finished WC slate must show a real spread instead.
+    goalless = ws_soccer("ft", 90, 0, 0, slug="world_cup", round_name="Group A")
+    onenil   = ws_soccer("ft", 90, 1, 0, slug="world_cup", round_name="Group A")
+    thriller = ws_soccer("ft", 90, 3, 2, slug="world_cup", round_name="Group A",
+                         home_score_ht=0, away_score_ht=2)
+    assert goalless < 3.0, goalless
+    assert thriller > onenil > goalless, (thriller, onenil, goalless)
+
+
 def ws_soccer(status, minute, hs, aw, **kw):
     import soccer_source as ss
     return ss._soccer_watch_score("bsd", 999, status, minute, hs, aw, **kw)
@@ -160,6 +176,7 @@ def main():
     t_win_probability()
     t_drama_odds()
     t_soccer_lightweight()
+    t_soccer_finished_wc_spread()
     t_basketball_units()
     t_wc_drama()
     print("OK")

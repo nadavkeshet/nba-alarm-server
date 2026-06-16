@@ -895,23 +895,6 @@ def compute_drama_timeline(detail: dict, step: int = 1) -> list[dict]:
     return out
 
 
-def top_fraction_average(values: list[float], frac: float = 0.15) -> float:
-    """Average of the highest `frac` fraction of values (at least one value).
-
-    Used to rate "how good was this match to watch" from a per-minute drama
-    timeline: a single great moment lifts the whole top slice (the engine's
-    event window already spreads each incident's elevation over ~10-15
-    minutes), while a one-minute outlier can't dominate the way a bare max
-    would, and matches with multiple highlights score higher than one-moment
-    matches.
-    """
-    if not values:
-        return 0.0
-    n = max(1, round(len(values) * frac))
-    top = sorted(values, reverse=True)[:n]
-    return sum(top) / len(top)
-
-
 def _normalize_recent_incidents(
     incidents: list[dict],
     *,
