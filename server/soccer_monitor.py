@@ -291,7 +291,7 @@ def _tick() -> None:
         status = (detail.get("status") or "").lower()
         if status in _TERMINAL_STATUSES:
             for alarm in alarm_group:
-                if alarm["alarm_type"] == "match_moments":
+                if alarm["alarm_type"] in ("match_moments", "player_alert"):
                     try:
                         _evaluate_alarm(alarm, detail)
                     except Exception as exc:
@@ -1278,6 +1278,10 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
             _fire(alarm, "soccer_big_chance", t_soccer_body_big_chance,
                   home_name, away_name, competition,
                   signal=f"bcb_{side}_{block}", one_shot=False)
+        return
+
+    if alarm_type == "player_alert":
+        _evaluate_player_alert(alarm, match)
         return
 
     # Unknown alarm_type → no-op (keeps forward compat for P3 types)
