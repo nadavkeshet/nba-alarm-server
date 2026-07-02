@@ -303,6 +303,10 @@ def _normalize_status_bsd(raw_status: str | None, period: str | None) -> tuple[s
     if s in ("notstarted", "scheduled", "pre"):
         return "scheduled", "pre"
     if s in ("finished", "ft"):
+        # If the match finished in extra time, return aet so the UI can show
+        # "AET" and know the score includes an ET goal.
+        if "extra" in p or p in ("et", "et1", "et2", "extra_time"):
+            return "aet", "aet"
         return "ft", "ft"
     if s in ("postponed", "cancelled"):
         return s, "pre"
@@ -960,11 +964,16 @@ def _ws_overlay(out: dict, event_id: int) -> None:
     # ── event snapshot: score, time, 40+ stats ───────────────────────────
     event_snap = ws.get_event_snapshot(event_id)
     if event_snap:
-        score = event_snap.get("score") or {}
-        if isinstance(score.get("home"), (int, float)):
-            out.setdefault("home", {})["score"] = int(score["home"])
-        if isinstance(score.get("away"), (int, float)):
-            out.setdefault("away", {})["score"] = int(score["away"])
+        # Only overwrite the REST score while the match is live — for finished
+        # matches the WS snapshot holds the last value seen DURING play (which
+        # may predate an AET goal) and would clobber the correct final score.
+        is_finished = out.get("status") in ("ft", "aet", "ap", "cancelled", "postponed", "abandoned")
+        if not is_finished:
+            score = event_snap.get("score") or {}
+            if isinstance(score.get("home"), (int, float)):
+                out.setdefault("home", {})["score"] = int(score["home"])
+            if isinstance(score.get("away"), (int, float)):
+                out.setdefault("away", {})["score"] = int(score["away"])
 
         time_obj = event_snap.get("time") or {}
         # During a break (half-time, ET interval) the WS clock counts the BREAK
