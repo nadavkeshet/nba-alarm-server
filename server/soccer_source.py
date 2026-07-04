@@ -1434,23 +1434,45 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
                     out["home"]["score_pens"] = home_pens
                     out["away"]["score_pens"] = away_pens
                     _pens_cache[canonical] = (home_pens, away_pens)
-            # For finished matches, derive the authoritative score from the
-            # last goal incident — BSD's home_score/away_score only carry the
-            # 90-min result; ET goals appear only in incidents.
+            # For finished matches, derive the authoritative score by replaying
+            # goal incidents in order. BSD REST incidents don't carry per-goal
+            # running scores (home_score/away_score) — those only arrive via WS
+            # during live play. Instead we use the is_home flag to accumulate.
+            # Shootout kicks (minute >= 121) are excluded; they're tracked
+            # separately in score_pens. Own goals credit the opposing side.
             _status = out.get("status") or ""
             if _status in ("ft", "aet", "pens", "ap") and out.get("incidents"):
-                last_goal = None
-                for _inc in out["incidents"]:
-                    if (_inc.get("type") or "").lower() in ("goal", "owngoal") \
-                            and _inc.get("home_score") is not None \
-                            and _inc.get("away_score") is not None:
-                        last_goal = _inc
-                if last_goal is not None:
-                    _fhs = int(last_goal["home_score"])
-                    _fas = int(last_goal["away_score"])
-                    out["home"]["score"] = _fhs
-                    out["away"]["score"] = _fas
-                    _final_score_cache[canonical] = (_fhs, _fas)
+                hs, as_ = 0, 0
+                found_any = False
+                for _inc in sorted(out["incidents"],
+                                   key=lambda i: (i.get("minute") or 0,
+                                                  i.get("added_time") or 0)):
+                    inc_type = (_inc.get("type") or "").lower()
+                    if inc_type not in ("goal", "owngoal"):
+                        continue
+                    if (_inc.get("minute") or 0) >= 121:
+                        continue  # penalty shootout kick — not part of match score
+                    found_any = True
+                    # Use pre-computed running scores when available (WS path)
+                    if _inc.get("home_score") is not None and _inc.get("away_score") is not None:
+                        hs = int(_inc["home_score"])
+                        as_ = int(_inc["away_score"])
+                    else:
+                        is_home = _inc.get("is_home")
+                        if is_home is True:
+                            if inc_type == "owngoal":
+                                as_ += 1
+                            else:
+                                hs += 1
+                        elif is_home is False:
+                            if inc_type == "owngoal":
+                                hs += 1
+                            else:
+                                as_ += 1
+                if found_any:
+                    out["home"]["score"] = hs
+                    out["away"]["score"] = as_
+                    _final_score_cache[canonical] = (hs, as_)
             # Overlay in-memory WS snapshots (score/stats/livedata/odds) on
             # top of the REST payload — fresher data, no extra round-trip.
             # Fully guarded: a WS-snapshot read must never 500 the match detail.
