@@ -272,6 +272,12 @@ def wc_group_standings(slug: str = "world_cup") -> list[list[dict]] | None:
 # The list endpoint reads this cache so matches show penalty scores even without a detail fetch.
 _pens_cache: dict[str, tuple[int, int]] = {}
 
+# canonical_id -> (home_score, away_score) derived from incidents for finished
+# matches. BSD's top-level home_score/away_score fields only reflect the 90-min
+# score; ET goals only appear in incidents. Populated by get_soccer_match_detail
+# and used by _from_bsd_event to fix the feed score.
+_final_score_cache: dict[str, tuple[int, int]] = {}
+
 
 # ---------------------------------------------------------------------------
 # Canonical ID helpers — source-tagged so we always know which adapter to use
@@ -503,6 +509,9 @@ def _from_bsd_event(event: dict, *, slug: str | None = None) -> dict:
     status, period = _normalize_status_bsd(event.get("status"), event.get("period"))
     cid = canonical_id("bsd", eid)
     cached_pens = _pens_cache.get(cid)
+    # Use the incident-derived final score if available (fixes AET matches
+    # where BSD's home_score/away_score only reflect the 90-min result).
+    _final = _final_score_cache.get(cid)
     return {
         "id": cid,
         "source": "bsd",
@@ -518,7 +527,7 @@ def _from_bsd_event(event: dict, *, slug: str | None = None) -> dict:
             "name": event.get("home_team", ""),
             "short_name": "",
             "crest": _bsd_team_image_url(event.get("home_team_id")) if event.get("home_team_id") else None,
-            "score": event.get("home_score"),
+            "score": _final[0] if _final is not None else event.get("home_score"),
             "score_ht": event.get("home_score_ht"),
             "score_pens": cached_pens[0] if cached_pens else event.get("home_score_pens"),
             "xg": None,
@@ -528,7 +537,7 @@ def _from_bsd_event(event: dict, *, slug: str | None = None) -> dict:
             "name": event.get("away_team", ""),
             "short_name": "",
             "crest": _bsd_team_image_url(event.get("away_team_id")) if event.get("away_team_id") else None,
-            "score": event.get("away_score"),
+            "score": _final[1] if _final is not None else event.get("away_score"),
             "score_ht": event.get("away_score_ht"),
             "score_pens": cached_pens[1] if cached_pens else event.get("away_score_pens"),
             "xg": None,
@@ -1425,6 +1434,23 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
                     out["home"]["score_pens"] = home_pens
                     out["away"]["score_pens"] = away_pens
                     _pens_cache[canonical] = (home_pens, away_pens)
+            # For finished matches, derive the authoritative score from the
+            # last goal incident — BSD's home_score/away_score only carry the
+            # 90-min result; ET goals appear only in incidents.
+            _status = out.get("status") or ""
+            if _status in ("ft", "aet", "pens", "ap") and out.get("incidents"):
+                last_goal = None
+                for _inc in out["incidents"]:
+                    if (_inc.get("type") or "").lower() in ("goal", "owngoal") \
+                            and _inc.get("home_score") is not None \
+                            and _inc.get("away_score") is not None:
+                        last_goal = _inc
+                if last_goal is not None:
+                    _fhs = int(last_goal["home_score"])
+                    _fas = int(last_goal["away_score"])
+                    out["home"]["score"] = _fhs
+                    out["away"]["score"] = _fas
+                    _final_score_cache[canonical] = (_fhs, _fas)
             # Overlay in-memory WS snapshots (score/stats/livedata/odds) on
             # top of the REST payload — fresher data, no extra round-trip.
             # Fully guarded: a WS-snapshot read must never 500 the match detail.
