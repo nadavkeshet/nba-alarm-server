@@ -1441,7 +1441,7 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
             # Shootout kicks (minute >= 121) are excluded; they're tracked
             # separately in score_pens. Own goals credit the opposing side.
             _status = out.get("status") or ""
-            if _status in ("ft", "aet", "pens", "ap") and out.get("incidents"):
+            if _status in ("aet", "pens", "ap") and out.get("incidents"):
                 hs, as_ = 0, 0
                 found_any = False
                 for _inc in sorted(out["incidents"],
