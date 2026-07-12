@@ -1434,14 +1434,14 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
                     out["home"]["score_pens"] = home_pens
                     out["away"]["score_pens"] = away_pens
                     _pens_cache[canonical] = (home_pens, away_pens)
-            # For finished matches, derive the authoritative score by replaying
-            # goal incidents in order. BSD REST incidents don't carry per-goal
-            # running scores (home_score/away_score) — those only arrive via WS
-            # during live play. Instead we use the is_home flag to accumulate.
-            # Shootout kicks (minute >= 121) are excluded; they're tracked
-            # separately in score_pens. Own goals credit the opposing side.
+            # Replay the authoritative score from incidents. BSD REST home_score/
+            # away_score only reflect the 90-min result; ET goals only appear in
+            # the incident list. BSD also sometimes misreports an AET match as
+            # plain "ft" — in that case the replay finds ET goals (min 91-120)
+            # and produces a higher total than the REST score, which is the signal
+            # to apply it. Shootout kicks (min >= 121) are excluded.
             _status = out.get("status") or ""
-            if _status in ("aet", "pens", "ap") and out.get("incidents"):
+            if _status in ("ft", "aet", "pens", "ap") and out.get("incidents"):
                 hs, as_ = 0, 0
                 found_any = False
                 for _inc in sorted(out["incidents"],
@@ -1470,9 +1470,14 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
                             else:
                                 as_ += 1
                 if found_any:
-                    out["home"]["score"] = hs
-                    out["away"]["score"] = as_
-                    _final_score_cache[canonical] = (hs, as_)
+                    rest_total = (out["home"].get("score") or 0) + (out["away"].get("score") or 0)
+                    # For aet/pens/ap: always apply (BSD REST is known to be incomplete).
+                    # For ft: only apply if replay total >= REST total — guards against
+                    # missing incidents producing a falsely low score.
+                    if _status in ("aet", "pens", "ap") or (hs + as_) >= rest_total:
+                        out["home"]["score"] = hs
+                        out["away"]["score"] = as_
+                        _final_score_cache[canonical] = (hs, as_)
             # Overlay in-memory WS snapshots (score/stats/livedata/odds) on
             # top of the REST payload — fresher data, no extra round-trip.
             # Fully guarded: a WS-snapshot read must never 500 the match detail.
