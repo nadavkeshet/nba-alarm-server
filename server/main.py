@@ -73,8 +73,16 @@ from monitor import (
 # ── Database Setup ─────────────────────────────────────────────────────────────
 
 _raw_db_url = os.environ.get("DATABASE_URL", "")
-# Railway provides postgres:// but SQLAlchemy 1.4+ requires postgresql://
-DATABASE_URL = _raw_db_url.replace("postgres://", "postgresql://", 1) if _raw_db_url else ""
+# Pin the driver explicitly: SQLAlchemy 2.1 changed the default for bare
+# postgresql:// from psycopg2 to psycopg (v3), which isn't installed.
+# Railway may also hand out the legacy postgres:// scheme.
+DATABASE_URL = ""
+for _scheme in ("postgres://", "postgresql://"):
+    if _raw_db_url.startswith(_scheme):
+        DATABASE_URL = "postgresql+psycopg2://" + _raw_db_url[len(_scheme):]
+        break
+else:
+    DATABASE_URL = _raw_db_url
 
 engine = create_engine(
     DATABASE_URL,
@@ -5106,7 +5114,7 @@ def pause_all_favorites(req: PauseRequest):
 
 # ── Admin: Broadcast push to all users ────────────────────────────────────────
 
-ADMIN_KEY = "clutch_admin_2026"
+ADMIN_KEY = os.environ.get("ADMIN_KEY", "")
 
 class BroadcastRequest(BaseModel):
     title: str
@@ -5115,7 +5123,8 @@ class BroadcastRequest(BaseModel):
 
 @app.post("/admin/broadcast")
 def admin_broadcast(req: BroadcastRequest, x_admin_key: str = Header(default="")):
-    if x_admin_key != ADMIN_KEY:
+    # Fail closed: an unset ADMIN_KEY must not let an empty header through.
+    if not ADMIN_KEY or not secrets.compare_digest(x_admin_key, ADMIN_KEY):
         raise HTTPException(status_code=403, detail="Forbidden")
     if engine is None:
         raise HTTPException(status_code=503, detail="Database not configured.")
