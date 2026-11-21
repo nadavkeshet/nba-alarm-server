@@ -1200,7 +1200,7 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
             _fire(alarm, "soccer_score_gap",
                   lambda h, a, c, lang: t_soccer_body_score_gap(h, a, c, threshold, from_minute, diff, lang),
                   home_name, away_name, competition,
-                  signal=f"score_gap_{match_id}", one_shot=True)
+                  signal=f"score_gap_{alarm.get('match_id')}", one_shot=True)
         return
 
     if alarm_type == "knockout_et":

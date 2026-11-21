@@ -54,7 +54,8 @@ def _bball_game(gid, slug, date_iso, home_id="10", away_id="20"):
 
 
 _SOCCER_SLUGS = list(json.load(open(
-    os.path.join(os.path.dirname(__file__), "..", "config", "competition_map.json")
+    os.path.join(os.path.dirname(__file__), "..", "config", "competition_map.json"),
+    encoding="utf-8",
 )).keys())
 _BBALL_SLUGS = ["nba", "euroleague", "eurocup", "bcl", "winner_league"]
 

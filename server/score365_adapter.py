@@ -752,7 +752,7 @@ def fetch_all_teams(league: str = "nba") -> list[dict]:
             for row in stage.get("rows", []) or []:
                 absorb(row.get("competitor"))
     except Exception as exc:
-        logger.debug("365 standings fetch failed in fetch_all_teams for %s: %s", league, exc)
+        log.debug("365 standings fetch failed in fetch_all_teams for %s: %s", league, exc)
 
     # Pass 2: Rolling games window (as fallback/enrichment)
     try:
@@ -761,7 +761,7 @@ def fetch_all_teams(league: str = "nba") -> list[dict]:
             absorb(raw.get("homeCompetitor"))
             absorb(raw.get("awayCompetitor"))
     except Exception as exc:
-        logger.debug("365 window fetch failed in fetch_all_teams for %s: %s", league, exc)
+        log.debug("365 window fetch failed in fetch_all_teams for %s: %s", league, exc)
 
     return list(seen.values())
 

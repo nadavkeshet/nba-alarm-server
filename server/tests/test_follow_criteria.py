@@ -54,7 +54,8 @@ def test_match_moments_modular_expands_all_flags_default_on():
     assert mm["config"] == {
         "enabled": True, "kickoff": True, "goals": True, "halftime": True,
         "second_half": True, "red_cards": True, "penalties": True,
-        "match_end": True, "lineups": True, "reminder_minutes": 30}
+        "match_end": True, "lineups": True, "reminder_minutes": 30,
+        "alert_type": None}  # per-moment alarm/silent mode; None = inherit
 
 
 def test_match_moments_modular_disabled_event_passes_through_false():

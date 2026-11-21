@@ -58,7 +58,7 @@ def _all_soccer_slugs() -> list[str]:
         import json
         import os
         path = os.path.join(os.path.dirname(__file__), "config", "competition_map.json")
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return list(json.load(f).keys())
     except Exception as exc:  # pragma: no cover - fallback path
         logger.warning("calendar_scope: soccer catalog unreadable (%s); using fallback", exc)

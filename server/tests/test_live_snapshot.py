@@ -13,6 +13,7 @@ class _FakeWS:
             "score": {"home": 1, "away": 1},
             "time": {"minute": 78, "second": 12, "status": "2nd_half", "period": 2,
                      "injury_time": 0, "period_started_at_uts": 1780774988},
+            "_recv_uts": 1780776000,  # fixed receive time keeps the anchor deterministic
             "stats": {"home": {"dangerous_attack_pct": 60, "big_chances": 3,
                                "shots_on_target": 7},
                       "away": {"dangerous_attack_pct": 40, "big_chances": 1,
@@ -37,7 +38,9 @@ def test_clock_anchor_fields(monkeypatch):
     s = _snap(monkeypatch)
     assert s["ws_active"] is True
     assert s["period"] == 2
-    assert s["period_started_at_uts"] == 1780774988
+    # Re-anchored to BSD's running clock as of receipt, not BSD's raw anchor:
+    # 78:12 overall in period 2 = 78*60+12 - 45*60 = 1992 s into the period.
+    assert s["period_started_at_uts"] == 1780776000 - 1992
     assert s["injury_time"] == 0
     assert s["minute"] == 78
 
