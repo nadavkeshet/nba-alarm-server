@@ -22,11 +22,13 @@ jobs:
       run:
         working-directory: server
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
-          python-version-file: server/.python-version
+          # Minor version only: exact patch builds (e.g. 3.12.9) aren't
+          # published for every runner OS. Railway's 3.12.x matches this.
+          python-version: "3.12"
           cache: pip
           cache-dependency-path: |
             server/requirements.txt
