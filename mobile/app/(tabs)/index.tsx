@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import messaging from '@react-native-firebase/messaging';
@@ -285,6 +286,9 @@ async function sendTokenToServer(token: string): Promise<boolean> {
 // ─── HomeScreen ───────────────────────────────────────────────────────────────
 
 export default function HomeScreen() {
+  const router = useRouter();
+  useEffect(() => { router.replace('/feed' as any); }, []);
+
   const { colors: C, noSpoiler } = useTheme();
   const styles = useMemo(() => makeStyles(C), [C]);
   const { t, isHebrew } = useLanguage();

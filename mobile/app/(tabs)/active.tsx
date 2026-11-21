@@ -25,7 +25,8 @@ import { RefreshBar } from '../../components/refresh-bar';
 
 import { SERVER_URL } from '../../config';
 import { translateGameName, teamFullToHe } from '../../utils/teamNames';
-import { listAlarms, deleteAlarm as deleteSoccerAlarm, getFavorites as getSoccerFavorites } from '../../services/soccer-service';
+import { listAlarms, deleteAlarm as deleteSoccerAlarm, getFavorites as getSoccerFavorites, deleteFavTeam as deleteSoccerFavTeam } from '../../services/soccer-service';
+import { unfollowTeam } from '../../services/follow-service';
 import type { SoccerAlarm, SoccerAlarmType, SoccerFavTeam, SoccerFavPlayer } from '../../types/soccer';
 import { tabHeaderTitle } from '../../constants/tokens';
 
@@ -133,20 +134,73 @@ const CONDITION_LABEL: Record<string, string> = {
 };
 
 const SOCCER_ALARM_TYPE_KEY: Record<string, string> = {
-  drama_radar:  'soccer.alarm.dramaRadar',
-  late_drama:   'soccer.alarm.lateDrama',
-  match:        'soccer.alarm.kickoff',
-  knockout_et:  'soccer.alarm.knockoutEt',
-  red_card:     'soccer.alarm.redOrPenalty',
-  comeback:     'soccer.alarm.comeback',
-  hat_trick:    'soccer.alarm.hatTrickWatch',
-  penalty:      'soccer.alarm.redOrPenalty',
-  player_alert: 'soccer.alarm.tab.player',
-  big_chance:   'soccer.alarm.dramaRadar',
+  drama_radar:   'soccer.alarm.dramaRadar',
+  late_drama:    'soccer.alarm.lateDrama',
+  score_gap:     'soccer.alarm.scoreGap',
+  match_moments: 'soccer.alarm.matchMoments',
+  card_penalty:  'soccer.alarm.cardPenalty',
+  big_chance:    'soccer.alarm.bigChance',
+  comeback:      'soccer.alarm.comeback',
+  sensation:     'soccer.alarm.sensation',
+  match:         'soccer.alarm.kickoff',
+  knockout_et:   'soccer.alarm.knockoutEt',
+  red_card:      'soccer.alarm.redOrPenalty',
+  hat_trick:     'soccer.alarm.hatTrickWatch',
+  penalty:       'soccer.alarm.redOrPenalty',
+  player_alert:  'soccer.alarm.tab.player',
 };
 
 function soccerAlarmLabel(type: SoccerAlarmType, t: (k: string) => string): string {
   return t(SOCCER_ALARM_TYPE_KEY[type] ?? 'soccer.alarm.title');
+}
+
+function soccerAlarmDetails(alarm: SoccerAlarm, t: (k: string) => string): string[] {
+  const cfg = alarm.config ?? {};
+  const details: string[] = [];
+
+  switch (alarm.alarm_type) {
+    case 'drama_radar':
+      if (alarm.threshold != null) details.push(`Drama ≥ ${alarm.threshold.toFixed(1)}`);
+      break;
+    case 'score_gap':
+      if (alarm.threshold != null) details.push(`≤ ${alarm.threshold} ${alarm.threshold === 1 ? 'goal' : 'goals'}`);
+      if (cfg.from_minute != null) details.push(`${t('soccer.alarm.gapFrom').toLowerCase()} ${cfg.from_minute}'`);
+      break;
+    case 'late_drama': {
+      const diff = cfg.max_diff;
+      const mins = cfg.last_minutes;
+      if (diff === 0 || diff === '0') details.push(t('soccer.alarm.tiedOnly'));
+      else if (diff != null) details.push(`≤ ${diff} ${Number(diff) === 1 ? 'goal' : 'goals'}`);
+      if (mins != null) details.push(`${t('soccer.alarm.ldLastMin').toLowerCase()} ${mins}'`);
+      break;
+    }
+    case 'match_moments': {
+      const on: string[] = [];
+      if (cfg.kickoff)     on.push(t('soccer.alarm.mm.kickoff'));
+      if (cfg.goals)       on.push(t('soccer.alarm.mm.goals'));
+      if (cfg.halftime)    on.push(t('soccer.alarm.mm.halftime'));
+      if (cfg.second_half) on.push(t('soccer.alarm.mm.secondHalf'));
+      if (cfg.red_cards)   on.push(t('soccer.alarm.mm.redCards'));
+      if (cfg.penalties)   on.push(t('soccer.alarm.mm.penalties'));
+      if (cfg.match_end)   on.push(t('soccer.alarm.mm.matchEnd'));
+      if (cfg.lineups)     on.push(t('soccer.alarm.mm.lineups'));
+      if (on.length) details.push(on.join(' · '));
+      break;
+    }
+    case 'card_penalty': {
+      const parts: string[] = [];
+      if (cfg.red_card)  parts.push(t('soccer.alarm.mm.redCards'));
+      if (cfg.penalty)   parts.push(t('soccer.alarm.mm.penalties'));
+      if (parts.length)  details.push(parts.join(' · '));
+      break;
+    }
+    case 'big_chance':
+      if (cfg.sensitivity) details.push(`${String(cfg.sensitivity).charAt(0).toUpperCase() + String(cfg.sensitivity).slice(1)} sensitivity`);
+      break;
+    default:
+      break;
+  }
+  return details;
 }
 
 // ─── Static styles for module-level components ────────────────────────────────
@@ -299,6 +353,14 @@ export default function ActiveScreen() {
         favorite_teams: prev.favorite_teams.map(t => t.team_id === id ? { ...t, paused: next } : t),
       };
     });
+  }, [resolveToken]);
+
+  const removeSoccerFavTeam = useCallback(async (teamId: string) => {
+    const token = await resolveToken();
+    if (!token) return;
+    setSoccerFavs(prev => prev ? { ...prev, teams: prev.teams.filter(t => t.team_id !== teamId) } : prev);
+    await deleteSoccerFavTeam(teamId, token).catch(() => {});
+    await unfollowTeam(teamId).catch(() => {});
   }, [resolveToken]);
 
   // Store received FCM alarm notifications in AsyncStorage for Trophy Room
@@ -629,27 +691,33 @@ export default function ActiveScreen() {
                   </TouchableOpacity>
                 </View>
               ))}
-              {soccerGameAlarms.map(alarm => (
-                <View key={`soccer-${alarm.id}`} style={styles.alarmCard}>
-                  <View style={styles.alarmCardLeft}>
-                    <LivePill
-                      label={alarm.is_active ? t('active.watching') : t('active.saved')}
-                      color={alarm.is_active ? C.orange : C.accentBlue}
-                      bg={alarm.is_active ? C.orangeDim : 'rgba(77,140,245,0.12)'}
-                    />
-                    <Text style={styles.alarmGame}>{soccerAlarmLabel(alarm.alarm_type, t)}</Text>
-                    {(alarm.match_name || alarm.match_id) && (
-                      <Text style={styles.alarmSub}>{alarm.match_name ?? alarm.match_id}</Text>
-                    )}
-                    <Text style={styles.alarmSub}>
-                      {alarm.alert_type === 'alarm' ? t('active.fullAlarm') : t('active.silentMode')}
-                    </Text>
+              {soccerGameAlarms.map(alarm => {
+                const details = soccerAlarmDetails(alarm, t);
+                return (
+                  <View key={`soccer-${alarm.id}`} style={styles.alarmCard}>
+                    <View style={styles.alarmCardLeft}>
+                      <LivePill
+                        label={alarm.is_active ? t('active.watching') : t('active.saved')}
+                        color={alarm.is_active ? C.orange : C.accentBlue}
+                        bg={alarm.is_active ? C.orangeDim : 'rgba(77,140,245,0.12)'}
+                      />
+                      <Text style={styles.alarmGame}>{soccerAlarmLabel(alarm.alarm_type, t)}</Text>
+                      {(alarm.match_name || alarm.match_id) && (
+                        <Text style={styles.alarmSub}>{alarm.match_name ?? alarm.match_id}</Text>
+                      )}
+                      {details.map((d, i) => (
+                        <Text key={i} style={[styles.alarmSub, { color: C.orange, fontWeight: '600' }]}>{d}</Text>
+                      ))}
+                      <Text style={styles.alarmSub}>
+                        {alarm.alert_type === 'alarm' ? t('active.fullAlarm') : t('active.silentMode')}
+                      </Text>
+                    </View>
+                    <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelSoccerAlarm(alarm)}>
+                      <Text style={styles.cancelBtnText}>{t('active.delete')}</Text>
+                    </TouchableOpacity>
                   </View>
-                  <TouchableOpacity style={styles.cancelBtn} onPress={() => cancelSoccerAlarm(alarm)}>
-                    <Text style={styles.cancelBtnText}>{t('active.delete')}</Text>
-                  </TouchableOpacity>
-                </View>
-              ))}
+                );
+              })}
             </View>
           )}
         </View>
@@ -851,6 +919,13 @@ export default function ActiveScreen() {
                       {team.drama_threshold != null ? `Drama ≥ ${team.drama_threshold}` : 'All alerts'}
                     </Text>
                   </View>
+                  <TouchableOpacity
+                    onPress={() => removeSoccerFavTeam(team.team_id)}
+                    style={styles.deleteBtn}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="trash-outline" size={16} color={C.red} />
+                  </TouchableOpacity>
                 </View>
               ))}
               {(soccerFavs?.players ?? []).map(player => (
@@ -1068,6 +1143,7 @@ const makeStyles = (C: AppColors) => StyleSheet.create({
   favPauseBtnOn:   { backgroundColor: 'rgba(34,197,94,0.12)', borderColor: 'rgba(34,197,94,0.4)' },
   favPauseBtnOff:  { backgroundColor: 'rgba(150,150,150,0.10)', borderColor: 'rgba(150,150,150,0.3)' },
   favPauseBtnText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
+  deleteBtn: { padding: 6, marginLeft: 8 },
 
   catItem: {
     flexDirection: 'row', alignItems: 'center',

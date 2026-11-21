@@ -13,6 +13,8 @@ import {
   SoccerFavTeam,
   SoccerFavPlayer,
   SoccerFavCompetition,
+  SoccerHistoricPref,
+  SoccerHistoricCategoryKey,
 } from '../types/soccer';
 
 // ── In-memory cache for schedule data (5 min TTL) ────────────────────────────
@@ -198,6 +200,47 @@ export async function getLineups(canonicalId: string): Promise<MatchLineups> {
   return _get<MatchLineups>(`/soccer/match/${canonicalId}/lineups`);
 }
 
+export interface SquadPlayer {
+  player_id: number;
+  name: string;
+  jersey_number?: number;
+  position?: string;
+  club?: string;
+}
+
+// ── Squad cache (memory + AsyncStorage) ──────────────────────────────────────
+
+const _squadMem = new Map<string, { players: SquadPlayer[]; ts: number }>();
+const _SQUAD_MEM_TTL  = 4 * 60 * 60 * 1000; // 4 h in-process
+const _SQUAD_DISK_TTL = Infinity;             // squads don't change during a tournament
+const _squadKey = (id: string) => `squad_v1_${id}`;
+
+export async function getTeamSquad(teamId: string): Promise<SquadPlayer[]> {
+  // 1. In-memory (warm start — instant)
+  const mem = _squadMem.get(teamId);
+  if (mem && Date.now() - mem.ts < _SQUAD_MEM_TTL) return mem.players;
+
+  // 2. AsyncStorage (cold start — fast, no network)
+  try {
+    const raw = await AsyncStorage.getItem(_squadKey(teamId));
+    if (raw) {
+      const { players, ts }: { players: SquadPlayer[]; ts: number } = JSON.parse(raw);
+      if (Date.now() - ts < _SQUAD_DISK_TTL) {
+        _squadMem.set(teamId, { players, ts });
+        return players;
+      }
+    }
+  } catch {}
+
+  // 3. Network
+  const data = await _get<{ players: SquadPlayer[] }>(`/soccer/team/${teamId}/squad`);
+  const players = data.players ?? [];
+  const entry = { players, ts: Date.now() };
+  _squadMem.set(teamId, entry);
+  AsyncStorage.setItem(_squadKey(teamId), JSON.stringify(entry)).catch(() => {});
+  return players;
+}
+
 // ── Live feed ─────────────────────────────────────────────────────────────────
 
 export async function getLiveMatches(leagues?: string[]): Promise<SoccerMatch[]> {
@@ -215,6 +258,8 @@ export async function getStandings(leagueSlug: string): Promise<LeagueStandings>
 
 // ── Soccer Alarms CRUD ────────────────────────────────────────────────────────
 
+type AlarmConfigValue = boolean | string | number;
+
 interface CreateAlarmRequest {
   user_token: string;
   alarm_type: string;
@@ -223,7 +268,7 @@ interface CreateAlarmRequest {
   competition_id?: string;
   player_id?: string;
   threshold?: number;
-  config?: Record<string, boolean | string>;
+  config?: Record<string, AlarmConfigValue>;
   alert_type: string;
 }
 
@@ -242,7 +287,7 @@ export async function createAlarm(params: {
   competitionId?: string;
   playerId?: string;
   threshold?: number;
-  config?: Record<string, boolean | string>;
+  config?: Record<string, AlarmConfigValue>;
   alertType: 'alarm' | 'silent';
 }): Promise<CreateAlarmResponse> {
   const body: CreateAlarmRequest = {
@@ -302,11 +347,13 @@ export async function upsertFavCompetition(params: {
   userToken: string;
   competitionId: string;
   dramaThreshold?: number;
+  alertType?: 'alarm' | 'silent';
 }): Promise<void> {
   await _post('/soccer/favorites/competitions', {
     user_token: params.userToken,
     competition_id: params.competitionId,
     drama_threshold: params.dramaThreshold ?? 7.0,
+    alert_type: params.alertType ?? 'silent',
   });
 }
 
@@ -360,6 +407,10 @@ export async function searchAll(query: string, limit = 15): Promise<SearchResult
   return { teams: resp.teams ?? [], leagues: resp.leagues ?? [], players: resp.players ?? [] };
 }
 
+export async function getBasketballStandings(leagueSlug: string): Promise<LeagueStandings> {
+  return _get<LeagueStandings>(`/basketball/league/${leagueSlug}/standings`);
+}
+
 export async function getTeamMatches(teamId: string): Promise<SoccerMatch[]> {
   try {
     const res = await _get<SoccerMatch[]>(`/soccer/team/${teamId}/matches`);
@@ -376,4 +427,18 @@ export async function getBasketballTeamGames(teamId: string, league: string): Pr
   } catch {
     return [];
   }
+}
+
+export async function upsertSoccerHistoric(params: {
+  userToken: string;
+  enabled: boolean;
+  alertType: 'alarm' | 'silent';
+  categories: Partial<Record<SoccerHistoricCategoryKey, boolean>>;
+}): Promise<SoccerHistoricPref> {
+  return _post<SoccerHistoricPref>('/settings/soccer-historic', {
+    user_token: params.userToken,
+    enabled: params.enabled,
+    alert_type: params.alertType,
+    categories: params.categories,
+  });
 }

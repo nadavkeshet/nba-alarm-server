@@ -52,6 +52,7 @@ interface BasketballGame {
   displayClock?: string;
   period?: number;
   kickoff?: string;
+  watchScore?: number;
 }
 
 interface LeagueGroup {
@@ -121,7 +122,22 @@ async function fetchBasketballGames(leagueId: string, date: string): Promise<Bas
   if (isPast) {
     try {
       const raw = await AsyncStorage.getItem(_BB_STORE(leagueId, date));
-      if (raw) return JSON.parse(raw) as BasketballGame[];
+      if (raw) {
+        const cached = JSON.parse(raw) as BasketballGame[];
+        if (cached.some(g => g.watchScore == null)) {
+          try {
+            const ws = await fetch(`${SERVER_URL}/watch-scores?date=${date}&league=${encodeURIComponent(leagueId)}`);
+            if (ws.ok) {
+              const wsData = await ws.json();
+              for (const [k, v] of Object.entries(wsData.scores ?? {})) {
+                const g = cached.find(x => `${x.homeTeam}_${x.awayTeam}` === k);
+                if (g) g.watchScore = (v as any).score;
+              }
+            }
+          } catch {}
+        }
+        return cached;
+      }
     } catch {}
   }
 
@@ -152,8 +168,25 @@ async function fetchBasketballGames(leagueId: string, date: string): Promise<Bas
         kickoff: ev.date,
       } satisfies BasketballGame;
     });
+    // Merge watch scores for finished games
+    const hasFinished = result.some(g => g.status === 'post');
+    if (hasFinished) {
+      try {
+        const ws = await fetch(`${SERVER_URL}/watch-scores?date=${date}&league=${encodeURIComponent(leagueId)}`);
+        if (ws.ok) {
+          const wsData = await ws.json();
+          const scores: Record<string, number> = {};
+          for (const [k, v] of Object.entries(wsData.scores ?? {})) scores[k] = (v as any).score;
+          for (const g of result) {
+            const key = `${g.homeTeam}_${g.awayTeam}`;
+            if (scores[key] != null) g.watchScore = scores[key];
+          }
+        }
+      } catch {}
+    }
+
     // Persist past dates so future Load Earlier is instant and consistent
-    if (isPast && result.length > 0) {
+    if (isPast && result.every(g => g.status === 'post')) {
       AsyncStorage.setItem(_BB_STORE(leagueId, date), JSON.stringify(result)).catch(() => {});
     }
     return result;
@@ -430,14 +463,8 @@ export default function SportsScreen() {
     <SafeAreaView style={[styles.container, { backgroundColor: colors.bg }]}>
       {/* Header */}
       <View style={[styles.header, { borderBottomColor: colors.border }]}>
-        <View style={styles.searchRow}>
+        <View style={styles.headerRow}>
           <HamburgerButton />
-          <View style={[styles.searchPill, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Ionicons name="search-outline" size={15} color={colors.textMuted} />
-            <Text style={[styles.searchPlaceholder, { color: colors.textMuted }]}>
-              {t('sports.searchHint')}
-            </Text>
-          </View>
         </View>
         <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>
           {t('sports.title')}
@@ -593,7 +620,7 @@ function DateSection({
   return (
     <View>
       <View style={[styles.dateHeader, { borderBottomColor: colors.border }]}>
-        <Text style={[styles.dateTitle, { color: colors.textPrimary }]}>{group.title}</Text>
+        <Text style={[styles.dateTitle, { color: colors.textPrimary }]}>{dateLabel(group.yyyymmdd, t)}</Text>
       </View>
 
       {filtered.map(lg => (
@@ -671,6 +698,7 @@ function SoccerRow({
   onTap: () => void;
 }) {
   const live = isLiveLike(match.status);
+  const finished = match.status === 'ft' || match.status === 'et' || match.status === 'pens';
   const statusLabel = displayMinute(match) || (match.kickoff
     ? new Date(match.kickoff).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : '–');
@@ -679,6 +707,8 @@ function SoccerRow({
     <CompactMatchRow
       statusLabel={statusLabel}
       isLive={live}
+      isFinished={finished}
+      watchScore={finished && match.watch_score != null ? match.watch_score : null}
       homeName={match.home.name}
       homeCrest={match.home.crest}
       homeScore={match.home.score}
@@ -703,12 +733,13 @@ function BasketballRow({
   onTap?: () => void;
 }) {
   const isLive = game.status === 'in';
+  const isPost = game.status === 'post';
   let statusLabel = '';
   if (isLive && game.period && game.displayClock) {
     statusLabel = `Q${game.period} ${game.displayClock}`;
   } else if (isLive) {
     statusLabel = 'LIVE';
-  } else if (game.status === 'post') {
+  } else if (isPost) {
     statusLabel = 'Final';
   } else if (game.kickoff) {
     statusLabel = new Date(game.kickoff).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -718,6 +749,8 @@ function BasketballRow({
     <CompactMatchRow
       statusLabel={statusLabel}
       isLive={isLive}
+      isFinished={isPost}
+      watchScore={isPost ? (game.watchScore ?? null) : null}
       homeName={game.homeTeam}
       homeCrest={game.homeLogo}
       homeScore={game.status !== 'pre' ? game.homeScore : null}
@@ -741,9 +774,7 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  searchRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 4, paddingTop: 4, paddingBottom: 6, gap: 8 },
-  searchPill: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 10, borderWidth: StyleSheet.hairlineWidth },
-  searchPlaceholder: { fontSize: 14, flex: 1 },
+  headerRow: { paddingHorizontal: 4, paddingTop: 4, paddingBottom: 6 },
   headerTitle: { ...tabHeaderTitle, paddingHorizontal: 16, paddingBottom: 4 },
 
   centered: {

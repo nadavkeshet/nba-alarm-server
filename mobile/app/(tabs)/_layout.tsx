@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs, useRouter } from 'expo-router';
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Dimensions, Text, TouchableOpacity, View } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -17,6 +18,11 @@ import { ErrorBoundary } from '../../components/error-boundary';
 import { ThemeProvider, useTheme } from '../../context/ThemeContext';
 import { LanguageProvider, useLanguage } from '../../context/LanguageContext';
 import { DrawerProvider } from '../../components/drawer-menu';
+import { WelcomeGuide } from '../../components/welcome-guide';
+import { TeamOnboarding } from '../../components/team-onboarding';
+
+const GUIDE_SEEN_KEY   = 'guide_seen_v1';
+const TEAM_PICKED_KEY  = 'team_picked_v1';
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -148,17 +154,52 @@ const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventD
 
 function TabLayoutInner() {
   const router = useRouter();
+  const { colors, } = useTheme();
+  const { t } = useLanguage();
+  const [guideVisible,       setGuideVisible]       = useState(false);
+  const [teamPickerVisible,  setTeamPickerVisible]  = useState(false);
+
+  useEffect(() => {
+    Promise.all([
+      AsyncStorage.getItem(GUIDE_SEEN_KEY),
+      AsyncStorage.getItem(TEAM_PICKED_KEY),
+    ]).then(([guide, team]) => {
+      if (!guide) setGuideVisible(true);
+      else if (!team) setTeamPickerVisible(true);
+    }).catch(() => {});
+  }, []);
+
+  const handleGuideClose = () => {
+    setGuideVisible(false);
+    AsyncStorage.setItem(GUIDE_SEEN_KEY, '1').catch(() => {});
+    AsyncStorage.getItem(TEAM_PICKED_KEY).then(val => {
+      if (!val) setTeamPickerVisible(true);
+    }).catch(() => {});
+  };
+
+  const handleTeamDone = () => {
+    setTeamPickerVisible(false);
+    AsyncStorage.setItem(TEAM_PICKED_KEY, '1').catch(() => {});
+  };
 
   return (
+    <>
+    <WelcomeGuide visible={guideVisible} onClose={handleGuideClose} />
+    <TeamOnboarding visible={teamPickerVisible} onDone={handleTeamDone} />
     <DrawerProvider
       onOpenSettings={() => router.navigate('/settings' as any)}
       onOpenFavorites={() => router.navigate('/favorites' as any)}
       onNavigateFeed={() => router.navigate('/feed' as any)}
     >
+      <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <Tabs
         initialRouteName="feed"
         tabBar={props => <CustomTabBar {...props} />}
-        screenOptions={{ headerShown: false, animation: 'none' }}
+        screenOptions={{
+          headerShown: false,
+          animation: 'none',
+          tabBarStyle: { backgroundColor: 'transparent', borderTopWidth: 0, elevation: 0, shadowOpacity: 0 },
+        }}
       >
         <Tabs.Screen name="feed"   />
         <Tabs.Screen name="sports" />
@@ -169,7 +210,9 @@ function TabLayoutInner() {
         <Tabs.Screen name="favorites" options={{ href: null }} />
         <Tabs.Screen name="settings"  options={{ href: null }} />
       </Tabs>
+      </View>
     </DrawerProvider>
+    </>
   );
 }
 

@@ -3301,12 +3301,15 @@ def soccer_drama_timeline(canonical_id: str, step: int = 2):
         raise HTTPException(status_code=404, detail="match not found")
     step = max(1, min(5, step))
     timeline = _de.compute_drama_timeline(detail, step=step)
-    # Cache the peak so a finished match's feed badge reflects how dramatic it
-    # actually got (not the FT-damped live state).
+    # Cache the match-quality score (top-15% average of the timeline) so a
+    # finished match's feed badge reflects how good it actually was (not the
+    # FT-damped live state). This is the authoritative value — finalize it.
     try:
-        peak = max((p.get("drama", 0.0) for p in timeline), default=0.0)
-        if peak > 0:
-            _ss.record_peak_drama(canonical_id, peak)
+        quality = round(_de.top_fraction_average(
+            [p.get("drama", 0.0) for p in timeline]
+        ), 2)
+        if quality > 0:
+            _ss.record_peak_drama(canonical_id, quality, final=True)
     except Exception:
         pass
     return {"match_id": detail.get("id"), "timeline": timeline}
@@ -4504,10 +4507,12 @@ def watch_scores(date: str = "", league: str = "nba", tz: Optional[str] = None):
     def _compute(item: tuple[str, str, str, str]):
         home_abbr, away_abbr, gid, state = item
         try:
-            # BSD-sourced ids (bsd-*) score directly from BSD — live + final.
-            # Legacy s365-* games keep the 365 play-by-play path (final only).
             if gid.startswith("bsd-"):
                 result = calculate_watch_score_bsd(int(gid[4:]), league=league)
+            elif gid.startswith("s365-"):
+                # 365scores-sourced game — use the 365 play-by-play path directly
+                from watch_score import calculate_watch_score as _calc_ws
+                result = _calc_ws(int(gid[5:]), league=league)
             elif state == "post":
                 result = calculate_watch_score_by_teams(
                     home_abbr=home_abbr, away_abbr=away_abbr,

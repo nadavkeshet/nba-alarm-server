@@ -39,60 +39,59 @@ interface Slide {
 function makeSlides(t: TFunc): Slide[] {
   return [
     {
+      // 1 — What the app is
       icon:  'notifications' as const,
       color: C.orange, bg: 'rgba(255,107,0,0.12)',
       title: t('guide.slide1.title'),
       body:  t('guide.slide1.body'),
-      where: t('guide.slide1.where'),
     },
     {
-      icon:  'person-circle' as const,
+      // 2 — Drama Engine
+      icon:  'bar-chart' as const,
       color: C.orange, bg: 'rgba(255,107,0,0.12)',
       title: t('guide.slide2.title'),
       body:  t('guide.slide2.body'),
       where: t('guide.slide2.where'),
     },
     {
-      icon:  'shield' as const,
-      color: C.orange, bg: 'rgba(255,107,0,0.12)',
-      title: t('guide.slide3.title'),
-      body:  t('guide.slide3.body'),
-      where: t('guide.slide3.where'),
+      // 3 — 7 Football criteria
+      icon:    'football' as const,
+      color:   '#22c55e', bg: 'rgba(34,197,94,0.12)',
+      title:   t('guide.slide3.title'),
+      bullets: [t('guide.slide3.b1'), t('guide.slide3.b2'), t('guide.slide3.b3'), t('guide.slide3.b4'), t('guide.slide3.b5'), t('guide.slide3.b6'), t('guide.slide3.b7')],
     },
     {
-      icon:  'radio' as const,
+      // 4 — Follow teams & leagues
+      icon:  'heart' as const,
       color: C.orange, bg: 'rgba(255,107,0,0.12)',
       title: t('guide.slide4.title'),
       body:  t('guide.slide4.body'),
       where: t('guide.slide4.where'),
     },
     {
-      icon:  'time' as const,
-      color: C.gold, bg: 'rgba(240,165,0,0.12)',
+      // 5 — Per-match alarms
+      icon:  'alarm' as const,
+      color: C.orange, bg: 'rgba(255,107,0,0.12)',
       title: t('guide.slide5.title'),
       body:  t('guide.slide5.body'),
       where: t('guide.slide5.where'),
     },
     {
-      icon:    'notifications-circle' as const,
+      // 6 — Basketball
+      icon:    'basketball' as const,
       color:   '#4d8cf5', bg: 'rgba(77,140,245,0.12)',
       title:   t('guide.slide6.title'),
       bullets: [t('guide.slide6.b1'), t('guide.slide6.b2'), t('guide.slide6.b3'), t('guide.slide6.b4'), t('guide.slide6.b5')],
     },
     {
-      icon:    'copy' as const,
-      color:   '#4d8cf5', bg: 'rgba(77,140,245,0.12)',
+      // 7 — Notifications
+      icon:    'notifications-circle' as const,
+      color:   C.gold, bg: 'rgba(240,165,0,0.12)',
       title:   t('guide.slide7.title'),
-      bullets: [t('guide.slide7.b1'), t('guide.slide7.b2'), t('guide.slide7.b3')],
+      bullets: [t('guide.slide7.b1'), t('guide.slide7.b2'), t('guide.slide7.b3'), t('guide.slide7.b4'), t('guide.slide7.b5')],
     },
     {
-      icon:  'bar-chart' as const,
-      color: '#22c55e', bg: 'rgba(34,197,94,0.12)',
-      title: t('guide.slide9.title'),
-      body:  t('guide.slide9.body'),
-      where: t('guide.slide9.where'),
-    },
-    {
+      // 8 — Good to know
       icon:    'information-circle' as const,
       color:   C.muted, bg: 'rgba(107,138,173,0.12)',
       title:   t('guide.slide8.title'),

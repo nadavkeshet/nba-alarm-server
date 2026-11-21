@@ -44,7 +44,7 @@ export default function SettingsScreen() {
   const styles = useMemo(() => makeStyles(C), [C]);
 
   const [userToken, setUserToken]           = useState('');
-  const [guideVisible, setGuideVisible]     = useState(false);
+  const [guideVisible, setGuideVisible]         = useState(false);
   const [saving]                             = useState(false);
   const [savedId, setSavedId]               = useState<string | null>(null);
   const [savedSound, setSavedSound]         = useState('classic_alarm');
@@ -239,6 +239,17 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
 
+        {/* ── Onboarding shortcuts ──────────────────────────────────── */}
+        <View style={styles.onboardingRow}>
+          <TouchableOpacity
+            style={styles.onboardingBtn}
+            onPress={() => setGuideVisible(true)}
+          >
+            <Text style={styles.onboardingBtnEmoji}>📖</Text>
+            <Text style={styles.onboardingBtnText}>{t('settings.appGuide')}</Text>
+          </TouchableOpacity>
+        </View>
+
         {/* ── Privacy Policy ────────────────────────────────────────── */}
         <TouchableOpacity
           style={styles.privacyBtn}
@@ -376,6 +387,17 @@ function makeStyles(C: AppColors) {
     rateBtnText: {
       color: C.gold, fontWeight: '800', fontSize: 14, letterSpacing: 0.5,
     },
+    onboardingRow: {
+      flexDirection: 'row', gap: 10,
+      marginHorizontal: 16, marginTop: 8, marginBottom: 4,
+    },
+    onboardingBtn: {
+      flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+      gap: 6, paddingVertical: 12, borderRadius: 12,
+      backgroundColor: C.cardAlt, borderWidth: 1, borderColor: C.border,
+    },
+    onboardingBtnEmoji: { fontSize: 16 },
+    onboardingBtnText: { fontSize: 13, fontWeight: '700', color: C.textMuted },
     privacyBtn: {
       alignItems: 'center', marginHorizontal: 16, marginTop: 8, marginBottom: 8,
       paddingVertical: 10,

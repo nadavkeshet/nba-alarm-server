@@ -281,7 +281,7 @@ def _tick() -> None:
         status = (detail.get("status") or "").lower()
         if status in _TERMINAL_STATUSES:
             for alarm in alarm_group:
-                if alarm["alarm_type"] == "match_moments":
+                if alarm["alarm_type"] in ("match_moments", "player_alert"):
                     try:
                         _evaluate_alarm(alarm, detail)
                     except Exception as exc:
@@ -916,11 +916,17 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
                       home_name, away_name, competition, signal=f"mm_red_{rmin}", one_shot=False)
         # Penalty awarded — dedup by the penalty INCIDENT's minute (stable),
         # NOT the live clock which advances every tick.
+        # Penalty SHOOTOUT: all kicks share the same static key so the whole
+        # phase fires exactly once regardless of how many kicks are taken.
         if want("penalties"):
-            pen_min = _recent_penalty_minute(match)
-            if pen_min is not None:
+            if status == "pens":
                 _fire(alarm, "soccer_penalty", t_soccer_body_penalty,
-                      home_name, away_name, competition, signal=f"mm_pen_{pen_min}", one_shot=False)
+                      home_name, away_name, competition, signal="mm_pen_shootout", one_shot=False)
+            else:
+                pen_min = _recent_penalty_minute(match)
+                if pen_min is not None:
+                    _fire(alarm, "soccer_penalty", t_soccer_body_penalty,
+                          home_name, away_name, competition, signal=f"mm_pen_{pen_min}", one_shot=False)
         # Match end — MUST fire before the terminal-status sweep deactivates the
         # row. _tick special-cases match_moments alarms so this still runs on the
         # ft tick (see _tick's terminal handling).
@@ -1038,6 +1044,10 @@ def _evaluate_alarm(alarm: dict, match: dict) -> None:
             _fire(alarm, "soccer_big_chance", t_soccer_body_big_chance,
                   home_name, away_name, competition,
                   signal=f"bcb_{side}_{block}", one_shot=False)
+        return
+
+    if alarm_type == "player_alert":
+        _evaluate_player_alert(alarm, match)
         return
 
     # Unknown alarm_type → no-op (keeps forward compat for P3 types)
@@ -1325,16 +1335,18 @@ def _recent_incident(match: dict, *, types: tuple[str, ...], window_min: int) ->
 
 
 def _recent_penalty_minute(match: dict) -> int | None:
-    """Minute of the most recent penalty-award incident, or None. Used to dedup
-    a match_moments penalty alert by the incident minute (stable across ticks),
-    NOT by the live clock which advances every poll. Handles the canonical
-    (type=penalty, minute=N) and older (incidentType=penalty, time=N) shapes."""
+    """Minute of the most recent penalty-AWARD incident, or None. Dedup key for
+    match_moments penalty alerts. Restricted to award incidents only (not scored/
+    missed/saved outcomes) so each penalty fires exactly once, and does NOT match
+    shootout kicks (those are handled separately via the mm_pen_shootout key)."""
     incidents = match.get("incidents") or []
     minutes: list[int] = []
     for inc in incidents:
         inc_type = (inc.get("type") or inc.get("incidentType") or "").lower()
-        inc_class = (inc.get("incidentClass") or "").lower()
-        if "penalty" in inc_type or "penalty" in inc_class:
+        # Only match the award event, not outcome events (penalty_scored,
+        # missed_penalty, penalty_saved, etc.) which BSD may emit at a different
+        # minute and would each produce a distinct dedup key.
+        if inc_type in ("penalty", "penalty_awarded"):
             minutes.append(inc.get("minute") or inc.get("time") or 0)
     if not minutes:
         return None

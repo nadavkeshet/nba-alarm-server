@@ -66,20 +66,38 @@ from contextlib import nullcontext as _nullcontext
 
 _DETAIL_POOL = _ThreadPoolExecutor(max_workers=8, thread_name_prefix="soccerdetail")
 
-# canonical_id -> peak Drama Engine score seen for the match. Populated when the
+# canonical_id -> match-quality score seen for the match. Populated when the
 # Drama Meter / timeline is computed (main.py), so a finished match's feed badge
-# reflects how dramatic it actually got — not the FT-damped live state. Permanent
-# for finished matches (FT scores don't change).
+# reflects how good it actually was — not the FT-damped live state. The timeline
+# endpoint computes the authoritative value (top-15% average of the per-minute
+# drama timeline) and finalizes the entry; until then, live Drama Meter calls
+# keep a monotonic-max placeholder. Permanent for finished matches.
 _peak_drama_cache: dict[str, float] = {}
+_quality_finalized: set[str] = set()
+
+# canonical_id -> (home_score, away_score) derived from incidents for finished
+# matches. BSD's top-level home_score/away_score fields only reflect the 90-min
+# score; ET goals only appear in incidents. Populated by get_soccer_match_detail
+# and used by _from_bsd_event to fix the feed score.
+_final_score_cache: dict[str, tuple[int, int]] = {}
 
 
-def record_peak_drama(canonical_id: str, value: float) -> None:
-    """Remember the highest Drama Engine total seen for a match (called by the
-    /soccer/drama endpoints). Best-effort, monotonic."""
+def record_peak_drama(canonical_id: str, value: float, *, final: bool = False) -> None:
+    """Remember the match-quality score for a match (called by the /soccer/drama
+    endpoints). `final=True` (from the timeline endpoint) sets the authoritative
+    top-15%-average value and locks it; otherwise best-effort monotonic-max
+    placeholder, ignored once finalized."""
     try:
+        value = float(value)
+        if final:
+            _peak_drama_cache[canonical_id] = value
+            _quality_finalized.add(canonical_id)
+            return
+        if canonical_id in _quality_finalized:
+            return
         prev = _peak_drama_cache.get(canonical_id)
         if prev is None or value > prev:
-            _peak_drama_cache[canonical_id] = float(value)
+            _peak_drama_cache[canonical_id] = value
     except Exception:
         pass
 
@@ -243,6 +261,10 @@ def _normalize_status_bsd(raw_status: str | None, period: str | None) -> tuple[s
     if s in ("notstarted", "scheduled", "pre"):
         return "scheduled", "pre"
     if s in ("finished", "ft"):
+        # If the match finished in extra time, return aet so the UI can show
+        # "AET" and know the score includes an ET goal.
+        if "extra" in p or p in ("et", "et1", "et2", "extra_time"):
+            return "aet", "aet"
         return "ft", "ft"
     if s in ("postponed", "cancelled"):
         return s, "pre"
@@ -307,9 +329,10 @@ def _soccer_watch_score(
 
     - LIVE BSD: build a drama context from the in-memory WS snapshot (xG,
       dangerous-attack momentum proxy, odds win-probability + swing) — cheap, no
-      REST. - FINISHED BSD: reuse the cached PEAK drama (how dramatic it actually
-      got) when the match has been scored, else a lightweight finished-quality
-      formula. - Everything else: lightweight. None below the badge threshold.
+      REST. - FINISHED BSD: reuse the cached match-quality score (top-15% average
+      of the full-match drama timeline — how good it actually was) when the
+      match has been scored, else a lightweight finished-quality formula.
+      - Everything else: lightweight. None below the badge threshold.
     """
     try:
         if home_score is None and away_score is None:
@@ -433,6 +456,9 @@ def _from_bsd_event(event: dict, *, slug: str | None = None) -> dict:
     status, period = _normalize_status_bsd(event.get("status"), event.get("period"))
     cid = canonical_id("bsd", eid)
     cached_pens = _pens_cache.get(cid)
+    # Use the incident-derived final score if available (fixes AET matches
+    # where BSD's home_score/away_score only reflect the 90-min result).
+    _final = _final_score_cache.get(cid)
     return {
         "id": cid,
         "source": "bsd",
@@ -448,7 +474,7 @@ def _from_bsd_event(event: dict, *, slug: str | None = None) -> dict:
             "name": event.get("home_team", ""),
             "short_name": "",
             "crest": _bsd_team_image_url(event.get("home_team_id")) if event.get("home_team_id") else None,
-            "score": event.get("home_score"),
+            "score": _final[0] if _final is not None else event.get("home_score"),
             "score_ht": event.get("home_score_ht"),
             "score_pens": cached_pens[0] if cached_pens else event.get("home_score_pens"),
             "xg": None,
@@ -458,7 +484,7 @@ def _from_bsd_event(event: dict, *, slug: str | None = None) -> dict:
             "name": event.get("away_team", ""),
             "short_name": "",
             "crest": _bsd_team_image_url(event.get("away_team_id")) if event.get("away_team_id") else None,
-            "score": event.get("away_score"),
+            "score": _final[1] if _final is not None else event.get("away_score"),
             "score_ht": event.get("away_score_ht"),
             "score_pens": cached_pens[1] if cached_pens else event.get("away_score_pens"),
             "xg": None,
@@ -1045,6 +1071,56 @@ def get_soccer_match_detail(canonical: str) -> dict | None:
                     out["home"]["score_pens"] = home_pens
                     out["away"]["score_pens"] = away_pens
                     _pens_cache[canonical] = (home_pens, away_pens)
+            # For finished matches, derive the authoritative score by replaying
+            # goal incidents in order. BSD REST incidents don't carry per-goal
+            # running scores (home_score/away_score) — those only arrive via WS
+            # during live play. Instead we use the is_home flag to accumulate.
+            # Shootout kicks (minute >= 121) are excluded; they're tracked
+            # separately in score_pens. Own goals credit the opposing side.
+            # Replay the authoritative score from incidents. BSD REST home_score/
+            # away_score only reflect the 90-min result; ET goals only appear in
+            # the incident list. BSD also sometimes misreports an AET match as
+            # plain "ft" — in that case the replay finds ET goals (min 91-120)
+            # and produces a higher total than the REST score, which is the signal
+            # to apply it. Shootout kicks (min >= 121) are excluded.
+            _status = out.get("status") or ""
+            if _status in ("ft", "aet", "pens", "ap") and out.get("incidents"):
+                hs, as_ = 0, 0
+                found_any = False
+                for _inc in sorted(out["incidents"],
+                                   key=lambda i: (i.get("minute") or 0,
+                                                  i.get("added_time") or 0)):
+                    inc_type = (_inc.get("type") or "").lower()
+                    if inc_type not in ("goal", "owngoal"):
+                        continue
+                    if (_inc.get("minute") or 0) >= 121:
+                        continue  # penalty shootout kick — not part of match score
+                    found_any = True
+                    # Use pre-computed running scores when available (WS path)
+                    if _inc.get("home_score") is not None and _inc.get("away_score") is not None:
+                        hs = int(_inc["home_score"])
+                        as_ = int(_inc["away_score"])
+                    else:
+                        is_home = _inc.get("is_home")
+                        if is_home is True:
+                            if inc_type == "owngoal":
+                                as_ += 1
+                            else:
+                                hs += 1
+                        elif is_home is False:
+                            if inc_type == "owngoal":
+                                hs += 1
+                            else:
+                                as_ += 1
+                if found_any:
+                    rest_total = (out["home"].get("score") or 0) + (out["away"].get("score") or 0)
+                    # For aet/pens/ap: always apply (BSD REST is known to be incomplete).
+                    # For ft: only apply if replay total >= REST total — guards against
+                    # missing incidents producing a falsely low score.
+                    if _status in ("aet", "pens", "ap") or (hs + as_) >= rest_total:
+                        out["home"]["score"] = hs
+                        out["away"]["score"] = as_
+                        _final_score_cache[canonical] = (hs, as_)
             # Overlay in-memory WS snapshots (score/stats/livedata/odds) on
             # top of the REST payload — fresher data, no extra round-trip.
             # Fully guarded: a WS-snapshot read must never 500 the match detail.

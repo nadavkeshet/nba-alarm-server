@@ -2,7 +2,7 @@
   "expo": {
     "name": "Clutch Alarm",
     "slug": "NBA-Alarm-App",
-    "version": "1.2.0",
+    "version": "2.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "nbaalarmapp",
@@ -33,7 +33,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "package": "com.nadav.nbaalarmapp",
-      "versionCode": 5,
+      "versionCode": 6,
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },

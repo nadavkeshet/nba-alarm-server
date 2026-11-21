@@ -12,6 +12,7 @@ import {
   Animated,
   ActivityIndicator,
   FlatList,
+  SectionList,
   Modal,
   NativeModules,
   ScrollView,
@@ -39,11 +40,17 @@ import {
   upsertFavCompetition,
   searchAll,
   getStandings,
+  getTeamSquad,
+  upsertSoccerHistoric,
 } from '../../services/soccer-service';
 import { followTeam, unfollowTeam } from '../../services/follow-service';
-import type { SoccerFavoritesResponse, SoccerFavTeam, SoccerFavPlayer, SoccerFavCompetition } from '../../types/soccer';
-import type { SearchTeam, SearchPlayer } from '../../services/soccer-service';
+import type { SoccerFavoritesResponse, SoccerFavTeam, SoccerFavPlayer, SoccerFavCompetition, SoccerFollowConfig, SoccerHistoricPref, SoccerHistoricCategoryKey } from '../../types/soccer';
+import { SOCCER_HISTORIC_GROUPS } from '../../types/soccer';
+import { defaultFollowConfig, parseServerConfig } from '../../utils/followConfig';
+import type { SearchTeam, SearchPlayer, SquadPlayer } from '../../services/soccer-service';
 import { LeagueCatalog } from '../../services/league-catalog';
+import { WC2026_SEARCH_TEAMS, WC2026_TEAMS } from '../../data/wc2026-teams';
+import type { WcTeam } from '../../data/wc2026-teams';
 import { HamburgerButton } from '../../components/drawer-menu';
 import { tabHeaderTitle } from '../../constants/tokens';
 
@@ -68,6 +75,7 @@ interface AppSettings {
   FavoriteTeams:    FavTeam[];
   FavoritePlayers:  Record<string, FavPlayerEntry>;
   HistoricalMode:   { enabled: boolean; alert_type: string; categories: HistoricalCats };
+  soccer_historic?: SoccerHistoricPref;
 }
 interface CachedPlayer { id: string; name: string; jersey: string; position: string }
 interface CachedTeam   { id: string; name: string; abbreviation: string; logo: string | null; players: CachedPlayer[]; league?: string }
@@ -189,14 +197,16 @@ export default function FavoritesScreen() {
   const [tokenLoaded, setTokenLoaded]   = useState(false);
   const [settings, setSettings]         = useState<AppSettings | null>(null);
   const [soccerFavs, setSoccerFavs]     = useState<SoccerFavoritesResponse | null>(null);
+  const [soccerHistoric, setSoccerHistoric] = useState<SoccerHistoricPref | null>(null);
   const [loading, setLoading]           = useState(false);
   const [radarRunning, setRadarRunning] = useState(false);
   const [saving, setSaving]             = useState(false);
   const [savedId, setSavedId]           = useState<string | null>(null);
   const [activeTab, setActiveTab]       = useState<FavTab>('basketball');
   const [leaguePickerVisible, setLeaguePickerVisible] = useState(false);
+  const [compEdits, setCompEdits] = useState<Record<string, { drama_threshold: number; alert_type: 'alarm' | 'silent' }>>({});
   const [soccerTeamEdits, setSoccerTeamEdits] = useState<Record<string, {
-    drama_threshold: number; alert_type: 'alarm' | 'silent'; paused: boolean; notify_at_kickoff: boolean;
+    config: SoccerFollowConfig; alert_type: 'alarm' | 'silent'; paused: boolean; notify_at_kickoff: boolean;
   }>>({});
   const [infoModal, setInfoModal] = useState<{ visible: boolean; title: string; message: string }>({ visible: false, title: '', message: '' });
 
@@ -214,16 +224,17 @@ export default function FavoritesScreen() {
   const [soccerTeamSearch, setSoccerTeamSearch]             = useState('');
   const [soccerTeamResults, setSoccerTeamResults]           = useState<SearchTeam[]>([]);
   const [soccerTeamSearching, setSoccerTeamSearching]       = useState(false);
-  const [newSoccerDramaThreshold, setNewSoccerDramaThreshold] = useState(7.0);
-  const [newSoccerAlertType, setNewSoccerAlertType]           = useState<'alarm' | 'silent'>('silent');
-  const [newSoccerNotifyKickoff, setNewSoccerNotifyKickoff]   = useState(false);
+  const [newSoccerConfig, setNewSoccerConfig]         = useState<SoccerFollowConfig>(defaultFollowConfig);
+  const [newSoccerAlertType, setNewSoccerAlertType]   = useState<'alarm' | 'silent'>('silent');
+  const [newSoccerNotifyKickoff, setNewSoccerNotifyKickoff] = useState(false);
 
   // Soccer player add modal
   const [soccerPlayerModalVisible, setSoccerPlayerModalVisible] = useState(false);
+  const [pickedWcTeam, setPickedWcTeam]                         = useState<WcTeam | null>(null);
+  const [wcSquadPlayers, setWcSquadPlayers]                     = useState<SquadPlayer[]>([]);
+  const [wcSquadLoading, setWcSquadLoading]                     = useState(false);
   const [pickedSoccerPlayer, setPickedSoccerPlayer]             = useState<SearchPlayer | null>(null);
   const [soccerPlayerSearch, setSoccerPlayerSearch]             = useState('');
-  const [soccerPlayerResults, setSoccerPlayerResults]           = useState<SearchPlayer[]>([]);
-  const [soccerPlayerSearching, setSoccerPlayerSearching]       = useState(false);
   const [newSoccerPlayerAlertType, setNewSoccerPlayerAlertType] = useState<'alarm' | 'silent'>('silent');
 
   const [leagueBrowseTeams, setLeagueBrowseTeams]   = useState<SearchTeam[]>([]);
@@ -347,7 +358,17 @@ export default function FavoritesScreen() {
   // ── Auto-fetch teams from standings when cache is empty for the selected league ─
   useEffect(() => {
     if (!soccerTeamModalVisible || pickedSoccerTeam) return;
-    if (soccerTeamSearch.length >= 2) return; // user is searching manually
+    if (soccerTeamSearch.length >= 2) return;
+    // World Cup: always use bundled static list (sports cache only has partial teams)
+    if (soccerPickerLeague === 'world_cup') {
+      setLeagueBrowseTeams(WC2026_SEARCH_TEAMS);
+      setTeamCrestMap(prev => {
+        const next = new Map(prev);
+        for (const t of WC2026_SEARCH_TEAMS) if (t.logo) next.set(t.id, t.logo);
+        return next;
+      });
+      return;
+    }
     const cached = soccerTeamCache.filter(tm => tm.league === soccerPickerLeague);
     if (cached.length > 0) { setLeagueBrowseTeams([]); return; }
     setLeagueBrowseLoading(true);
@@ -361,7 +382,6 @@ export default function FavoritesScreen() {
           sport: 'football' as const,
           league: soccerPickerLeague,
         }));
-        // Populate crest map so logos render immediately
         setTeamCrestMap(prev => {
           const next = new Map(prev);
           for (const row of standings.standings ?? []) {
@@ -389,24 +409,31 @@ export default function FavoritesScreen() {
     }, 300);
   }, [soccerTeamSearch]);
 
+  // Load squad when a WC team is picked in the player modal
   useEffect(() => {
-    if (soccerPlayerDebounceRef.current) clearTimeout(soccerPlayerDebounceRef.current);
-    if (soccerPlayerSearch.length < 2) { setSoccerPlayerResults([]); setSoccerPlayerSearching(false); return; }
-    setSoccerPlayerSearching(true);
-    soccerPlayerDebounceRef.current = setTimeout(async () => {
-      try {
-        const results = await searchAll(soccerPlayerSearch);
-        setSoccerPlayerResults(results.players.filter(p => p.sport === 'football'));
-      } catch {}
-      setSoccerPlayerSearching(false);
-    }, 300);
-  }, [soccerPlayerSearch]);
+    if (!pickedWcTeam || !soccerPlayerModalVisible) return;
+    let cancelled = false;
+    setWcSquadLoading(true);
+    setWcSquadPlayers([]);
+    getTeamSquad(pickedWcTeam.id)
+      .then(players => {
+        if (cancelled) return;
+        const order: Record<string, number> = { GK: 0, DF: 1, MF: 2, FW: 3 };
+        setWcSquadPlayers([...players].sort((a, b) =>
+          (order[a.position ?? ''] ?? 9) - (order[b.position ?? ''] ?? 9)
+        ));
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setWcSquadLoading(false); });
+    return () => { cancelled = true; };
+  }, [pickedWcTeam, soccerPlayerModalVisible]);
 
   // ── Load settings + radar on focus ───────────────────────────────────
   const settingsLoaded = useRef(false);
 
   const applySettingsData = useCallback((s: AppSettings, radarIsRunning: boolean) => {
     setSettings(s);
+    if (s.soccer_historic) setSoccerHistoric(s.soccer_historic);
     setRadarRunning(radarIsRunning);
     setRadarMaxDiff(String(s.GlobalGameRadar?.max_diff ?? 5));
     setRadarStartQ(String(s.GlobalGameRadar?.start_quarter ?? 4));
@@ -452,9 +479,9 @@ export default function FavoritesScreen() {
       if (userToken) {
         getFavorites(userToken).then(favs => {
           setSoccerFavs(favs);
-          const sEdits: Record<string, { drama_threshold: number; alert_type: 'alarm' | 'silent'; paused: boolean; notify_at_kickoff: boolean }> = {};
+          const sEdits: Record<string, { config: SoccerFollowConfig; alert_type: 'alarm' | 'silent'; paused: boolean; notify_at_kickoff: boolean }> = {};
           for (const tm of favs.teams) {
-            sEdits[tm.team_id] = { drama_threshold: tm.drama_threshold, alert_type: tm.alert_type, paused: tm.paused, notify_at_kickoff: tm.notify_at_kickoff ?? false };
+            sEdits[tm.team_id] = { config: parseServerConfig(tm), alert_type: tm.alert_type, paused: tm.paused, notify_at_kickoff: tm.notify_at_kickoff ?? false };
             // Sync each server-side soccer fav team to the local follow store so the
             // feed tab can filter matches for this team without a separate API call.
             followTeam({
@@ -465,6 +492,11 @@ export default function FavoritesScreen() {
             }).catch(() => {});
           }
           setSoccerTeamEdits(sEdits);
+          const cEdits: Record<string, { drama_threshold: number; alert_type: 'alarm' | 'silent' }> = {};
+          for (const c of favs.competitions) {
+            cEdits[c.competition_id] = { drama_threshold: c.drama_threshold, alert_type: c.alert_type ?? 'silent' };
+          }
+          setCompEdits(cEdits);
         }).catch(() => {});
       }
     } catch (e) {
@@ -522,6 +554,23 @@ export default function FavoritesScreen() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...next, user_token: userToken }),
       });
+      Haptics.selectionAsync();
+    } finally { setSaving(false); }
+  };
+
+  const patchSoccerHistoric = async (patch: { enabled?: boolean; alert_type?: 'alarm' | 'silent'; categories?: Partial<Record<SoccerHistoricCategoryKey, boolean>> }) => {
+    if (!requireToken()) return;
+    const defaults: SoccerHistoricPref = { enabled: false, alert_type: 'silent', categories: {} as Record<SoccerHistoricCategoryKey, boolean> };
+    const cur  = soccerHistoric ?? defaults;
+    const next: SoccerHistoricPref = {
+      enabled:    patch.enabled    ?? cur.enabled,
+      alert_type: patch.alert_type ?? cur.alert_type,
+      categories: { ...cur.categories, ...patch.categories },
+    };
+    setSoccerHistoric(next);
+    setSaving(true);
+    try {
+      await upsertSoccerHistoric({ userToken, enabled: next.enabled, alertType: next.alert_type, categories: next.categories });
       Haptics.selectionAsync();
     } finally { setSaving(false); }
   };
@@ -766,16 +815,29 @@ export default function FavoritesScreen() {
   const removePlayer = async (player_id: string) => {
     if (!requireToken()) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    const q = `?user_token=${encodeURIComponent(userToken)}`;
-    await fetch(`${SERVER_URL}/settings/players/${player_id}${q}`, { method: 'DELETE' });
-    signal('Favorite.Player.Removed');
+    // Update UI immediately (optimistic), then confirm with server
     setSettings(s => {
       if (!s) return s;
       const next = { ...s.FavoritePlayers };
       delete next[player_id];
-      return { ...s, FavoritePlayers: next };
+      const updated = { ...s, FavoritePlayers: next };
+      // Keep AsyncStorage cache in sync so cold-start doesn't show deleted player
+      AsyncStorage.getItem(SETTINGS_CACHE_KEY).then(raw => {
+        if (!raw) return;
+        try {
+          const cached = JSON.parse(raw);
+          if (cached?.settings?.FavoritePlayers) {
+            delete cached.settings.FavoritePlayers[player_id];
+            AsyncStorage.setItem(SETTINGS_CACHE_KEY, JSON.stringify(cached)).catch(() => {});
+          }
+        } catch {}
+      }).catch(() => {});
+      return updated;
     });
     setPlayerEdits(prev => { const n = { ...prev }; delete n[player_id]; return n; });
+    signal('Favorite.Player.Removed');
+    const q = `?user_token=${encodeURIComponent(userToken)}`;
+    fetch(`${SERVER_URL}/settings/players/${player_id}${q}`, { method: 'DELETE' }).catch(() => {});
   };
 
   // ── Soccer team CRUD ──────────────────────────────────────────
@@ -787,18 +849,20 @@ export default function FavoritesScreen() {
     if (!edit) return;
     setSaving(true);
     try {
+      const dramaThreshold = edit.config.drama_radar?.threshold ?? 7.0;
       await upsertFavTeam({
         ...team,
-        drama_threshold: edit.drama_threshold,
+        drama_threshold: dramaThreshold,
         alert_type: edit.alert_type,
         paused: edit.paused,
         notify_at_kickoff: edit.notify_at_kickoff,
+        config: edit.config,
         user_token: userToken,
       });
       setSoccerFavs(prev => prev ? {
         ...prev,
         teams: prev.teams.map(t => t.team_id === teamId
-          ? { ...t, drama_threshold: edit.drama_threshold, alert_type: edit.alert_type, paused: edit.paused, notify_at_kickoff: edit.notify_at_kickoff }
+          ? { ...t, drama_threshold: dramaThreshold, alert_type: edit.alert_type, paused: edit.paused, notify_at_kickoff: edit.notify_at_kickoff, config: edit.config }
           : t),
       } : prev);
       flashSaved(`s-${teamId}`);
@@ -840,7 +904,7 @@ export default function FavoritesScreen() {
     setSoccerTeamSearch('');
     setSoccerTeamResults([]);
     setSoccerPickerLeague('premier_league');
-    setNewSoccerDramaThreshold(7.0);
+    setNewSoccerConfig(defaultFollowConfig());
     setNewSoccerAlertType('silent');
     setNewSoccerNotifyKickoff(false);
     setSoccerTeamModalVisible(true);
@@ -856,14 +920,16 @@ export default function FavoritesScreen() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setSaving(true);
     try {
+      const dramaThreshold = newSoccerConfig.drama_radar?.threshold ?? 7.0;
       await upsertFavTeam({
         team_id: pickedSoccerTeam.id,
         team_name: pickedSoccerTeam.name,
         team_ids: pickedSoccerTeam.ids,
-        drama_threshold: newSoccerDramaThreshold,
+        drama_threshold: dramaThreshold,
         alert_type: newSoccerAlertType,
         paused: false,
         notify_at_kickoff: newSoccerNotifyKickoff,
+        config: newSoccerConfig,
         user_token: userToken,
       });
       // Sync to local follow store so the feed shows this team's games immediately.
@@ -877,17 +943,18 @@ export default function FavoritesScreen() {
         team_id: pickedSoccerTeam.id,
         team_name: pickedSoccerTeam.name,
         team_ids: pickedSoccerTeam.ids,
-        drama_threshold: newSoccerDramaThreshold,
+        drama_threshold: dramaThreshold,
         alert_type: newSoccerAlertType,
         paused: false,
         notify_at_kickoff: newSoccerNotifyKickoff,
+        config: newSoccerConfig,
       };
       setSoccerFavs(prev => prev
         ? { ...prev, teams: [...prev.teams.filter(t => t.team_id !== pickedSoccerTeam.id), newTeam] }
         : { teams: [newTeam], players: [], competitions: [] });
       setSoccerTeamEdits(prev => ({
         ...prev,
-        [pickedSoccerTeam.id]: { drama_threshold: newSoccerDramaThreshold, alert_type: newSoccerAlertType, paused: false, notify_at_kickoff: newSoccerNotifyKickoff },
+        [pickedSoccerTeam.id]: { config: newSoccerConfig, alert_type: newSoccerAlertType, paused: false, notify_at_kickoff: newSoccerNotifyKickoff },
       }));
       closeSoccerTeamModal();
     } finally { setSaving(false); }
@@ -895,17 +962,19 @@ export default function FavoritesScreen() {
 
   // ── Soccer player add modal ───────────────────────────────────────────
   const openSoccerPlayerModal = () => {
+    setPickedWcTeam(null);
+    setWcSquadPlayers([]);
     setPickedSoccerPlayer(null);
     setSoccerPlayerSearch('');
-    setSoccerPlayerResults([]);
     setNewSoccerPlayerAlertType('silent');
     setSoccerPlayerModalVisible(true);
   };
   const closeSoccerPlayerModal = () => {
     setSoccerPlayerModalVisible(false);
+    setPickedWcTeam(null);
+    setWcSquadPlayers([]);
     setPickedSoccerPlayer(null);
     setSoccerPlayerSearch('');
-    setSoccerPlayerResults([]);
   };
   const confirmAddSoccerPlayer = async () => {
     if (!pickedSoccerPlayer || !requireToken()) return;
@@ -990,17 +1059,17 @@ export default function FavoritesScreen() {
   const histCats = hist?.categories;
 
   const FAV_TABS: { id: FavTab; label: string; icon: IoniconName }[] = [
-    { id: 'basketball', label: 'Basketball', icon: 'basketball-outline' },
-    { id: 'football',   label: 'World Cup',  icon: 'earth-outline'     },
-    { id: 'radar',      label: 'Radar',      icon: 'radio-outline'     },
-    { id: 'historical', label: 'Historical', icon: 'time-outline'      },
+    { id: 'basketball', label: t('fav.tab.basketball'), icon: 'basketball-outline' },
+    { id: 'football',   label: t('fav.tab.football'),   icon: 'earth-outline'     },
+    { id: 'radar',      label: t('fav.tab.radar'),      icon: 'radio-outline'     },
+    { id: 'historical', label: t('fav.tab.historical'), icon: 'time-outline'      },
   ];
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: C.bg }]}>
       <View style={[styles.header, { borderBottomColor: C.border }]}>
         <HamburgerButton />
-        <Text style={[styles.headerTitle, { color: C.textPrimary }]}>Alert Settings</Text>
+        <Text style={[styles.headerTitle, { color: C.textPrimary }]}>{t('fav.title')}</Text>
         <View style={{ width: 44 }} />
       </View>
 
@@ -1011,7 +1080,7 @@ export default function FavoritesScreen() {
         >
           <Ionicons name={allPaused ? 'play-circle' : 'pause-circle'} size={20} color="#fff" />
           <Text style={styles.pauseAllBtnText}>
-            {allPaused ? 'Resume All Favorites' : 'Pause All Favorites'}
+            {allPaused ? t('fav.resumeAll') : t('fav.pauseAll')}
           </Text>
         </TouchableOpacity>
       )}
@@ -1253,20 +1322,18 @@ export default function FavoritesScreen() {
         {activeTab === 'football' && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>{t('soccer.favorites.teams')}</Text>
-            <Text style={styles.sectionDesc}>
-              Persistent drama monitors — notified whenever a followed team plays a high-drama match.
-            </Text>
+            <Text style={styles.sectionDesc}>{t('soccer.favorites.teamsSub')}</Text>
 
             <TouchableOpacity style={styles.addRowBtn} onPress={openSoccerTeamModal}>
               <Ionicons name="add-circle-outline" size={20} color={C.accentBlue} />
-              <Text style={styles.addRowBtnText}>Add Soccer Team</Text>
+              <Text style={styles.addRowBtnText}>{t('soccer.favorites.addTeam')}</Text>
             </TouchableOpacity>
 
             {!soccerFavs || soccerFavs.teams.length === 0 ? (
               <Text style={styles.emptyHint}>{t('soccer.favorites.noTeams')}</Text>
             ) : (
               soccerFavs.teams.map(team => {
-                const edit = soccerTeamEdits[team.team_id] ?? { drama_threshold: team.drama_threshold, alert_type: team.alert_type, paused: team.paused, notify_at_kickoff: team.notify_at_kickoff ?? false };
+                const edit = soccerTeamEdits[team.team_id] ?? { config: parseServerConfig(team), alert_type: team.alert_type, paused: team.paused, notify_at_kickoff: team.notify_at_kickoff ?? false };
                 return (
                   <View key={team.team_id} style={styles.favCard}>
                     <View style={styles.favCardHeader}>
@@ -1286,27 +1353,14 @@ export default function FavoritesScreen() {
                       </TouchableOpacity>
                     </View>
 
-                    <View style={styles.sliderRow}>
-                      <Text style={styles.inputLabel}>DRAMA THRESHOLD</Text>
-                      <Text style={styles.sliderValue}>{edit.drama_threshold.toFixed(1)}</Text>
-                    </View>
-                    <Slider
-                      style={styles.slider}
-                      minimumValue={5} maximumValue={9.5} step={0.5}
-                      value={edit.drama_threshold}
-                      onValueChange={v => setSoccerTeamEdits(prev => ({ ...prev, [team.team_id]: { ...edit, drama_threshold: v } }))}
-                      minimumTrackTintColor={C.orange} maximumTrackTintColor={C.border} thumbTintColor={C.orange}
+                    <SoccerCriteriaEditor
+                      config={edit.config}
+                      notifyAtKickoff={edit.notify_at_kickoff}
+                      onChangeConfig={cfg => setSoccerTeamEdits(prev => ({ ...prev, [team.team_id]: { ...edit, config: cfg } }))}
+                      onChangeNotifyAtKickoff={v => setSoccerTeamEdits(prev => ({ ...prev, [team.team_id]: { ...edit, notify_at_kickoff: v } }))}
+                      colors={C}
+                      t={t}
                     />
-
-                    <View style={styles.noCondRow}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.inputLabel}>NOTIFY AT KICKOFF</Text>
-                      </View>
-                      <BasketballToggle
-                        value={edit.notify_at_kickoff}
-                        onValueChange={v => setSoccerTeamEdits(prev => ({ ...prev, [team.team_id]: { ...edit, notify_at_kickoff: v } }))}
-                      />
-                    </View>
 
                     <View style={styles.alertTypeRow}>
                       {(['alarm', 'silent'] as const).map(type => (
@@ -1335,13 +1389,11 @@ export default function FavoritesScreen() {
         {activeTab === 'football' && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>{t('soccer.favorites.players')}</Text>
-            <Text style={styles.sectionDesc}>
-              Persistent player monitors — notified when a followed player scores or gets carded.
-            </Text>
+            <Text style={styles.sectionDesc}>{t('soccer.favorites.playersSub')}</Text>
 
             <TouchableOpacity style={styles.addRowBtn} onPress={openSoccerPlayerModal}>
               <Ionicons name="add-circle-outline" size={20} color={C.accentBlue} />
-              <Text style={styles.addRowBtnText}>Add Soccer Player</Text>
+              <Text style={styles.addRowBtnText}>{t('soccer.favorites.addPlayer')}</Text>
             </TouchableOpacity>
 
             {!soccerFavs || soccerFavs.players.length === 0 ? (
@@ -1389,9 +1441,9 @@ export default function FavoritesScreen() {
               <BasketballToggle value={radar?.enabled ?? false} onValueChange={v => { signal('Radar.Toggled', { enabled: String(v), mode: radar?.alert_type ?? 'silent', maxDiff: String(radar?.max_diff ?? 5), leagueCount: String(radar?.leagues?.length ?? 1) }); patchGlobalRadar({ enabled: v }); }} />
             </View>
 
-            <View style={[styles.alertTypeRow, !settings && { opacity: 0.4 }]}>
+            <View style={[styles.alertTypeRow, !radar?.enabled && { opacity: 0.4 }]}>
               {(['alarm', 'silent'] as const).map(type => (
-                <TouchableOpacity key={type} activeOpacity={1} disabled={!settings} style={[styles.alertTypeBtn, (radar?.alert_type ?? 'silent') === type && styles.alertTypeBtnActive]} onPress={() => patchGlobalRadar({ alert_type: type })}>
+                <TouchableOpacity key={type} activeOpacity={1} disabled={!radar?.enabled} style={[styles.alertTypeBtn, (radar?.alert_type ?? 'silent') === type && styles.alertTypeBtnActive]} onPress={() => patchGlobalRadar({ alert_type: type })}>
                   <Ionicons name={type === 'alarm' ? 'notifications-outline' : 'notifications-off-outline'} size={14} color={C.textMuted} />
                   <Text style={[styles.alertTypeText, (radar?.alert_type ?? 'silent') === type && styles.alertTypeTextActive]}>{type === 'alarm' ? t('settings.alarm') : t('settings.silent')}</Text>
                 </TouchableOpacity>
@@ -1436,42 +1488,95 @@ export default function FavoritesScreen() {
             </View>
           </View>
 
-          {/* ── Football Radar ────────────────────────────────────────── */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>🌍 WORLD CUP</Text>
-            <Text style={styles.sectionDesc}>
-              Receive alerts when any match in these leagues reaches your drama threshold.{'\n'}
-              To follow a league for display only, tap ★ in the Sports tab.
-            </Text>
+          {/* ── Football / World Cup Radar ───────────────────────────── */}
+          {(() => {
+            const wcEdit   = compEdits['world_cup'] ?? { drama_threshold: 7.0, alert_type: 'silent' as const };
+            const wcEnabled = !!(soccerFavs?.competitions?.some(c => c.competition_id === 'world_cup'));
+            const drBand   = wcEdit.drama_threshold >= 8 ? C.orange : wcEdit.drama_threshold >= 5 ? C.accentBlue : C.textMuted;
+            const bandLabel = wcEdit.drama_threshold >= 8 ? t('drama.band.mustWatch') : wcEdit.drama_threshold >= 5 ? t('drama.band.worthLooking') : t('drama.band.quiet');
 
-            <TouchableOpacity style={styles.addRowBtn} onPress={() => setLeaguePickerVisible(true)}>
-              <Ionicons name="add-circle-outline" size={20} color={C.accentBlue} />
-              <Text style={styles.addRowBtnText}>Add League Monitor</Text>
-            </TouchableOpacity>
+            const toggleWcRadar = (enabled: boolean) => {
+              if (!requireToken()) return;
+              // Optimistic: update UI immediately
+              if (enabled) {
+                setSoccerFavs(prev => {
+                  const comps = prev?.competitions ?? [];
+                  if (comps.some(c => c.competition_id === 'world_cup')) return prev;
+                  return { teams: prev?.teams ?? [], players: prev?.players ?? [], competitions: [...comps, { competition_id: 'world_cup', drama_threshold: wcEdit.drama_threshold, alert_type: wcEdit.alert_type }] };
+                });
+                upsertFavCompetition({ userToken, competitionId: 'world_cup', dramaThreshold: wcEdit.drama_threshold, alertType: wcEdit.alert_type }).catch(() => {});
+              } else {
+                setSoccerFavs(prev => prev ? { ...prev, competitions: prev.competitions.filter(c => c.competition_id !== 'world_cup') } : prev);
+                deleteFavCompetition('world_cup', userToken).catch(() => {});
+              }
+              Haptics.selectionAsync();
+            };
 
-            {soccerFavs && soccerFavs.competitions.map(comp => {
-                const info = LeagueCatalog.info(comp.competition_id);
-                return (
-                  <View key={comp.competition_id} style={styles.leagueRow}>
-                    <LeagueBadge leagueId={comp.competition_id} size={36} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.favName}>{info.label}</Text>
-                      <Text style={styles.pickerRowSub}>Drama ≥ {comp.drama_threshold.toFixed(1)}</Text>
-                    </View>
-                    <TouchableOpacity
-                      onPress={async () => {
-                        if (!userToken) return;
-                        await deleteFavCompetition(comp.competition_id, userToken).catch(() => {});
-                        setSoccerFavs(prev => prev ? { ...prev, competitions: prev.competitions.filter(c => c.competition_id !== comp.competition_id) } : prev);
-                      }}
-                      style={styles.removeBtn}
-                    >
-                      <Text style={styles.removeBtnText}>{t('settings.remove')}</Text>
+            const saveWcRadar = async () => {
+              if (!requireToken()) return;
+              setSaving(true);
+              try {
+                await upsertFavCompetition({ userToken, competitionId: 'world_cup', dramaThreshold: wcEdit.drama_threshold, alertType: wcEdit.alert_type });
+                setSoccerFavs(prev => prev ? {
+                  ...prev,
+                  competitions: wcEnabled
+                    ? prev.competitions.map(c => c.competition_id === 'world_cup' ? { ...c, drama_threshold: wcEdit.drama_threshold, alert_type: wcEdit.alert_type } : c)
+                    : [...prev.competitions, { competition_id: 'world_cup', drama_threshold: wcEdit.drama_threshold, alert_type: wcEdit.alert_type }],
+                } : prev);
+                Haptics.selectionAsync();
+                flashSaved('wc-radar');
+              } finally { setSaving(false); }
+            };
+
+            return (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>{t('fav.wc.title')}</Text>
+                <Text style={styles.sectionDesc}>{t('soccer.favorites.wcSub')}</Text>
+
+                <View style={styles.switchRow}>
+                  <Text style={styles.rowLabel}>{t('fav.wc.enable')}</Text>
+                  <BasketballToggle value={wcEnabled} onValueChange={toggleWcRadar} emoji="⚽" />
+                </View>
+
+                <View style={[styles.alertTypeRow, !wcEnabled && { opacity: 0.4 }]}>
+                  {(['alarm', 'silent'] as const).map(type => (
+                    <TouchableOpacity key={type} activeOpacity={1} disabled={!wcEnabled}
+                      style={[styles.alertTypeBtn, wcEdit.alert_type === type && styles.alertTypeBtnActive]}
+                      onPress={() => setCompEdits(prev => ({ ...prev, 'world_cup': { ...wcEdit, alert_type: type } }))}>
+                      <Ionicons name={type === 'alarm' ? 'notifications-outline' : 'notifications-off-outline'} size={14} color={C.textMuted} />
+                      <Text style={[styles.alertTypeText, wcEdit.alert_type === type && styles.alertTypeTextActive]}>{type === 'alarm' ? t('settings.alarm') : t('settings.silent')}</Text>
                     </TouchableOpacity>
-                  </View>
-                );
-              })}
-          </View>
+                  ))}
+                </View>
+
+                {wcEnabled && (
+                  <>
+                    <View style={styles.sliderRow}>
+                      <Text style={styles.inputLabel}>{t('drama.radar.threshold')}</Text>
+                      <Text style={[styles.sliderValue, { color: drBand }]}>{wcEdit.drama_threshold.toFixed(1)}</Text>
+                    </View>
+                    <Slider
+                      style={styles.slider}
+                      minimumValue={5.0} maximumValue={9.5} step={0.5}
+                      value={wcEdit.drama_threshold}
+                      onValueChange={v => setCompEdits(prev => ({ ...prev, 'world_cup': { ...wcEdit, drama_threshold: v } }))}
+                      minimumTrackTintColor={drBand} maximumTrackTintColor={C.border} thumbTintColor={drBand}
+                    />
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <Text style={[styles.rowSub, { fontSize: 10 }]}>5.0</Text>
+                      <Text style={[styles.rowSub, { fontSize: 10, fontWeight: '800', color: drBand }]}>{bandLabel.toUpperCase()}</Text>
+                      <Text style={[styles.rowSub, { fontSize: 10 }]}>9.5</Text>
+                    </View>
+                    <TouchableOpacity style={styles.updateBtn} onPress={saveWcRadar} disabled={saving}>
+                      <Text style={[styles.updateBtnText, savedId === 'wc-radar' && styles.savedBtnText]}>
+                        {saving ? t('settings.saving') : savedId === 'wc-radar' ? t('settings.saved') : t('settings.saveRadar')}
+                      </Text>
+                    </TouchableOpacity>
+                  </>
+                )}
+              </View>
+            );
+          })()}
         </>)}
 
         {/* ══════════════════════════════════════════════════════════════
@@ -1489,9 +1594,9 @@ export default function FavoritesScreen() {
               <BasketballToggle value={hist?.enabled ?? false} onValueChange={v => { signal('Historical.Toggled', { enabled: String(v), mode: (hist as any)?.alert_type ?? 'silent', scoring_40_half: String(hist?.categories?.scoring_40_half), threes_11: String(hist?.categories?.threes_11), quad_double: String(hist?.categories?.quad_double_threat) }); patchHistorical({ enabled: v }); }} />
             </View>
 
-            <View style={[styles.alertTypeRow, !settings && { opacity: 0.4 }]}>
+            <View style={[styles.alertTypeRow, !hist?.enabled && { opacity: 0.4 }]}>
               {(['alarm', 'silent'] as const).map(type => (
-                <TouchableOpacity key={type} activeOpacity={1} disabled={!settings} style={[styles.alertTypeBtn, ((hist as any)?.alert_type ?? 'silent') === type && styles.alertTypeBtnActive]} onPress={() => patchHistorical({ alert_type: type })}>
+                <TouchableOpacity key={type} activeOpacity={1} disabled={!hist?.enabled} style={[styles.alertTypeBtn, ((hist as any)?.alert_type ?? 'silent') === type && styles.alertTypeBtnActive]} onPress={() => patchHistorical({ alert_type: type })}>
                   <Ionicons name={type === 'alarm' ? 'notifications-outline' : 'notifications-off-outline'} size={14} color={C.textMuted} />
                   <Text style={[styles.alertTypeText, ((hist as any)?.alert_type ?? 'silent') === type && styles.alertTypeTextActive]}>{type === 'alarm' ? t('settings.alarm') : t('settings.silent')}</Text>
                 </TouchableOpacity>
@@ -1517,11 +1622,55 @@ export default function FavoritesScreen() {
 
           {/* ── Football Historical ───────────────────────────────────── */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>🌍 WORLD CUP</Text>
-            <View style={styles.emptyState}>
-              <Ionicons name="time-outline" size={28} color={C.border} />
-              <Text style={styles.emptyHint}>Coming soon</Text>
+            <Text style={styles.sectionTitle}>⚽ {t('hist.title').toUpperCase()}</Text>
+            <Text style={styles.sectionDesc}>{t('hist.subtitle')}</Text>
+
+            <View style={styles.switchRow}>
+              <Text style={styles.rowLabel}>{t('hist.enable')}</Text>
+              <BasketballToggle
+                emoji="⚽"
+                value={soccerHistoric?.enabled ?? false}
+                onValueChange={v => patchSoccerHistoric({ enabled: v })}
+              />
             </View>
+
+            <View style={[styles.alertTypeRow, !(soccerHistoric?.enabled) && { opacity: 0.4 }]}>
+              {(['alarm', 'silent'] as const).map(type => (
+                <TouchableOpacity
+                  key={type}
+                  activeOpacity={1}
+                  disabled={!soccerHistoric?.enabled}
+                  style={[styles.alertTypeBtn, (soccerHistoric?.alert_type ?? 'silent') === type && styles.alertTypeBtnActive]}
+                  onPress={() => patchSoccerHistoric({ alert_type: type })}
+                >
+                  <Ionicons name={type === 'alarm' ? 'notifications-outline' : 'notifications-off-outline'} size={14} color={C.textMuted} />
+                  <Text style={[styles.alertTypeText, (soccerHistoric?.alert_type ?? 'silent') === type && styles.alertTypeTextActive]}>
+                    {type === 'alarm' ? t('settings.alarm') : t('settings.silent')}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {soccerHistoric?.enabled && SOCCER_HISTORIC_GROUPS.map(group => (
+              <View key={group.key} style={{ marginTop: 16 }}>
+                <Text style={[styles.sectionTitle, { fontSize: 10, marginBottom: 6 }]}>
+                  {t(`hist.group.${group.key}` as any)}
+                </Text>
+                {group.categories.map(({ key, labelKey, subKey }) => (
+                  <View key={key} style={styles.categoryRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.rowLabel}>{t(labelKey as any)}</Text>
+                      <Text style={styles.rowSub}>{t(subKey as any)}</Text>
+                    </View>
+                    <BasketballToggle
+                      emoji="⚽"
+                      value={soccerHistoric.categories[key] ?? false}
+                      onValueChange={v => patchSoccerHistoric({ categories: { [key]: v } })}
+                    />
+                  </View>
+                ))}
+              </View>
+            ))}
           </View>
         </>)}
 
@@ -2114,7 +2263,43 @@ export default function FavoritesScreen() {
                   )
                 ) : leagueBrowseLoading ? (
                   <ActivityIndicator style={{ marginTop: 20 }} color={C.accentBlue} />
+                ) : soccerPickerLeague === 'world_cup' ? (
+                  /* ── World Cup: grouped by A-L, same as feed search ── */
+                  <SectionList
+                    sections={(() => {
+                      const groups = new Map<string, typeof WC2026_TEAMS>();
+                      for (const t of WC2026_TEAMS) {
+                        if (!groups.has(t.group)) groups.set(t.group, []);
+                        groups.get(t.group)!.push(t);
+                      }
+                      return [...groups.entries()].map(([g, teams]) => ({
+                        title: `GROUP ${g}`,
+                        data: teams.map(t => ({ id: t.id, name: t.name, logo: t.logo, sport: 'football' as const, league: 'world_cup', ids: undefined })),
+                      }));
+                    })()}
+                    keyExtractor={item => item.id}
+                    initialNumToRender={24} maxToRenderPerBatch={16} windowSize={5}
+                    renderSectionHeader={({ section }) => (
+                      <Text style={[styles.sectionTitle, { fontSize: 11, fontWeight: '700', letterSpacing: 0.6, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4, backgroundColor: C.bg }]}>{section.title}</Text>
+                    )}
+                    renderItem={({ item: team }) => {
+                      const isFav = soccerFavs?.teams.some(t => t.team_id === team.id);
+                      return (
+                        <TouchableOpacity style={styles.pickerRow} onPress={() => setPickedSoccerTeam(team)}>
+                          <SoccerTeamLogo teamId={team.id} teamIds={team.ids} name={team.name} crestMap={teamCrestMap} logo={team.logo} size={28} />
+                          <Text style={styles.pickerRowText}>{team.name}</Text>
+                          <View style={styles.pickerRowRight}>
+                            {isFav && <Text style={styles.savedBadge}>★</Text>}
+                            <Ionicons name="chevron-forward" size={16} color={C.textMuted} />
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    }}
+                    ItemSeparatorComponent={ListSeparator}
+                    contentContainerStyle={{ paddingBottom: 24 }}
+                  />
                 ) : (
+                  /* ── Other leagues: flat list ── */
                   <FlatList
                     data={(() => { const c = soccerTeamCache.filter(tm => tm.league === soccerPickerLeague); return c.length > 0 ? c : leagueBrowseTeams; })()}
                     keyExtractor={item => item.id}
@@ -2147,29 +2332,18 @@ export default function FavoritesScreen() {
                     <SoccerTeamLogo teamId={pickedSoccerTeam.id} teamIds={pickedSoccerTeam.ids} name={pickedSoccerTeam.name} crestMap={teamCrestMap} size={36} />
                     <Text style={styles.configTitle}>{pickedSoccerTeam.name}</Text>
                   </View>
-                  <Text style={styles.configSub}>Drama monitor — notified when this team plays a high-drama match.</Text>
+                  <Text style={styles.configSub}>Configure alerts for when this team plays.</Text>
 
-                  <View style={styles.sliderRow}>
-                    <Text style={styles.inputLabel}>DRAMA THRESHOLD</Text>
-                    <Text style={styles.sliderValue}>{newSoccerDramaThreshold.toFixed(1)}</Text>
-                  </View>
-                  <Slider
-                    style={styles.slider}
-                    minimumValue={5} maximumValue={9.5} step={0.5}
-                    value={newSoccerDramaThreshold}
-                    onValueChange={setNewSoccerDramaThreshold}
-                    minimumTrackTintColor={C.orange} maximumTrackTintColor={C.border} thumbTintColor={C.orange}
+                  <SoccerCriteriaEditor
+                    config={newSoccerConfig}
+                    notifyAtKickoff={newSoccerNotifyKickoff}
+                    onChangeConfig={setNewSoccerConfig}
+                    onChangeNotifyAtKickoff={setNewSoccerNotifyKickoff}
+                    colors={C}
+                    t={t}
                   />
 
-                  <View style={styles.noCondRow}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.inputLabel}>NOTIFY AT KICKOFF</Text>
-                      <Text style={styles.noCondSub}>Also notify when the match starts</Text>
-                    </View>
-                    <BasketballToggle value={newSoccerNotifyKickoff} onValueChange={setNewSoccerNotifyKickoff} />
-                  </View>
-
-                  <View style={styles.alertTypeRow}>
+                  <View style={[styles.alertTypeRow, { marginTop: 8 }]}>
                     {(['alarm', 'silent'] as const).map(type => (
                       <TouchableOpacity
                         key={type}
@@ -2208,28 +2382,37 @@ export default function FavoritesScreen() {
       <Modal visible={soccerPlayerModalVisible} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { paddingBottom: insets.bottom }]}>
+
+            {/* Header — back button changes per step */}
             <View style={styles.modalHeader}>
-              {pickedSoccerPlayer ? (
-                <TouchableOpacity onPress={() => setPickedSoccerPlayer(null)} style={styles.backBtn}>
+              {(pickedSoccerPlayer || pickedWcTeam) ? (
+                <TouchableOpacity
+                  onPress={() => pickedSoccerPlayer ? setPickedSoccerPlayer(null) : setPickedWcTeam(null)}
+                  style={styles.backBtn}
+                >
                   <Ionicons name="arrow-back" size={20} color={C.accentBlue} />
-                  <Text style={styles.backBtnText}>Search</Text>
+                  <Text style={styles.backBtnText} numberOfLines={1}>
+                    {pickedSoccerPlayer ? pickedWcTeam?.name ?? 'Players' : 'Teams'}
+                  </Text>
                 </TouchableOpacity>
               ) : <View style={{ width: 70 }} />}
-              <Text style={styles.modalTitle}>
-                {pickedSoccerPlayer ? pickedSoccerPlayer.name : 'Add Soccer Player'}
+              <Text style={styles.modalTitle} numberOfLines={1}>
+                {pickedSoccerPlayer ? pickedSoccerPlayer.name : pickedWcTeam ? pickedWcTeam.name : 'Add Soccer Player'}
               </Text>
               <TouchableOpacity onPress={closeSoccerPlayerModal} style={styles.closeBtn}>
                 <Ionicons name="close" size={22} color={C.textMuted} />
               </TouchableOpacity>
             </View>
 
-            {!pickedSoccerPlayer && (
+            {/* ── Step 1: WC team list ── */}
+            {!pickedWcTeam && !pickedSoccerPlayer && (
               <>
+                {/* Search bar */}
                 <View style={styles.searchBar}>
                   <Ionicons name="search" size={16} color={C.textMuted} />
                   <TextInput
                     style={styles.searchInput}
-                    placeholder="Search player..."
+                    placeholder="Search country..."
                     placeholderTextColor={C.textMuted}
                     value={soccerPlayerSearch}
                     onChangeText={setSoccerPlayerSearch}
@@ -2243,48 +2426,93 @@ export default function FavoritesScreen() {
                   )}
                 </View>
 
-                {soccerPlayerSearch.length < 2 ? (
-                  <View style={{ padding: 32, alignItems: 'center', gap: 10 }}>
-                    <Ionicons name="search-outline" size={36} color={C.textMuted} />
-                    <Text style={[styles.emptyHint, { textAlign: 'center' }]}>Type a player's name to search</Text>
-                  </View>
-                ) : soccerPlayerSearching ? (
-                  <ActivityIndicator style={{ marginTop: 20 }} color={C.accentBlue} />
-                ) : (
-                  <FlatList
-                    data={soccerPlayerResults}
-                    keyExtractor={item => item.id}
-                    initialNumToRender={15} maxToRenderPerBatch={10} windowSize={5}
-                    renderItem={({ item: player }) => {
-                      const isFav = soccerFavs?.players.some(p => p.player_id === player.id);
-                      return (
-                        <TouchableOpacity style={styles.pickerRow} onPress={() => setPickedSoccerPlayer(player)}>
-                          <View style={styles.playerInitialBadge}>
-                            <Ionicons name="person" size={16} color={C.textMuted} />
-                          </View>
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.pickerRowText}>{player.name}</Text>
-                            {(player.team_name || player.position) && (
-                              <Text style={styles.pickerRowSub}>
-                                {[player.team_name, player.position].filter(Boolean).join('  ·  ')}
-                              </Text>
-                            )}
-                          </View>
-                          <View style={styles.pickerRowRight}>
-                            {isFav && <Text style={styles.savedBadge}>★</Text>}
-                            <Ionicons name="chevron-forward" size={16} color={C.textMuted} />
-                          </View>
-                        </TouchableOpacity>
-                      );
-                    }}
-                    ItemSeparatorComponent={ListSeparator}
-                    contentContainerStyle={{ paddingBottom: 24 }}
-                    ListEmptyComponent={<Text style={[styles.emptyHint, { padding: 16 }]}>No players found</Text>}
-                  />
-                )}
+                <SectionList
+                  sections={(() => {
+                    const q = soccerPlayerSearch.toLowerCase();
+                    const groups = new Map<string, WcTeam[]>();
+                    for (const t of WC2026_TEAMS) {
+                      if (q && !t.name.toLowerCase().includes(q)) continue;
+                      if (!groups.has(t.group)) groups.set(t.group, []);
+                      groups.get(t.group)!.push(t);
+                    }
+                    return [...groups.entries()].map(([g, teams]) => ({ title: `GROUP ${g}`, data: teams }));
+                  })()}
+                  keyExtractor={item => item.id}
+                  initialNumToRender={12} maxToRenderPerBatch={8} windowSize={5}
+                  renderSectionHeader={({ section }) => (
+                    <Text style={[styles.sectionTitle, { fontSize: 10, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 2, backgroundColor: C.bg }]}>
+                      {section.title}
+                    </Text>
+                  )}
+                  renderItem={({ item: team }) => (
+                    <TouchableOpacity style={styles.pickerRow} onPress={() => setPickedWcTeam(team)}>
+                      <SoccerTeamLogo teamId={team.id} name={team.name} crestMap={teamCrestMap} logo={team.logo} size={28} />
+                      <Text style={styles.pickerRowText}>{team.name}</Text>
+                      <View style={styles.pickerRowRight}>
+                        <Ionicons name="chevron-forward" size={16} color={C.textMuted} />
+                      </View>
+                    </TouchableOpacity>
+                  )}
+                  ItemSeparatorComponent={ListSeparator}
+                  contentContainerStyle={{ paddingBottom: 24 }}
+                />
               </>
             )}
 
+            {/* ── Step 2: Squad player list ── */}
+            {pickedWcTeam && !pickedSoccerPlayer && (
+              wcSquadLoading ? (
+                <ActivityIndicator style={{ marginTop: 40 }} color={C.accentBlue} />
+              ) : wcSquadPlayers.length === 0 ? (
+                <View style={{ padding: 32, alignItems: 'center', gap: 8 }}>
+                  <Ionicons name="people-outline" size={32} color={C.textMuted} />
+                  <Text style={[styles.emptyHint, { textAlign: 'center' }]}>Squad not available</Text>
+                </View>
+              ) : (
+                <FlatList
+                  data={wcSquadPlayers}
+                  keyExtractor={item => String(item.player_id)}
+                  initialNumToRender={20} maxToRenderPerBatch={15} windowSize={5}
+                  renderItem={({ item: player }) => {
+                    const pid = String(player.player_id);
+                    const isFav = soccerFavs?.players.some(p => p.player_id === pid);
+                    return (
+                      <TouchableOpacity
+                        style={styles.pickerRow}
+                        onPress={() => {
+                          setPickedSoccerPlayer({
+                            id: pid,
+                            name: player.name,
+                            sport: 'football',
+                            team_id: pickedWcTeam.id,
+                            team_name: pickedWcTeam.name,
+                            position: player.position,
+                          });
+                        }}
+                      >
+                        <View style={[styles.playerInitialBadge, { backgroundColor: C.cardAlt }]}>
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: C.textMuted }}>
+                            {player.jersey_number ?? '?'}
+                          </Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.pickerRowText}>{player.name}</Text>
+                          {player.position && <Text style={styles.pickerRowSub}>{player.position}</Text>}
+                        </View>
+                        <View style={styles.pickerRowRight}>
+                          {isFav && <Text style={styles.savedBadge}>★</Text>}
+                          <Ionicons name="chevron-forward" size={16} color={C.textMuted} />
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  }}
+                  ItemSeparatorComponent={ListSeparator}
+                  contentContainerStyle={{ paddingBottom: 24 }}
+                />
+              )
+            )}
+
+            {/* ── Step 3: Alert config ── */}
             {pickedSoccerPlayer && (
               <ScrollView keyboardShouldPersistTaps="handled" style={{ flex: 1 }}>
                 <View style={styles.configArea}>
@@ -2326,6 +2554,7 @@ export default function FavoritesScreen() {
                 </View>
               </ScrollView>
             )}
+
           </View>
         </View>
       </Modal>
@@ -2343,6 +2572,243 @@ export default function FavoritesScreen() {
       </Modal>
 
     </SafeAreaView>
+  );
+}
+
+// ─── SoccerCriteriaEditor ─────────────────────────────────────────────────────
+
+function SoccerCriteriaEditor({
+  config,
+  notifyAtKickoff,
+  onChangeConfig,
+  onChangeNotifyAtKickoff,
+  colors,
+  t,
+}: {
+  config: SoccerFollowConfig;
+  notifyAtKickoff: boolean;
+  onChangeConfig: (c: SoccerFollowConfig) => void;
+  onChangeNotifyAtKickoff: (v: boolean) => void;
+  colors: AppColors;
+  t: (k: string) => string;
+}) {
+  // Football-themed toggle — green ⚽ instead of orange 🏀
+  const FbToggle = (props: React.ComponentProps<typeof BasketballToggle>) =>
+    <BasketballToggle {...props} emoji="⚽" />;
+
+  const dr = config.drama_radar   ?? { enabled: true,  threshold: 7.0 };
+  const ld = config.late_drama    ?? { enabled: false, max_diff: 1, last_minutes: 15 };
+  const mm = config.match_moments ?? { enabled: false, kickoff: true, goals: true, halftime: true, second_half: true, red_cards: true, penalties: true, match_end: true, lineups: false, reminder_minutes: 0, alert_type: 'silent' as const };
+  const cp = config.card_penalty  ?? { enabled: false, red_card: true, penalty: true };
+  const sn = config.sensation     ?? { enabled: false };
+  const cb = config.comeback      ?? { enabled: false };
+  const bc = config.big_chance    ?? { enabled: false, sensitivity: 'medium' as const };
+
+  const setDr = (v: typeof dr) => onChangeConfig({ ...config, drama_radar: v });
+  const setLd = (v: typeof ld) => onChangeConfig({ ...config, late_drama: v });
+  const setMm = (v: typeof mm) => onChangeConfig({ ...config, match_moments: v });
+  const setCp = (v: typeof cp) => onChangeConfig({ ...config, card_penalty: v });
+  const setSn = (enabled: boolean) => onChangeConfig({ ...config, sensation: { enabled } });
+  const setCb = (enabled: boolean) => onChangeConfig({ ...config, comeback: { enabled } });
+  const setBc = (v: typeof bc) => onChangeConfig({ ...config, big_chance: v });
+
+  const drBandColor = dr.threshold >= 8 ? colors.orange : dr.threshold >= 5 ? colors.accentBlue : colors.textMuted;
+  const card = { backgroundColor: colors.card, borderRadius: 10, borderWidth: 1 as const, borderColor: colors.border, padding: 12, marginBottom: 6 };
+  const row  = { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 10 };
+  const lbl  = { fontSize: 10 as const, fontWeight: '800' as const, color: colors.textMuted, letterSpacing: 1.5, marginTop: 10, marginBottom: 2 } as const;
+  const pill = (active: boolean) => ({
+    flex: 1 as const, paddingVertical: 9, borderRadius: 10, borderWidth: 1 as const,
+    alignItems: 'center' as const,
+    backgroundColor: active ? colors.orange : 'transparent',
+    borderColor: active ? colors.orange : colors.border,
+  });
+
+  return (
+    <View style={{ gap: 2, marginTop: 8 }}>
+
+      {/* ── Drama Radar ── */}
+      <View style={card}>
+        <View style={row}>
+          <Ionicons name="radio-outline" size={18} color={dr.enabled ? colors.orange : colors.textMuted} style={{ width: 22 }} />
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 14, fontWeight: '700', color: colors.textPrimary }}>{t('soccer.alarm.dramaRadar')}</Text>
+            <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 2 }}>{t('soccer.alarm.dramaRadarSub')}</Text>
+          </View>
+          <FbToggle value={dr.enabled} onValueChange={v => setDr({ ...dr, enabled: v })} />
+        </View>
+        {dr.enabled && (
+          <>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text style={lbl}>{t('drama.radar.threshold')}</Text>
+              <Text style={{ fontSize: 18, fontWeight: '800', color: drBandColor }}>{dr.threshold.toFixed(1)}</Text>
+            </View>
+            <Slider value={dr.threshold} minimumValue={5.0} maximumValue={9.5} step={0.5}
+              onValueChange={v => setDr({ ...dr, threshold: v })}
+              minimumTrackTintColor={drBandColor} maximumTrackTintColor={colors.border} thumbTintColor={drBandColor} />
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+              <Text style={{ fontSize: 10, color: colors.textMuted }}>5.0</Text>
+              <Text style={{ fontSize: 10, color: colors.textMuted }}>9.5</Text>
+            </View>
+          </>
+        )}
+      </View>
+
+      {/* ── Late Drama ── */}
+      <View style={card}>
+        <View style={row}>
+          <Ionicons name="time-outline" size={18} color={ld.enabled ? colors.orange : colors.textMuted} style={{ width: 22 }} />
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 14, fontWeight: '700', color: colors.textPrimary }}>{t('soccer.alarm.lateDrama')}</Text>
+            <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 2 }}>{t('soccer.alarm.lateDramaSub')}</Text>
+          </View>
+          <FbToggle value={ld.enabled} onValueChange={v => setLd({ ...ld, enabled: v })} />
+        </View>
+        {ld.enabled && (
+          <>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text style={lbl}>{t('soccer.alarm.ldMaxDiff')}</Text>
+              <Text style={{ fontSize: 16, fontWeight: '800', color: colors.orange }}>{ld.max_diff === 0 ? t('soccer.alarm.tiedOnly') : `≤ ${ld.max_diff}`}</Text>
+            </View>
+            <Slider value={ld.max_diff} minimumValue={0} maximumValue={3} step={1}
+              onValueChange={v => setLd({ ...ld, max_diff: Math.round(v) })}
+              minimumTrackTintColor={colors.orange} maximumTrackTintColor={colors.border} thumbTintColor={colors.orange} />
+            <Text style={lbl}>{t('soccer.alarm.ldLastMin')}</Text>
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
+              {[15, 30, 45].map(m => (
+                <TouchableOpacity key={m} style={pill(ld.last_minutes === m)} onPress={() => setLd({ ...ld, last_minutes: m })}>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: ld.last_minutes === m ? '#fff' : colors.textMuted }}>Last {m}'</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        )}
+      </View>
+
+      {/* ── Match Moments ── */}
+      <View style={card}>
+        <View style={row}>
+          <Ionicons name="list-outline" size={18} color={mm.enabled ? colors.orange : colors.textMuted} style={{ width: 22 }} />
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 14, fontWeight: '700', color: colors.textPrimary }}>{t('soccer.alarm.matchMoments')}</Text>
+            <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 2 }}>{t('soccer.alarm.matchMomentsSub')}</Text>
+          </View>
+          <FbToggle value={mm.enabled} onValueChange={v => setMm({ ...mm, enabled: v })} />
+        </View>
+        {mm.enabled && (
+          <>
+            {([
+              ['kickoff',     mm.kickoff,     (v: boolean) => setMm({ ...mm, kickoff: v }),     'soccer.alarm.mm.kickoff'],
+              ['goals',       mm.goals,       (v: boolean) => setMm({ ...mm, goals: v }),       'soccer.alarm.mm.goals'],
+              ['halftime',    mm.halftime,    (v: boolean) => setMm({ ...mm, halftime: v }),    'soccer.alarm.mm.halftime'],
+              ['second_half', mm.second_half, (v: boolean) => setMm({ ...mm, second_half: v }), 'soccer.alarm.mm.secondHalf'],
+              ['red_cards',   mm.red_cards,   (v: boolean) => setMm({ ...mm, red_cards: v }),   'soccer.alarm.mm.redCards'],
+              ['penalties',   mm.penalties,   (v: boolean) => setMm({ ...mm, penalties: v }),   'soccer.alarm.mm.penalties'],
+              ['match_end',   mm.match_end,   (v: boolean) => setMm({ ...mm, match_end: v }),   'soccer.alarm.mm.matchEnd'],
+              ['lineups',     mm.lineups,     (v: boolean) => setMm({ ...mm, lineups: v }),     'soccer.alarm.mm.lineups'],
+            ] as [string, boolean, (v: boolean) => void, string][]).map(([key, val, setter, tk]) => (
+              <View key={key} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, marginTop: 4 }}>
+                <Text style={{ flex: 1, fontSize: 13, fontWeight: '600', color: colors.textPrimary }}>{t(tk)}</Text>
+                <FbToggle value={val} onValueChange={setter} />
+              </View>
+            ))}
+            <Text style={lbl}>{t('soccer.alarm.mm.reminder')}</Text>
+            <View style={{ flexDirection: 'row', gap: 6, marginTop: 6 }}>
+              {[0, 15, 30, 60].map(m => (
+                <TouchableOpacity key={m} style={pill(mm.reminder_minutes === m)} onPress={() => setMm({ ...mm, reminder_minutes: m })}>
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: mm.reminder_minutes === m ? '#fff' : colors.textMuted }}>{m === 0 ? t('soccer.alarm.mm.noReminder') : `${m}'`}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        )}
+      </View>
+
+      {/* ── Card & Penalty ── */}
+      <View style={card}>
+        <View style={row}>
+          <Ionicons name="alert-circle-outline" size={18} color={cp.enabled ? colors.orange : colors.textMuted} style={{ width: 22 }} />
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 14, fontWeight: '700', color: colors.textPrimary }}>{t('soccer.alarm.cardPenalty')}</Text>
+            <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 2 }}>{t('soccer.alarm.cardPenaltySub')}</Text>
+          </View>
+          <FbToggle value={cp.enabled} onValueChange={v => setCp({ ...cp, enabled: v })} />
+        </View>
+        {cp.enabled && (
+          <>
+            {([
+              [cp.red_card, (v: boolean) => setCp({ ...cp, red_card: v }), 'soccer.alarm.cp.redCard'],
+              [cp.penalty,  (v: boolean) => setCp({ ...cp, penalty: v }),  'soccer.alarm.cp.penalty'],
+            ] as [boolean, (v: boolean) => void, string][]).map(([val, setter, tk], i) => (
+              <View key={i} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, marginTop: 4 }}>
+                <Text style={{ flex: 1, fontSize: 13, fontWeight: '600', color: colors.textPrimary }}>{t(tk)}</Text>
+                <FbToggle value={val as boolean} onValueChange={setter as (v: boolean) => void} />
+              </View>
+            ))}
+          </>
+        )}
+      </View>
+
+      {/* ── Sensation ── */}
+      <View style={card}>
+        <View style={row}>
+          <Ionicons name="star-outline" size={18} color={sn.enabled ? colors.orange : colors.textMuted} style={{ width: 22 }} />
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 14, fontWeight: '700', color: colors.textPrimary }}>{t('soccer.alarm.sensation')}</Text>
+            <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 2 }}>{t('soccer.alarm.sensationSub')}</Text>
+          </View>
+          <FbToggle value={sn.enabled} onValueChange={setSn} />
+        </View>
+      </View>
+
+      {/* ── Comeback ── */}
+      <View style={card}>
+        <View style={row}>
+          <Ionicons name="arrow-up-circle-outline" size={18} color={cb.enabled ? colors.orange : colors.textMuted} style={{ width: 22 }} />
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 14, fontWeight: '700', color: colors.textPrimary }}>{t('soccer.alarm.comeback')}</Text>
+            <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 2 }}>{t('soccer.alarm.comebackSub')}</Text>
+          </View>
+          <FbToggle value={cb.enabled} onValueChange={setCb} />
+        </View>
+      </View>
+
+      {/* ── Big Chance ── */}
+      <View style={card}>
+        <View style={row}>
+          <Ionicons name="flash-outline" size={18} color={bc.enabled ? colors.orange : colors.textMuted} style={{ width: 22 }} />
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 14, fontWeight: '700', color: colors.textPrimary }}>{t('soccer.alarm.bigChance')}</Text>
+            <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 2 }}>{t('soccer.alarm.bigChanceSub')}</Text>
+          </View>
+          <FbToggle value={bc.enabled} onValueChange={v => setBc({ ...bc, enabled: v })} />
+        </View>
+        {bc.enabled && (
+          <>
+            <Text style={lbl}>{t('soccer.alarm.sensitivity')}</Text>
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
+              {(['low', 'medium', 'high'] as const).map(s => (
+                <TouchableOpacity key={s} style={pill(bc.sensitivity === s)} onPress={() => setBc({ ...bc, sensitivity: s })}>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: bc.sensitivity === s ? '#fff' : colors.textMuted }}>{t(`soccer.alarm.sens.${s}`)}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        )}
+      </View>
+
+      {/* ── Notify at Kickoff ── */}
+      <View style={card}>
+        <View style={row}>
+          <Ionicons name="flag-outline" size={18} color={notifyAtKickoff ? colors.orange : colors.textMuted} style={{ width: 22 }} />
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 14, fontWeight: '700', color: colors.textPrimary }}>Notify at Kickoff</Text>
+            <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 2 }}>Also notify when the match starts</Text>
+          </View>
+          <FbToggle value={notifyAtKickoff} onValueChange={onChangeNotifyAtKickoff} />
+        </View>
+      </View>
+
+    </View>
   );
 }
 

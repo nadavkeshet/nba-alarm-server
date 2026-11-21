@@ -5,6 +5,8 @@ interface Props {
   value: boolean;
   onValueChange: (v: boolean) => void;
   disabled?: boolean;
+  emoji?: string;
+  activeColor?: string;
 }
 
 const TRACK_W  = 56;
@@ -13,8 +15,13 @@ const THUMB_SZ = 24;
 const PADDING  = 3;
 const TRAVEL   = TRACK_W - THUMB_SZ - PADDING * 2;  // 26
 
-export function BasketballToggle({ value, onValueChange, disabled }: Props) {
+export function BasketballToggle({ value, onValueChange, disabled, emoji = '🏀', activeColor = 'rgba(255,107,0,' }: Props) {
   const anim = useRef(new Animated.Value(value ? 1 : 0)).current;
+
+  // Derive bg/border from activeColor (expects hex or rgba prefix)
+  const isCustom = emoji !== '🏀';
+  const activeBg     = isCustom ? 'rgba(34,197,94,0.28)'  : 'rgba(255,107,0,0.28)';
+  const activeBorder = isCustom ? 'rgba(34,197,94,0.6)'   : 'rgba(255,107,0,0.6)';
 
   useEffect(() => {
     Animated.spring(anim, {
@@ -32,12 +39,12 @@ export function BasketballToggle({ value, onValueChange, disabled }: Props) {
 
   const trackBg = anim.interpolate({
     inputRange:  [0, 1],
-    outputRange: ['#162035', 'rgba(255,107,0,0.28)'],
+    outputRange: ['#162035', activeBg],
   });
 
   const trackBorder = anim.interpolate({
     inputRange:  [0, 1],
-    outputRange: ['#1a3451', 'rgba(255,107,0,0.6)'],
+    outputRange: ['#1a3451', activeBorder],
   });
 
   const ballOpacity = anim.interpolate({
@@ -65,7 +72,7 @@ export function BasketballToggle({ value, onValueChange, disabled }: Props) {
           styles.thumb,
           { transform: [{ translateX }, { scale: ballScale }], opacity: ballOpacity },
         ]}>
-          <Text style={styles.ball}>🏀</Text>
+          <Text style={styles.ball}>{emoji}</Text>
         </Animated.View>
       </Animated.View>
     </TouchableOpacity>

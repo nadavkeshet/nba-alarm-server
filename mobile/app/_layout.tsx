@@ -23,7 +23,7 @@ import { triggerStop } from '../alarmSoundHandler';
 import { useColorScheme } from '../hooks/use-color-scheme';
 import { PermissionsOnboarding } from '../components/permissions-onboarding';
 import { ErrorBoundary } from '../components/error-boundary';
-import { initTelemetry, signal } from '../utils/telemetry';
+import { initTelemetry, signal, signalSessionEnd } from '../utils/telemetry';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -157,6 +157,7 @@ export default function RootLayout() {
     });
 
     // Background tap: onBackgroundEvent sets a flag → fire confetti when app opens
+    // Also fires App.SessionEnded with duration on background/close.
     const appStateSub = AppState.addEventListener('change', async state => {
       if (state === 'active') {
         const pending = await AsyncStorage.getItem('nba_confetti_pending');
@@ -164,6 +165,8 @@ export default function RootLayout() {
           await AsyncStorage.removeItem('nba_confetti_pending');
           fireConfetti();
         }
+      } else if (state === 'background') {
+        signalSessionEnd();
       }
     });
 

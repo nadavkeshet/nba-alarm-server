@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  FlatList,
+  SectionList,
   Modal,
   RefreshControl,
   ScrollView,
@@ -25,7 +27,8 @@ import { CompactMatchRow } from '../../components/compact-match-row';
 import { tabHeaderTitle } from '../../constants/tokens';
 import { LeagueLogo } from '../../components/league-logo';
 import { LeagueCatalog } from '../../services/league-catalog';
-import { getMatchesCached, invalidateMatchCache, searchAll, getTeamMatches, getBasketballTeamGames } from '../../services/soccer-service';
+import { WC2026_SEARCH_TEAMS, WC2026_TEAMS } from '../../data/wc2026-teams';
+import { getMatchesCached, invalidateMatchCache, searchAll, getTeamMatches, getBasketballTeamGames, getStandings, getBasketballStandings } from '../../services/soccer-service';
 import type { SearchTeam, SearchLeague } from '../../services/soccer-service';
 import type { SoccerMatch } from '../../types/soccer';
 import { isLiveLike, displayMinute, soccerMatchRoute } from '../../types/soccer';
@@ -62,6 +65,7 @@ interface FeedBballGame {
   displayClock?: string;
   period?: number;
   kickoff?: string;
+  watchScore?: number;
 }
 
 interface LeagueGroup {
@@ -98,8 +102,22 @@ async function fetchBballGames(leagueId: string, date: string): Promise<FeedBbal
       const raw = await AsyncStorage.getItem(_BB_FEED_STORE(leagueId, date));
       if (raw) {
         const cached: FeedBballGame[] = JSON.parse(raw);
-        // Only trust cache if every game is finalized — stale 'pre' cache is useless
-        if (cached.every(g => g.status === 'post')) return cached;
+        if (cached.every(g => g.status === 'post')) {
+          // Merge watch scores even for cached data (watchScore may be missing in old cache)
+          if (cached.some(g => g.watchScore == null)) {
+            try {
+              const ws = await fetch(`${SERVER_URL}/watch-scores?date=${date}&league=${encodeURIComponent(leagueId)}`);
+              if (ws.ok) {
+                const wsData = await ws.json();
+                for (const [k, v] of Object.entries(wsData.scores ?? {})) {
+                  const g = cached.find(x => `${x.homeTeam}_${x.awayTeam}` === k);
+                  if (g) g.watchScore = (v as any).score;
+                }
+              }
+            } catch {}
+          }
+          return cached;
+        }
       }
     } catch {}
   }
@@ -144,6 +162,22 @@ async function fetchBballGames(leagueId: string, date: string): Promise<FeedBbal
       if (gScore > pScore || (gScore === pScore && (g.kickoff ?? '') < (prev.kickoff ?? ''))) seen.set(key, g);
     }
     const deduped = Array.from(seen.values());
+
+    // Merge watch scores for finished games
+    if (deduped.some(g => g.status === 'post')) {
+      try {
+        const ws = await fetch(`${SERVER_URL}/watch-scores?date=${date}&league=${encodeURIComponent(leagueId)}`);
+        if (ws.ok) {
+          const wsData = await ws.json();
+          const scores: Record<string, number> = {};
+          for (const [k, v] of Object.entries(wsData.scores ?? {})) scores[k] = (v as any).score;
+          for (const g of deduped) {
+            const key = `${g.homeTeam}_${g.awayTeam}`;
+            if (scores[key] != null) g.watchScore = scores[key];
+          }
+        }
+      } catch {}
+    }
 
     // Only cache past dates once all games are final — avoids stale 'pre' cache
     if (isPast && deduped.length > 0 && deduped.every(g => g.status === 'post')) {
@@ -351,14 +385,33 @@ export default function FeedScreen() {
     const runId = ++runIdRef.current;
     lastLoadRef.current = Date.now();
 
+    const followedTeamIds   = buildTeamIdSet(store);
+    const followedLeagueIds = new Set(Object.keys(store.leagues));
+
     if (silent) {
       setBgRefreshing(true);
       // Seed with current data — failed/empty fetches won't erase existing matches.
-      // Use the explicitly-passed seed when available (mount path: dateGroupsRef isn't
-      // populated yet when called immediately after setDateGroups in the same effect tick).
+      // Filter the seed by current follows so stale league data (e.g. WC after unfollowing)
+      // doesn't linger in the accumulator while the fresh fetch runs.
       const seedData = seed ?? dateGroupsRef.current;
+      const filteredSeed = seedData.map(dg => ({
+        ...dg,
+        leagueGroups: dg.leagueGroups.map(lg => ({
+          ...lg,
+          soccer: (lg.soccer ?? []).filter((m: SoccerMatch) =>
+            followedLeagueIds.has(m.competition) ||
+            followedTeamIds.has(m.home?.id) ||
+            followedTeamIds.has(m.away?.id)
+          ),
+          basketball: (lg.basketball ?? []).filter((g: any) =>
+            followedLeagueIds.has(lg.leagueId) ||
+            followedTeamIds.has(g.homeId ?? '') ||
+            followedTeamIds.has(g.awayId ?? '')
+          ),
+        })).filter(lg => lg.soccer.length > 0 || lg.basketball.length > 0),
+      })).filter(dg => dg.leagueGroups.length > 0);
       accRef.current = new Map(
-        seedData.map(dg => [dg.yyyymmdd, { ...dg, leagueGroups: [...dg.leagueGroups] }])
+        filteredSeed.map(dg => [dg.yyyymmdd, { ...dg, leagueGroups: [...dg.leagueGroups] }])
       );
     } else {
       accRef.current = new Map();
@@ -366,18 +419,11 @@ export default function FeedScreen() {
       setDateGroups([]);
     }
 
-    const followedTeamIds   = buildTeamIdSet(store);
-    const followedLeagueIds = new Set(Object.keys(store.leagues));
-
-    // Keep going even with no follows — World Cup is always pinned in the feed.
-
     // ── Football leagues to fetch ──────────────────────────────────────────
     const allFootballIds = new Set(LeagueCatalog.footballLeagues().map(l => l.id));
     const footballToFetch = new Set<string>(
       [...followedLeagueIds].filter(id => allFootballIds.has(id))
     );
-    // World Cup is always included in the feed during the tournament (Jun 11 – Jul 19 2026)
-    footballToFetch.add('world_cup');
     let needAllFootball = false;
     Object.values(store.teams).forEach(team => {
       if (team.sport !== 'football') return;
@@ -731,8 +777,52 @@ function SearchFollowsModal({
   const [bbTeamGames, setBbTeamGames]           = useState<any[]>([]);
   const [teamMatchesLoading, setTeamMatchesLoading] = useState(false);
   const [addedConfirm, setAddedConfirm]         = useState(false);
+  // Cache: keeps last successful fetch so re-opening the same team is instant
+  const teamMatchesCacheRef = useRef<Map<string, { soccer: SoccerMatch[]; bb: any[] }>>(new Map());
+
+  // Browse mode state (shown when query is empty)
+  const [browseSport, setBrowseSport]     = useState<'football' | 'basketball'>('football');
+  const [browseLeague, setBrowseLeague]   = useState<string>('premier_league');
+  const [browseTeams, setBrowseTeams]     = useState<SearchTeam[]>([]);
+  const [browseLoading, setBrowseLoading] = useState(false);
+  const browseTeamsCacheRef = useRef<Map<string, SearchTeam[]>>(new Map());
 
   useEffect(() => { setLocalStore(followStore); }, [followStore]);
+
+  // Pre-populate browseTeamsCacheRef from persisted caches — instant load on re-open.
+  useEffect(() => {
+    // WC 2026: seed all 48 teams from the static bundle — zero API latency.
+    browseTeamsCacheRef.current.set('world_cup', WC2026_SEARCH_TEAMS);
+
+    // Other football leagues: use standings-based cache persisted to AsyncStorage.
+    // sports_cache_v2 is intentionally NOT used here — it only contains teams with
+    // matches in the current date window (e.g. only 10 WC teams for day 1-3).
+    AsyncStorage.getItem('football_browse_cache_v2').then(raw => {
+      if (!raw) return;
+      try {
+        const saved = JSON.parse(raw) as Record<string, SearchTeam[]>;
+        for (const [lid, teams] of Object.entries(saved))
+          if (teams.length > 0) browseTeamsCacheRef.current.set(lid, teams);
+      } catch {}
+    }).catch(() => {});
+
+    // Basketball: all teams from the teams cache, keyed by league
+    AsyncStorage.getItem('all_teams_cache_v1').then(raw => {
+      if (!raw) return;
+      try {
+        const teams: Array<{ id: string; name: string; logo: string | null; league?: string }> = JSON.parse(raw);
+        const byLeague = new Map<string, SearchTeam[]>();
+        for (const t of teams) {
+          if (!t.league) continue;
+          if (!byLeague.has(t.league)) byLeague.set(t.league, []);
+          byLeague.get(t.league)!.push({ id: t.id, name: t.name, logo: t.logo ?? null, sport: 'basketball', league: t.league });
+        }
+        for (const [lid, lgTeams] of byLeague)
+          if (lgTeams.length > 0 && !browseTeamsCacheRef.current.has(lid))
+            browseTeamsCacheRef.current.set(lid, lgTeams);
+      } catch {}
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!visible) {
@@ -740,26 +830,88 @@ function SearchFollowsModal({
       setResults({ teams: [], leagues: [] });
       setPreviewTeam(null);
       setAddedConfirm(false);
+      setBrowseSport('football');
+      setBrowseLeague('premier_league');
     } else {
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [visible]);
 
-  // Fetch matches/games when a team is previewed
+  // When sport tab switches, jump to the first league of that sport
+  useEffect(() => {
+    const first = LeagueCatalog.leagues(browseSport)[0];
+    if (first) setBrowseLeague(first.id);
+  }, [browseSport]);
+
+  // Load teams for the selected browse league.
+  // Depends on visible too so it re-runs when the modal opens (cache is ready by then).
+  useEffect(() => {
+    if (!visible) return;
+    const cached = browseTeamsCacheRef.current.get(browseLeague);
+    if (cached) { setBrowseTeams(cached); setBrowseLoading(false); return; }
+    setBrowseTeams([]);
+    setBrowseLoading(true);
+    const sport = LeagueCatalog.info(browseLeague).sport;
+    (sport === 'football' ? getStandings(browseLeague) : getBasketballStandings(browseLeague))
+      .then(standings => {
+        const teams: SearchTeam[] = (standings.standings ?? []).map((row: any) => ({
+          id: String(row.team_id),
+          name: row.team_name,
+          logo: row.team_crest ?? null,
+          sport,
+          league: browseLeague,
+        }));
+        setBrowseTeams(teams);
+        if (teams.length > 0) {
+          browseTeamsCacheRef.current.set(browseLeague, teams);
+          // Persist football browse teams to AsyncStorage for cold-start cache
+          if (sport === 'football') {
+            AsyncStorage.getItem('football_browse_cache_v2').then(raw => {
+              const existing = raw ? JSON.parse(raw) as Record<string, SearchTeam[]> : {};
+              existing[browseLeague] = teams;
+              AsyncStorage.setItem('football_browse_cache_v2', JSON.stringify(existing)).catch(() => {});
+            }).catch(() => {});
+          }
+        }
+      })
+      .catch(() => {})
+      .finally(() => setBrowseLoading(false));
+  }, [browseLeague, visible]);
+
+  // Fetch matches/games when a team is previewed — serve from cache on re-open
   useEffect(() => {
     if (!previewTeam) return;
+    const cached = teamMatchesCacheRef.current.get(previewTeam.id);
+    if (cached) {
+      // Show cached data immediately; no spinner, no blank slate
+      setTeamMatches(cached.soccer);
+      setBbTeamGames(cached.bb);
+      return;
+    }
+    // No cache — show spinner only if we don't already have data for this team
     setTeamMatches([]);
     setBbTeamGames([]);
     setTeamMatchesLoading(true);
+    const id = previewTeam.id;
     if (previewTeam.sport === 'football') {
-      getTeamMatches(previewTeam.id)
-        .then(m => setTeamMatches(m))
+      getTeamMatches(id)
+        .then(m => {
+          if (m.length > 0) {
+            setTeamMatches(m);
+            teamMatchesCacheRef.current.set(id, { soccer: m, bb: [] });
+          }
+        })
         .catch(() => {})
         .finally(() => setTeamMatchesLoading(false));
     } else {
       const league = previewTeam.league ?? previewTeam.leagues?.[0] ?? 'nba';
-      getBasketballTeamGames(previewTeam.id, league)
-        .then(g => setBbTeamGames(g))
+      getBasketballTeamGames(id, league)
+        .then(g => {
+          if (g.length > 0) {
+            setBbTeamGames(g);
+            teamMatchesCacheRef.current.set(id, { soccer: [], bb: g });
+          }
+        })
         .catch(() => {})
         .finally(() => setTeamMatchesLoading(false));
     }
@@ -835,8 +987,8 @@ function SearchFollowsModal({
 
   const hasResults = results.teams.length > 0 || results.leagues.length > 0;
   // Soccer
-  const upcomingMatches = teamMatches.filter(m => m.status === 'scheduled').slice(0, 6);
-  const recentMatches   = teamMatches.filter(m => m.status === 'ft' || m.status === 'aet').slice(-4);
+  const upcomingMatches = teamMatches.filter(m => m.status === 'scheduled' || m.status === 'postponed').slice(0, 6);
+  const recentMatches   = teamMatches.filter(m => m.status === 'ft').slice(-4);
   // Basketball — extract from ESPN format
   const bbUpcoming = bbTeamGames.filter(g => g?.status?.type?.state === 'pre').slice(0, 6);
   const bbRecent   = bbTeamGames.filter(g => g?.status?.type?.state === 'post').slice(-4);
@@ -1036,9 +1188,118 @@ function SearchFollowsModal({
             {searching ? (
               <ActivityIndicator style={{ marginTop: 40 }} color={colors.textMuted} />
             ) : !query.trim() ? (
-              <View style={searchStyles.placeholder}>
-                <Ionicons name="search-outline" size={40} color={colors.textMuted} style={{ marginBottom: 10 }} />
-                <Text style={[searchStyles.placeholderTxt, { color: colors.textMuted }]}>Type a team or league name</Text>
+              /* ── Browse mode ── */
+              <View style={{ flex: 1 }}>
+                {/* Sport pills */}
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={searchStyles.pillScroll} contentContainerStyle={searchStyles.pillRow}>
+                  {(['football', 'basketball'] as const).map(sport => (
+                    <TouchableOpacity
+                      key={sport}
+                      style={[searchStyles.pill, { backgroundColor: colors.card, borderColor: colors.border }, browseSport === sport && searchStyles.pillActive]}
+                      onPress={() => setBrowseSport(sport)}
+                    >
+                      <Ionicons
+                        name={sport === 'football' ? 'football-outline' : 'basketball-outline'}
+                        size={13}
+                        color={browseSport === sport ? '#FF6B00' : colors.textMuted}
+                      />
+                      <Text style={[searchStyles.pillTxt, { color: colors.textMuted }, browseSport === sport && searchStyles.pillTxtActive]}>
+                        {sport === 'football' ? 'Football' : 'Basketball'}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+                {/* League pills */}
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={searchStyles.pillScroll} contentContainerStyle={searchStyles.pillRow}>
+                  {LeagueCatalog.leagues(browseSport).map(lg => (
+                    <TouchableOpacity
+                      key={lg.id}
+                      style={[searchStyles.pill, { backgroundColor: colors.card, borderColor: colors.border }, browseLeague === lg.id && searchStyles.pillActive]}
+                      onPress={() => setBrowseLeague(lg.id)}
+                    >
+                      <Text style={[searchStyles.pillTxt, { color: colors.textMuted }, browseLeague === lg.id && searchStyles.pillTxtActive]}>
+                        {lg.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+                {/* Follow league row */}
+                {(() => {
+                  const lg = LeagueCatalog.info(browseLeague);
+                  const followed = isLeagueFollowed(localStore, browseLeague);
+                  return (
+                    <TouchableOpacity
+                      style={[searchStyles.followLeagueRow, { borderBottomColor: colors.border, borderTopColor: colors.border }]}
+                      onPress={() => toggleLeague({ id: lg.id, name: lg.label, sport: lg.sport })}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[searchStyles.followLeagueTxt, { color: colors.textPrimary }]}>{lg.label}</Text>
+                      <Ionicons name={followed ? 'star' : 'star-outline'} size={20} color={followed ? '#F59E0B' : colors.textMuted} />
+                    </TouchableOpacity>
+                  );
+                })()}
+                {/* Team list */}
+                {browseLoading ? (
+                  <ActivityIndicator style={{ marginTop: 40 }} color={colors.textMuted} />
+                ) : browseLeague === 'world_cup' ? (
+                  /* ── World Cup: grouped by A-L ── */
+                  <SectionList
+                    sections={(() => {
+                      const groups = new Map<string, typeof WC2026_TEAMS>();
+                      for (const t of WC2026_TEAMS) {
+                        if (!groups.has(t.group)) groups.set(t.group, []);
+                        groups.get(t.group)!.push(t);
+                      }
+                      return [...groups.entries()].map(([g, teams]) => ({
+                        title: `GROUP ${g}`,
+                        data: teams.map(t => ({ id: t.id, name: t.name, logo: t.logo, sport: 'football' as const, league: 'world_cup' })),
+                      }));
+                    })()}
+                    keyExtractor={item => item.id}
+                    initialNumToRender={24}
+                    maxToRenderPerBatch={16}
+                    windowSize={5}
+                    renderSectionHeader={({ section }) => (
+                      <Text style={[searchStyles.sectionHeader, { color: colors.textMuted, backgroundColor: colors.bg }]}>{section.title}</Text>
+                    )}
+                    renderItem={({ item: team }) => {
+                      const followed = isTeamFollowed(localStore, team.id);
+                      return (
+                        <TouchableOpacity style={[searchStyles.browseRow, { borderBottomColor: colors.border }]} onPress={() => handleTeamRowPress(team)} activeOpacity={0.7}>
+                          <Image source={{ uri: team.logo }} style={searchStyles.teamLogo} contentFit="contain" />
+                          <Text style={[searchStyles.browseRowTxt, { color: colors.textPrimary }]} numberOfLines={1}>{team.name}</Text>
+                          <Ionicons name={followed ? 'star' : 'chevron-forward'} size={16} color={followed ? '#F59E0B' : colors.textMuted} />
+                        </TouchableOpacity>
+                      );
+                    }}
+                    contentContainerStyle={{ paddingBottom: 40 }}
+                  />
+                ) : (
+                  /* ── Other leagues: flat list ── */
+                  <FlatList
+                    data={browseTeams}
+                    keyExtractor={item => item.id}
+                    initialNumToRender={20}
+                    maxToRenderPerBatch={15}
+                    windowSize={5}
+                    renderItem={({ item: team }) => {
+                      const followed = isTeamFollowed(localStore, team.id);
+                      const initials = (team.name ?? '').split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
+                      return (
+                        <TouchableOpacity style={[searchStyles.browseRow, { borderBottomColor: colors.border }]} onPress={() => handleTeamRowPress(team)} activeOpacity={0.7}>
+                          {team.logo
+                            ? <Image source={{ uri: team.logo }} style={searchStyles.teamLogo} contentFit="contain" />
+                            : <View style={[searchStyles.teamBadge, { backgroundColor: colors.card, borderColor: colors.border }]}><Text style={[searchStyles.teamBadgeTxt, { color: colors.textMuted }]}>{initials}</Text></View>
+                          }
+                          <Text style={[searchStyles.browseRowTxt, { color: colors.textPrimary }]} numberOfLines={1}>{team.name}</Text>
+                          <Ionicons name={followed ? 'star' : 'chevron-forward'} size={16} color={followed ? '#F59E0B' : colors.textMuted} />
+                        </TouchableOpacity>
+                      );
+                    }}
+                    ListEmptyComponent={<View style={searchStyles.placeholder}><Text style={[searchStyles.placeholderTxt, { color: colors.textMuted }]}>No teams found</Text></View>}
+                    contentContainerStyle={{ paddingBottom: 40 }}
+                  />
+                )}
               </View>
             ) : !hasResults ? (
               <View style={searchStyles.placeholder}>
@@ -1069,7 +1330,7 @@ function SearchFollowsModal({
                     <Text style={[searchStyles.sectionHeader, { color: colors.textMuted }]}>TEAMS</Text>
                     {results.teams.map(team => {
                       const followed = isTeamFollowed(localStore, team.id);
-                      const initials = team.name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
+                      const initials = (team.name ?? '').split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
                       return (
                         <TouchableOpacity key={`team-${team.id}`} style={[searchStyles.row, { borderBottomColor: colors.border }]} onPress={() => handleTeamRowPress(team)} activeOpacity={0.7}>
                           {team.logo
@@ -1135,7 +1396,7 @@ function DateSection({
   return (
     <View>
       <View style={[styles.dateHeader, { borderBottomColor: colors.border }]}>
-        <Text style={[styles.dateTitle, { color: colors.textPrimary }]}>{group.title}</Text>
+        <Text style={[styles.dateTitle, { color: colors.textPrimary }]}>{dateLabel(group.yyyymmdd, t)}</Text>
       </View>
       {filtered.map(lg => (
         <LeagueSection
@@ -1179,12 +1440,14 @@ function LeagueSection({
 
 function SoccerRow({ match, colors, onTap }: { match: SoccerMatch; colors: ReturnType<typeof useTheme>['colors']; onTap: () => void }) {
   const live = isLiveLike(match.status);
+  const finished = match.status === 'ft' || match.status === 'et' || match.status === 'pens';
   const statusLabel = displayMinute(match) || (match.kickoff
     ? new Date(match.kickoff).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : '–');
   return (
     <CompactMatchRow
-      statusLabel={statusLabel} isLive={live}
+      statusLabel={statusLabel} isLive={live} isFinished={finished}
+      watchScore={finished && match.watch_score != null ? match.watch_score : null}
       homeName={match.home.name} homeCrest={match.home.crest} homeScore={match.home.score} homePensScore={match.home.score_pens}
       awayName={match.away.name} awayCrest={match.away.crest} awayScore={match.away.score} awayPensScore={match.away.score_pens}
       hasAlarm={false} onBellTap={() => {}} onRowTap={onTap} hideBell
@@ -1194,15 +1457,17 @@ function SoccerRow({ match, colors, onTap }: { match: SoccerMatch; colors: Retur
 
 function BballRow({ game, onTap }: { game: FeedBballGame; onTap: () => void }) {
   const isLive = game.status === 'in';
+  const isPost = game.status === 'post';
   let statusLabel = '';
   if (isLive && game.period && game.displayClock) statusLabel = `Q${game.period} ${game.displayClock}`;
   else if (isLive) statusLabel = 'LIVE';
-  else if (game.status === 'post') statusLabel = 'Final';
+  else if (isPost) statusLabel = 'Final';
   else if (game.kickoff) statusLabel = new Date(game.kickoff).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   return (
     <CompactMatchRow
-      statusLabel={statusLabel} isLive={isLive}
+      statusLabel={statusLabel} isLive={isLive} isFinished={isPost}
+      watchScore={isPost ? (game.watchScore ?? null) : null}
       homeName={game.homeTeam} homeCrest={game.homeLogo} homeScore={game.status !== 'pre' ? game.homeScore : null}
       awayName={game.awayTeam} awayCrest={game.awayLogo} awayScore={game.status !== 'pre' ? game.awayScore : null}
       hasAlarm={false} onBellTap={() => {}} onRowTap={onTap} hideBell
@@ -1258,4 +1523,16 @@ const searchStyles = StyleSheet.create({
   previewFooter: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 16, borderTopWidth: StyleSheet.hairlineWidth },
   addBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 15, borderRadius: 14 },
   addBtnTxt: { fontSize: 16, fontWeight: '700' },
+  // ── Browse mode (matches favorites.tsx picker style exactly) ────
+  pillScroll:  { height: 44, flexGrow: 0, flexShrink: 0, marginBottom: 2 },
+  pillRow:     { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 6, gap: 8 },
+  pill:        { height: 30, paddingHorizontal: 14, borderRadius: 15, borderWidth: 1, flexShrink: 0, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 5 },
+  pillActive:  { backgroundColor: 'rgba(255,107,0,0.12)', borderColor: '#FF6B00' },
+  pillTxt:     { fontSize: 13, fontWeight: '700', includeFontPadding: false, textAlignVertical: 'center', lineHeight: 16 },
+  pillTxtActive: { color: '#FF6B00' },
+  browseRow:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 10, gap: 10, borderBottomWidth: StyleSheet.hairlineWidth },
+  browseRowTxt: { fontSize: 15, fontWeight: '600', flex: 1 },
+  followingChip:    { flexDirection: 'row', alignItems: 'center', height: 30, paddingHorizontal: 12, borderRadius: 15, borderWidth: 1, flexShrink: 0, gap: 4 },
+  followLeagueRow:  { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 11, gap: 10, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth },
+  followLeagueTxt:  { flex: 1, fontSize: 15, fontWeight: '600' },
 });
