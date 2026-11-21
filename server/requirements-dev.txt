@@ -3,6 +3,8 @@
 
 pytest>=8,<9
 pytest-cov>=5,<7
+# Turns test failures into inline annotations on GitHub (active only in CI).
+pytest-github-actions-annotate-failures
 ruff>=0.6,<1
 # Windows has no system timezone database; Linux (Railway) does.
 tzdata

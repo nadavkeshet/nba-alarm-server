@@ -11,8 +11,7 @@ def _client_with(history):
 
 
 def test_surge_favors_the_pressing_side():
-    # ts=0 is fine — get_attack_surge compares against monotonic()-window, and
-    # 0 is always older than that, so use a recent ts.
+    # Timestamps are monotonic() seconds; use "now" so samples fall in the window.
     import time
     t = time.monotonic()
     c = _client_with([(t, "home", "dangerous"), (t, "home", "shotontarget"),
@@ -30,7 +29,10 @@ def test_surge_none_when_only_benign():
 
 
 def test_surge_none_outside_window():
-    c = _client_with([(0.0, "home", "goal")])   # ancient sample
+    import time
+    # Old relative to now. Not ts=0.0: monotonic() counts from boot, and a fresh
+    # CI VM can be under 180 s old, which puts 0.0 inside the window.
+    c = _client_with([(time.monotonic() - 3600, "home", "goal")])
     assert c.get_attack_surge(1, window_s=180) is None
 
 

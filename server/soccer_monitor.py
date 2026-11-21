@@ -88,7 +88,9 @@ _PREMATCH_INTERVAL = 60.0          # run the pass body at most once per ~60s
 _PREMATCH_FIXTURES_TTL = 600.0     # cache a team's fixtures for ~10 min
 _PREMATCH_HORIZON = 3 * 3600.0     # only consider matches within the next 3h
 _LINEUP_WINDOW = 90 * 60.0         # only poll lineups within 90 min of kickoff
-_last_prematch_ts: float = 0.0
+# -inf = "never ran". Not 0.0: monotonic() counts from boot, so on a host up
+# for under _PREMATCH_INTERVAL seconds, 0.0 would read as "just ran".
+_last_prematch_ts: float = float("-inf")
 # {team_id: (expiry_monotonic, next_match_dict_or_None)}
 _prematch_fixtures: dict[str, tuple[float, dict | None]] = {}
 
@@ -97,7 +99,7 @@ def _reset_prematch_for_tests() -> None:
     """Clear the pre-match throttle + per-team fixtures cache so unit tests
     run deterministically (each call exercises a fresh pass)."""
     global _last_prematch_ts
-    _last_prematch_ts = 0.0
+    _last_prematch_ts = float("-inf")
     _prematch_fixtures.clear()
 
 # Statuses that mean the match is definitively over — deactivate all its alarms immediately.
