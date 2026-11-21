@@ -32,7 +32,7 @@ _MAP_PATH = Path(__file__).resolve().parent / "config" / "competition_map.json"
 def _load_map() -> dict[str, dict]:
     if not _MAP_PATH.exists():
         return {}
-    return json.loads(_MAP_PATH.read_text())
+    return json.loads(_MAP_PATH.read_text(encoding="utf-8"))
 
 
 _COMPETITION_MAP: dict[str, dict] = _load_map()

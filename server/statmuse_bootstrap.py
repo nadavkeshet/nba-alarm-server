@@ -239,7 +239,7 @@ def main() -> int:
     if not ROSTER_FILE.exists():
         print(f"ERROR: {ROSTER_FILE} not found. Run the roster-fetch snippet first.", file=sys.stderr)
         return 1
-    roster = json.loads(ROSTER_FILE.read_text())
+    roster = json.loads(ROSTER_FILE.read_text(encoding="utf-8"))
 
     if args.test:
         # Edge-case sample: accents, Jr., initials, apostrophes, single-name

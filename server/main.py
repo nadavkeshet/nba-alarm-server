@@ -468,7 +468,7 @@ def _init_db() -> None:
     # ── v3 (soccer) — load multi-statement SQL file ───────────────────────
     soccer_schema_path = Path(__file__).resolve().parent / "migrations" / "001_soccer_schema.sql"
     if soccer_schema_path.exists():
-        soccer_sql = soccer_schema_path.read_text()
+        soccer_sql = soccer_schema_path.read_text(encoding="utf-8")
         # Statements separated by `;\n` (semicolons inside JSONB defaults won't trip
         # this because we keep them quoted on one line)
         for stmt in [s.strip() for s in soccer_sql.split(";\n") if s.strip()]:

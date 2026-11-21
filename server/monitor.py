@@ -892,7 +892,7 @@ def start_monitoring_job(
     try:
         if not _wait_for_tipoff(game_id, stop_event):
             log.info("Game already Final or alarm cancelled – stopping.")
-            _deactivate_db_alarm(game_id)
+            _deactivate_db_alarm_for(game_id)
             return
 
         # Game is now live (or imminent) – flip status so UI shows "WATCHING"

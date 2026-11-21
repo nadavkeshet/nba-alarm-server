@@ -41,6 +41,18 @@ def _match(status="live", minute=10, hs=0, as_=0, incidents=None):
             "incidents": incidents or []}
 
 
+# ── score_gap ───────────────────────────────────────────────────────────────
+def test_score_gap_fires_once_gap_is_within_threshold(monkeypatch):
+    sent = _wire_capture(monkeypatch)
+    a = {**_alarm("score_gap", {"from_minute": 60}), "threshold": 1, "match_id": "bsd-9"}
+    sm._evaluate_alarm(a, _match(minute=55, hs=1, as_=1))  # before from_minute
+    assert sent == []
+    sm._evaluate_alarm(a, _match(minute=70, hs=3, as_=1))  # gap 2 > threshold
+    assert sent == []
+    sm._evaluate_alarm(a, _match(minute=70, hs=2, as_=1))  # gap 1 → fire
+    assert len(sent) == 1
+
+
 # ── late_drama ──────────────────────────────────────────────────────────────
 def test_late_drama_defaults_match_legacy(monkeypatch):
     sent = _wire_capture(monkeypatch)

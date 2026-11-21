@@ -334,7 +334,9 @@ def test_round_keyword_routing(round_name, expected_min_multiplier):
         away={"score": 1, "xg_last_15": 0.5},
     ))
     if expected_min_multiplier == 1.0:
-        assert abs(scored.total - base.total) < 0.5
+        # Compare the multiplier, not the total: a late, tied group game also
+        # earns the separate qualification spike, which isn't round routing.
+        assert scored.stakes == base.stakes
     else:
         # The lift should be at least proportional to the multiplier
         assert scored.total > base.total

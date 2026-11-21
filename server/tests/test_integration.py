@@ -9,16 +9,23 @@ Tests all features touched in the v3 soccer branch:
   - Alarm type validation
 
 Usage:
-    cd Server && python -m pytest tests/test_integration.py -v
+    cd server && RUN_DEV_INTEGRATION=1 python -m pytest tests/test_integration.py -v
 
-No env vars needed — targets the Railway dev server.
+Opt-in: it writes real rows to the dev server and depends on live data, so it
+is skipped unless RUN_DEV_INTEGRATION is set.
 """
 from __future__ import annotations
 
+import os
 import time
 import uuid
 import requests
 import pytest
+
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("RUN_DEV_INTEGRATION"),
+    reason="hits the live dev server; set RUN_DEV_INTEGRATION=1 to run",
+)
 
 BASE = "https://nba-alarm-server-dev.up.railway.app"
 # Unique token per test run so parallel runs don't interfere

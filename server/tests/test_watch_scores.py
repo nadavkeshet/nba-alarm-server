@@ -1,10 +1,10 @@
-# server/tests_watch_scores.py — pure-logic tests for the smarter watch scores.
+# server/tests/test_watch_scores.py — pure-logic tests for the smarter watch scores.
 import win_probability as wp
 import drama_engine as de
 import watch_score as ws
 
 
-def t_win_probability():
+def test_win_probability():
     # Normalizes to 1 with overround removed.
     p = wp.implied_probs_1x2(2.0, 3.0, 4.0)
     assert p is not None and abs(sum(p) - 1.0) < 1e-9, p
@@ -21,7 +21,7 @@ def t_win_probability():
     assert round(wp.lead_prob(pp), 3) == round(max(pp[0], pp[2]), 3)
 
 
-def t_drama_odds():
+def test_drama_odds():
     base = {"minute": 75, "status": "live", "competition": "ucl",
             "home": {"score": 1}, "away": {"score": 1}}
     coin = dict(base, win_prob=(0.34, 0.32, 0.34), win_prob_swing=0.5)
@@ -37,7 +37,7 @@ def t_drama_odds():
         assert 0.0 <= s.total <= 10.0
 
 
-def t_soccer_lightweight():
+def test_soccer_lightweight():
     # Every started match now gets a score (badge shows on ALL matches), but the
     # number still ranks drama: a FT comeback in a final is a must-watch, while a
     # 0-0 or a blowout lands low.
@@ -54,7 +54,7 @@ def t_soccer_lightweight():
     assert comeback > tight > blowout > goalless, (comeback, tight, blowout, goalless)
 
 
-def t_soccer_finished_wc_spread():
+def test_soccer_finished_wc_spread():
     # Regression: a FINISHED match's badge rates how good it was to WATCH (the
     # FT-quality formula: goals + closeness + comeback + xG, × stakes), NOT a
     # summary of the live drama timeline. A competitive game's drama curve rises
@@ -75,7 +75,7 @@ def ws_soccer(status, minute, hs, aw, **kw):
     return ss._soccer_watch_score("bsd", 999, status, minute, hs, aw, **kw)
 
 
-def t_basketball_units():
+def test_basketball_units():
     # periods_score deltas → running totals; live partial summed in.
     detail = {"status": "inprogress",
               "home_team": {"id": 1, "short_name": "AAA"},
@@ -112,7 +112,7 @@ def t_basketball_units():
     assert ws._compute_avdija_boost_bsd(nope, bx) == (0.0, {})
 
 
-def t_wc_drama():
+def test_wc_drama():
     import drama_engine as de
     K = de._is_knockout
     assert K("Final") and K("Quarter-final") and K("Round of 16") and K("Semi-final")
@@ -173,12 +173,12 @@ def t_wc_drama():
 
 
 def main():
-    t_win_probability()
-    t_drama_odds()
-    t_soccer_lightweight()
-    t_soccer_finished_wc_spread()
-    t_basketball_units()
-    t_wc_drama()
+    test_win_probability()
+    test_drama_odds()
+    test_soccer_lightweight()
+    test_soccer_finished_wc_spread()
+    test_basketball_units()
+    test_wc_drama()
     print("OK")
 
 

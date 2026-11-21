@@ -1,8 +1,8 @@
-# server/tests_search_merge.py
+# server/tests/test_search_merge.py
 import search_index as si
 import bb_team_crosswalk as bx
 
-def main():
+def test_search_merge():
     # The live search path appends a BSD sibling row that COPIES the 365 row
     # (only the id differs), so both rows share an identical name and merge
     # on the plain (sport, normalized-name) key — no alias needed here.
@@ -27,4 +27,4 @@ def main():
     print("OK")
 
 if __name__ == "__main__":
-    main()
+    test_search_merge()

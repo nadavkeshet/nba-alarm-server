@@ -57,7 +57,7 @@ def main() -> int:
     if not MAP_PATH.exists():
         print(f"ERROR: {MAP_PATH} not found")
         return 2
-    data = json.loads(MAP_PATH.read_text())
+    data = json.loads(MAP_PATH.read_text(encoding="utf-8"))
 
     failures = 0
     print(f"=== Verifying {len(data)} competitions (primary source marked ★) ===\n")
